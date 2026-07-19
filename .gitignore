@@ -1,0 +1,13 @@
+# Local environment and secret files
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+
+# Local Cloudflare tooling state
+.wrangler/
+
+__pycache__/
+*.pyc
+.superloopy/

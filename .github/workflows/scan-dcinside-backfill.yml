@@ -1,0 +1,49 @@
+name: Run DCInside Backfill crawl
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scan-dcinside
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+
+      - name: Verify D1 schema
+        env:
+          TC_CF_ACCOUNT_ID: ${{ secrets.TC_CF_ACCOUNT_ID }}
+          TC_CF_DATABASE_ID: ${{ secrets.TC_CF_DATABASE_ID }}
+          TC_CF_API_TOKEN: ${{ secrets.TC_CF_API_TOKEN }}
+        run: python -m crawler.jobs.check_schema
+
+      - name: Run Backfill crawl
+        env:
+          TC_CF_ACCOUNT_ID: ${{ secrets.TC_CF_ACCOUNT_ID }}
+          TC_CF_DATABASE_ID: ${{ secrets.TC_CF_DATABASE_ID }}
+          TC_CF_API_TOKEN: ${{ secrets.TC_CF_API_TOKEN }}
+          TC_PERSIST: "1"
+          TC_FINALIZATION_AGE_HOURS: "12"
+          TC_HOT_LOOKBACK_MINUTES: "180"
+          TC_HOT_MAX_SECONDS: "180"
+          TC_CYCLE_MAX_SECONDS: "600"
+          TC_REQUEST_INTERVAL_SECONDS: "10"
+          TC_DEEP_RESERVED_SECONDS: "300"
+          TC_BLOCK_COOLDOWN_HOURS: "24"
+          TC_TRANSIENT_FETCH_ATTEMPTS: "2"
+        run: python -m crawler.jobs.run_cycle --mode backfill --target dcinside-singularity --persist
