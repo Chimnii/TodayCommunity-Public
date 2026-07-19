@@ -259,8 +259,11 @@ export async function onRequestGet(context) {
         `
         SELECT source_key, run_type, status, scanned_pages, scanned_posts, matched_posts, started_at, finished_at,
                CASE
-                 WHEN error_message IS NULL OR TRIM(error_message) = '' THEN 0
-                 ELSE 1
+                 WHEN status IN ('failed', 'blocked')
+                  AND error_message IS NOT NULL
+                  AND TRIM(error_message) <> ''
+                 THEN 1
+                 ELSE 0
                END AS had_error
         FROM crawl_runs
         WHERE source_key = ?

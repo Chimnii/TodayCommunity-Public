@@ -176,7 +176,8 @@ test("defaults to the first 30 globally counted posts and preserves recent runs"
 
   const runCall = findCall(database, "FROM crawl_runs", "all");
   assert.match(runCall.sql, /ORDER BY id DESC LIMIT 10/);
-  assert.match(runCall.sql, /CASE WHEN error_message IS NULL/);
+  assert.match(runCall.sql, /WHEN status IN \('failed', 'blocked'\)/);
+  assert.match(runCall.sql, /AND TRIM\(error_message\) <> ''/);
   assert.match(runCall.sql, /END AS had_error/);
   assert.deepEqual(runCall.values, ["dcinside-singularity"]);
 });
@@ -197,6 +198,26 @@ test("returns only a generic public marker for internal crawl errors", async () 
 
   assert.equal(body.runs[0].error_message, "수집 처리 중 오류가 발생했습니다.");
   assert.ok(!JSON.stringify(body).includes("provider diagnostic"));
+  assert.ok(!Object.hasOwn(body.runs[0], "had_error"));
+});
+
+test("does not mislabel successful phase metadata as an error", async () => {
+  const database = new MockDatabase({
+    runs: [
+      {
+        run_type: "hot_scan",
+        status: "completed",
+        had_error: 0,
+        error_message: '{"stop_reason":"lookback_reached"}',
+      },
+    ],
+  });
+
+  const { body } = await requestArchive(database);
+
+  assert.equal(body.runs[0].status, "completed");
+  assert.equal(body.runs[0].error_message, null);
+  assert.ok(!JSON.stringify(body).includes("lookback_reached"));
   assert.ok(!Object.hasOwn(body.runs[0], "had_error"));
 });
 
