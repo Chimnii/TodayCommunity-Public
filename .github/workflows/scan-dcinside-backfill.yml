@@ -45,6 +45,6 @@ jobs:
           TC_CYCLE_MAX_SECONDS: "600"
           TC_REQUEST_INTERVAL_SECONDS: "10"
           TC_DEEP_RESERVED_SECONDS: "300"
-          TC_BLOCK_COOLDOWN_HOURS: "24"
+          TC_BLOCK_COOLDOWN_HOURS: "6"
           TC_TRANSIENT_FETCH_ATTEMPTS: "2"
         run: python -m crawler.jobs.run_cycle --mode backfill --target dcinside-singularity --persist

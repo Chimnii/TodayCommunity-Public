@@ -98,6 +98,7 @@ class CrawlWorkflowContractTests(unittest.TestCase):
     def test_hot_dispatch_and_budget_contract(self) -> None:
         self.assertIn("workflow_dispatch:", self.hot)
         self.assertNotRegex(self.hot, r"(?m)^\s*schedule:\s*$")
+        self.assertIn('TC_BLOCK_COOLDOWN_HOURS: "6"', self.hot)
         self.assertIn('TC_HOT_LOOKBACK_MINUTES: "180"', self.hot)
         self.assertIn('TC_HOT_MAX_SECONDS: "180"', self.hot)
         self.assertIn('TC_CYCLE_MAX_SECONDS: "180"', self.hot)
@@ -108,10 +109,30 @@ class CrawlWorkflowContractTests(unittest.TestCase):
     def test_backfill_dispatch_and_budget_contract(self) -> None:
         self.assertIn("workflow_dispatch:", self.backfill)
         self.assertNotRegex(self.backfill, r"(?m)^\s*schedule:\s*$")
+        self.assertIn('TC_BLOCK_COOLDOWN_HOURS: "6"', self.backfill)
         self.assertIn('TC_CYCLE_MAX_SECONDS: "600"', self.backfill)
         self.assertIn('TC_DEEP_RESERVED_SECONDS: "300"', self.backfill)
         self.assertIn("--mode backfill", self.backfill)
         self.assertIn("check_schema", self.backfill)
+
+    def test_scheduler_deploys_only_relevant_main_changes_after_verification(self) -> None:
+        self.assertIn("workflow_dispatch:", self.deploy_scheduler)
+        self.assertRegex(self.deploy_scheduler, r"(?m)^  push:\s*$")
+        self.assertRegex(self.deploy_scheduler, r"(?m)^    branches:\s*\n      - main\s*$")
+        for path in (
+            '"scheduler/**"',
+            '"package.json"',
+            '"package-lock.json"',
+            '".github/workflows/deploy-scheduler.yml"',
+        ):
+            self.assertIn(path, self.deploy_scheduler)
+        self.assertNotRegex(self.deploy_scheduler, r"(?m)^\s*schedule:\s*$")
+        self.assertIn("if: github.ref == 'refs/heads/main'", self.deploy_scheduler)
+        self.assertIn("node --test tests/scheduler_worker.test.mjs", self.deploy_scheduler)
+        self.assertIn(
+            "wrangler deploy --dry-run --config scheduler/wrangler.jsonc",
+            self.deploy_scheduler,
+        )
 
     def test_no_scheduled_production_workflow_runs_the_combined_mode(self) -> None:
         for path in WORKFLOWS.glob("*.yml"):

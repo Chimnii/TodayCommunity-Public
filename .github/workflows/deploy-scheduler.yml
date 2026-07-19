@@ -2,6 +2,14 @@ name: Deploy Cloudflare Scheduler
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "scheduler/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/deploy-scheduler.yml"
 
 permissions:
   contents: read
@@ -14,6 +22,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 10
@@ -25,6 +34,12 @@ jobs:
 
       - name: Install locked deployment tooling
         run: npm ci --ignore-scripts
+
+      - name: Verify Scheduler
+        run: node --test tests/scheduler_worker.test.mjs
+
+      - name: Verify Scheduler bundle
+        run: ./node_modules/.bin/wrangler deploy --dry-run --config scheduler/wrangler.jsonc
 
       - name: Deploy Scheduler
         env:

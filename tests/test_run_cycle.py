@@ -206,6 +206,7 @@ class CrawlCycleTests(unittest.TestCase):
         settings = CycleConfig()
 
         self.assertEqual(settings.finalization_age_hours, 12)
+        self.assertEqual(settings.block_cooldown_hours, 6)
         self.assertEqual(settings.hot_max_seconds, 7 * 60)
         self.assertEqual(settings.cycle_max_seconds - settings.hot_max_seconds, 13 * 60)
         self.assertEqual(settings.min_request_interval_seconds, 10)
@@ -2143,7 +2144,7 @@ class CrawlCycleTests(unittest.TestCase):
 
         self.assertEqual(
             first.source_state.blocked_until,
-            "2026-07-17T12:20:00+00:00",
+            "2026-07-16T18:20:00+00:00",
         )
 
         # Simulate a source_state cooldown write that was unavailable while
