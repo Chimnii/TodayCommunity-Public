@@ -1,7 +1,7 @@
 {
   "name": "todaycommunity-scheduler",
   "main": "src/index.mjs",
-  "compatibility_date": "2026-07-20",
+  "compatibility_date": "2026-07-19",
   "vars": {
     "GITHUB_OWNER": "Chimnii",
     "GITHUB_REPOSITORY": "TodayCommunity-Public",
