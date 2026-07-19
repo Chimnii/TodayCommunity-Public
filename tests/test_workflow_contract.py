@@ -84,9 +84,10 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertIn("secrets.CLOUDFLARE_PAGES_API_TOKEN", self.deploy_pages)
         self.assertNotIn("secrets.CLOUDFLARE_WORKERS_API_TOKEN", self.deploy_pages)
         self.assertIn(
-            "secrets.CLOUDFLARE_WORKERS_API_TOKEN", self.deploy_scheduler
+            "secrets.CLOUDFLARE_SCHEDULER_API_TOKEN", self.deploy_scheduler
         )
         self.assertNotIn("secrets.CLOUDFLARE_PAGES_API_TOKEN", self.deploy_scheduler)
+        self.assertNotIn("secrets.CLOUDFLARE_WORKERS_API_TOKEN", self.deploy_scheduler)
 
         package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
         lock = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))

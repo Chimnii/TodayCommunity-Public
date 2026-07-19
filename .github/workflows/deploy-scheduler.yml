@@ -7,7 +7,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: deploy-scheduler
+  # A cutover-specific group prevents a malformed legacy queued run from
+  # blocking the current deployment definition.
+  group: deploy-scheduler-2026-07-cutover
   cancel-in-progress: false
 
 jobs:
@@ -26,6 +28,6 @@ jobs:
 
       - name: Deploy Scheduler
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_WORKERS_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_SCHEDULER_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.TC_CF_ACCOUNT_ID }}
         run: ./node_modules/.bin/wrangler deploy --config scheduler/wrangler.jsonc
