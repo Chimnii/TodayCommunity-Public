@@ -8,9 +8,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PUBLIC_WORKFLOW_TEMPLATES = ROOT / "public-mirror" / ".github" / "workflows"
+IS_PRIVATE_SOURCE = PUBLIC_WORKFLOW_TEMPLATES.is_dir()
 WORKFLOWS = (
     PUBLIC_WORKFLOW_TEMPLATES
-    if PUBLIC_WORKFLOW_TEMPLATES.is_dir()
+    if IS_PRIVATE_SOURCE
     else ROOT / ".github" / "workflows"
 )
 ACTIVE_PRIVATE_WORKFLOWS = ROOT / ".github" / "workflows"
@@ -122,23 +123,16 @@ class CrawlWorkflowContractTests(unittest.TestCase):
                     msg=f"{path.name} still schedules the combined crawl mode",
                 )
 
-    def test_transition_private_schedules_keep_the_expected_cadence(self) -> None:
-        if WORKFLOWS == ACTIVE_PRIVATE_WORKFLOWS:
+    def test_private_source_has_no_active_crawl_workflows_after_cutover(self) -> None:
+        if not IS_PRIVATE_SOURCE:
             self.skipTest("running in the public mirror")
 
         private_hot_path = ACTIVE_PRIVATE_WORKFLOWS / "scan-dcinside.yml"
         private_backfill_path = (
             ACTIVE_PRIVATE_WORKFLOWS / "scan-dcinside-backfill.yml"
         )
-        if not private_hot_path.exists() and not private_backfill_path.exists():
-            self.skipTest("private scheduled workflows were removed after cutover")
-
-        self.assertTrue(private_hot_path.is_file())
-        self.assertTrue(private_backfill_path.is_file())
-        private_hot = private_hot_path.read_text(encoding="utf-8")
-        private_backfill = private_backfill_path.read_text(encoding="utf-8")
-        self.assertIn('cron: "7,22,37,52 * * * *"', private_hot)
-        self.assertIn('cron: "56 */6 * * *"', private_backfill)
+        self.assertFalse(private_hot_path.exists())
+        self.assertFalse(private_backfill_path.exists())
 
     def test_local_secret_and_cloudflare_state_patterns_are_ignored(self) -> None:
         ignore_lines = {
