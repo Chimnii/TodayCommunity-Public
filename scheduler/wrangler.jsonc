@@ -8,6 +8,9 @@
     "GITHUB_REF": "main"
   },
   "triggers": {
-    "crons": []
+    "crons": [
+      "7,22,37,52 * * * *",
+      "56 */6 * * *"
+    ]
   }
 }

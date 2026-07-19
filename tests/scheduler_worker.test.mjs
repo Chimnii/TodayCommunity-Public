@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -17,6 +18,9 @@ const ENV = Object.freeze({
   GITHUB_REPOSITORY: "TodayCommunity-Public",
   GITHUB_REF: "main",
 });
+const WRANGLER_CONFIG = JSON.parse(
+  await readFile(new URL("../scheduler/wrangler.jsonc", import.meta.url), "utf8")
+);
 
 function jsonResponse(value, status = 200) {
   return new Response(JSON.stringify(value), {
@@ -41,6 +45,13 @@ test("cron strings map to the intended workflows", () => {
   assert.throws(
     () => workflowForCron("0 * * * *"),
     /Unsupported scheduler cron/,
+  );
+});
+
+test("deployed Cron triggers exactly match the supported schedules", () => {
+  assert.deepEqual(
+    [...WRANGLER_CONFIG.triggers.crons].sort(),
+    Object.keys(SCHEDULES).sort()
   );
 });
 
