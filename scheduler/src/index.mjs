@@ -203,9 +203,11 @@ export async function dispatchScheduledWorkflow({
 
 export default {
   async scheduled(controller, env) {
-    return dispatchScheduledWorkflow({
+    const result = await dispatchScheduledWorkflow({
       cron: controller.cron,
       env,
     });
+    console.log("TodayCommunity scheduler result", JSON.stringify(result));
+    return result;
   },
 };
