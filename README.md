@@ -32,7 +32,7 @@ python -m unittest discover -s tests -p "test_*.py"
 Node 테스트:
 
 ```powershell
-node --test tests/archive_api.test.mjs tests/dashboard_contract.test.mjs
+node --test tests/archive_api.test.mjs tests/dashboard_contract.test.mjs tests/scheduler_worker.test.mjs
 ```
 
 로컬 D1 접근이 필요한 경우 `.env.example`을 참고해 Git에서 제외되는 `.env.local`에 값을 설정합니다. 실제 계정 ID, 데이터베이스 ID와 API token은 소스·문서·로그에 기록하지 않습니다.
@@ -40,5 +40,7 @@ node --test tests/archive_api.test.mjs tests/dashboard_contract.test.mjs
 ## 라이선스와 데이터
 
 이 저장소에는 별도의 오픈소스 라이선스가 부여되어 있지 않습니다. 원문 링크와 제3자 게시물 메타데이터에 관한 권리는 각 원저작자와 서비스 운영자에게 있습니다.
+
+저장된 목록 메타데이터에는 현재 자동 만료 정책이 없으며, 원문 삭제가 즉시 반영된다고 보장하지 않습니다. 운영 과정에서 보존·삭제 정책을 별도로 정비할 예정입니다.
 
 보안상 민감한 문제는 공개 이슈에 내용을 남기지 말고 [비공개 보안 제보](https://github.com/Chimnii/TodayCommunity-Public/security/advisories/new)를 이용해 주세요.

@@ -127,7 +127,11 @@ test("defaults to the first 30 globally counted posts and preserves recent runs"
   const { response, body } = await requestArchive(database);
 
   assert.equal(response.status, 200);
-  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(
+    response.headers.get("cache-control"),
+    "public, max-age=15, s-maxage=60, stale-while-revalidate=120"
+  );
+  assert.equal(response.headers.get("x-content-type-options"), "nosniff");
   assert.equal(body.target, "dcinside-singularity");
   assert.deepEqual(
     body.subject_options,
@@ -172,11 +176,32 @@ test("defaults to the first 30 globally counted posts and preserves recent runs"
 
   const runCall = findCall(database, "FROM crawl_runs", "all");
   assert.match(runCall.sql, /ORDER BY id DESC LIMIT 10/);
+  assert.match(runCall.sql, /CASE WHEN error_message IS NULL/);
+  assert.match(runCall.sql, /END AS had_error/);
   assert.deepEqual(runCall.values, ["dcinside-singularity"]);
 });
 
+test("returns only a generic public marker for internal crawl errors", async () => {
+  const database = new MockDatabase({
+    runs: [
+      {
+        run_type: "hot_scan",
+        status: "failed",
+        had_error: 1,
+        error_message: "provider diagnostic with internal identifier",
+      },
+    ],
+  });
+
+  const { body } = await requestArchive(database);
+
+  assert.equal(body.runs[0].error_message, "수집 처리 중 오류가 발생했습니다.");
+  assert.ok(!JSON.stringify(body).includes("provider diagnostic"));
+  assert.ok(!Object.hasOwn(body.runs[0], "had_error"));
+});
+
 test("applies escaped title and numeric filters before paginating with a stable sort", async () => {
-  const target = "board' OR 1=1 --";
+  const target = "dcinside-singularity";
   const database = new MockDatabase({
     totalPosts: 120,
     filteredPosts: 45,
@@ -222,6 +247,52 @@ test("applies escaped title and numeric filters before paginating with a stable 
   assert.deepEqual(postCall.values, [...expectedFilterBindings, 20, 20]);
   assert.ok(!postCall.sql.includes(target));
   assert.ok(!postCall.sql.includes("100%_"));
+});
+
+test("rejects an unsupported target before querying D1", async () => {
+  const database = new MockDatabase();
+  const params = new URLSearchParams({ target: "board' OR 1=1 --" });
+
+  const { response, body } = await requestArchive(database, `?${params}`);
+
+  assert.equal(response.status, 400);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(body.error, "Unknown archive target.");
+  assert.deepEqual(database.calls, []);
+});
+
+test("normalizes cache keys and reuses a short-lived edge response", async () => {
+  const database = new MockDatabase({ totalPosts: 1, posts: makeRows(1) });
+  const stored = new Map();
+  const cache = {
+    async match(request) {
+      const response = stored.get(request.url);
+      return response?.clone();
+    },
+    async put(request, response) {
+      stored.set(request.url, response.clone());
+    },
+  };
+  const originalCaches = globalThis.caches;
+  globalThis.caches = { default: cache };
+
+  try {
+    const first = await requestArchive(database, "?page=01&page_size=30&junk=ignored");
+    const callsAfterFirst = database.calls.length;
+    const second = await requestArchive(database, "?page=1&page_size=030");
+
+    assert.equal(first.response.status, 200);
+    assert.equal(second.response.status, 200);
+    assert.deepEqual(second.body, first.body);
+    assert.equal(database.calls.length, callsAfterFirst);
+    assert.equal(stored.size, 1);
+  } finally {
+    if (originalCaches === undefined) {
+      delete globalThis.caches;
+    } else {
+      globalThis.caches = originalCaches;
+    }
+  }
 });
 
 test("clamps an out-of-range page to the last filtered page before querying rows", async () => {
@@ -335,17 +406,31 @@ test("returns no subject options when D1 aggregation is malformed", async () => 
   assert.deepEqual(body.subject_options, []);
 });
 
-test("keeps the existing JSON error response when D1 fails", async () => {
+test("returns a generic non-cacheable response when D1 fails", async () => {
   const database = {
     prepare() {
       throw new Error("D1 unavailable");
     },
   };
+  const originalConsoleError = console.error;
+  let loggedError = [];
+  console.error = (...values) => {
+    loggedError = values;
+  };
 
-  const { response, body } = await requestArchive(database);
+  let response;
+  let body;
+  try {
+    ({ response, body } = await requestArchive(database));
+  } finally {
+    console.error = originalConsoleError;
+  }
 
   assert.equal(response.status, 500);
   assert.equal(response.headers.get("content-type"), "application/json; charset=UTF-8");
+  assert.equal(response.headers.get("cache-control"), "no-store");
   assert.equal(body.error, "Failed to load archive data from D1.");
-  assert.match(body.details, /D1 unavailable/);
+  assert.ok(!Object.hasOwn(body, "details"));
+  assert.ok(!JSON.stringify(body).includes("D1 unavailable"));
+  assert.match(String(loggedError[1]), /D1 unavailable/);
 });

@@ -1,0 +1,10 @@
+{
+  "name": "todaycommunity-deployment",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Locked deployment tooling for the TodayCommunity public mirror",
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "wrangler": "4.112.0"
+  }
+}

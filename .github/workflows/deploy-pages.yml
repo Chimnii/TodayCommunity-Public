@@ -19,15 +19,19 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: production
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
 
+      - name: Install locked deployment tooling
+        run: npm ci --ignore-scripts
+
       - name: Deploy Pages
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_PAGES_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.TC_CF_ACCOUNT_ID }}
-        run: npx --yes wrangler@4.112.0 pages deploy dashboard --project-name todaycommunity --branch main --commit-hash $GITHUB_SHA
+        run: ./node_modules/.bin/wrangler pages deploy dashboard --project-name todaycommunity --branch main --commit-hash $GITHUB_SHA

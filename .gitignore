@@ -8,6 +8,9 @@
 # Local Cloudflare tooling state
 .wrangler/
 
+# Installed Node dependencies (recreated from package-lock.json)
+node_modules/
+
 __pycache__/
 *.pyc
 .superloopy/

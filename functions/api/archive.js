@@ -5,6 +5,7 @@ const MAX_PAGE_SIZE = 100;
 const MAX_SEARCH_LENGTH = 100;
 const MAX_SUBJECT_LENGTH = 100;
 const MAX_SUBJECT_OPTIONS = 100;
+const ALLOWED_TARGETS = new Set([DEFAULT_TARGET]);
 
 const SORT_COLUMNS = {
   created_at: "created_at",
@@ -13,11 +14,16 @@ const SORT_COLUMNS = {
 };
 
 function jsonResponse(body, status = 200) {
+  const cacheControl =
+    status >= 400
+      ? "no-store"
+      : "public, max-age=15, s-maxage=60, stale-while-revalidate=120";
   return new Response(JSON.stringify(body, null, 2), {
     status,
     headers: {
       "content-type": "application/json; charset=UTF-8",
-      "cache-control": "no-store",
+      "cache-control": cacheControl,
+      "x-content-type-options": "nosniff",
     },
   });
 }
@@ -123,10 +129,37 @@ function buildOrderClause(sort) {
   return `${primaryColumn} DESC, created_at DESC, id DESC`;
 }
 
+function buildCacheKey(
+  url,
+  { target, pageSize, requestedPage, query, minUpvotes, minComments, subject, sort }
+) {
+  const cacheUrl = new URL(url.pathname, url.origin);
+  const normalized = {
+    target,
+    page: String(requestedPage),
+    page_size: String(pageSize),
+    q: query,
+    min_upvotes: String(minUpvotes),
+    min_comments: String(minComments),
+    subject,
+    sort,
+  };
+
+  for (const [name, value] of Object.entries(normalized)) {
+    if (value) {
+      cacheUrl.searchParams.set(name, value);
+    }
+  }
+  return new Request(cacheUrl.toString(), { method: "GET" });
+}
+
 export async function onRequestGet(context) {
   try {
     const url = new URL(context.request.url);
     const target = (url.searchParams.get("target") || DEFAULT_TARGET).trim();
+    if (!ALLOWED_TARGETS.has(target)) {
+      return jsonResponse({ error: "Unknown archive target." }, 400);
+    }
     const pageSize = normalizePositiveInteger(
       url.searchParams.get("page_size"),
       DEFAULT_PAGE_SIZE,
@@ -148,6 +181,23 @@ export async function onRequestGet(context) {
     const requestedSort = url.searchParams.get("sort") || "created_at";
     const sort = Object.hasOwn(SORT_COLUMNS, requestedSort) ? requestedSort : "created_at";
     const filter = buildPostFilter(target, query, minUpvotes, minComments, subject);
+    const cacheKey = buildCacheKey(url, {
+      target,
+      pageSize,
+      requestedPage,
+      query,
+      minUpvotes,
+      minComments,
+      subject,
+      sort,
+    });
+    const edgeCache = globalThis.caches?.default;
+    if (edgeCache) {
+      const cached = await edgeCache.match(cacheKey);
+      if (cached) {
+        return cached;
+      }
+    }
 
     const db = context.env.DB;
 
@@ -207,7 +257,11 @@ export async function onRequestGet(context) {
     const runResult = await db
       .prepare(
         `
-        SELECT source_key, run_type, status, scanned_pages, scanned_posts, matched_posts, started_at, finished_at, error_message
+        SELECT source_key, run_type, status, scanned_pages, scanned_posts, matched_posts, started_at, finished_at,
+               CASE
+                 WHEN error_message IS NULL OR TRIM(error_message) = '' THEN 0
+                 ELSE 1
+               END AS had_error
         FROM crawl_runs
         WHERE source_key = ?
         ORDER BY id DESC
@@ -231,13 +285,20 @@ export async function onRequestGet(context) {
       .bind(...filter.bindings, pageSize, offset)
       .all();
 
-    const runs = runResult.results ?? [];
+    const runs = (runResult.results ?? []).map(
+      ({ had_error: hadError, error_message: _discardedError, ...run }) => ({
+        ...run,
+        error_message: Number(hadError)
+          ? "수집 처리 중 오류가 발생했습니다."
+          : null,
+      })
+    );
     const posts = postResult.results ?? [];
     const totalPosts = normalizeCount(summary?.total_posts);
     const visibleFrom = posts.length > 0 ? offset + 1 : 0;
     const visibleTo = posts.length > 0 ? offset + posts.length : 0;
 
-    return jsonResponse({
+    const response = jsonResponse({
       target,
       source,
       subject_options: normalizeSubjectOptions(summary?.subject_options_json),
@@ -260,13 +321,17 @@ export async function onRequestGet(context) {
       runs,
       posts,
     });
+    if (edgeCache) {
+      const cacheWrite = edgeCache.put(cacheKey, response.clone());
+      if (typeof context.waitUntil === "function") {
+        context.waitUntil(cacheWrite);
+      } else {
+        await cacheWrite;
+      }
+    }
+    return response;
   } catch (error) {
-    return jsonResponse(
-      {
-        error: "Failed to load archive data from D1.",
-        details: String(error),
-      },
-      500
-    );
+    console.error("Archive API failed", error);
+    return jsonResponse({ error: "Failed to load archive data from D1." }, 500);
   }
 }

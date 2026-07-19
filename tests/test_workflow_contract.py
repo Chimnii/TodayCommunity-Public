@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import unittest
 from pathlib import Path
@@ -14,10 +15,10 @@ WORKFLOWS = (
 )
 ACTIVE_PRIVATE_WORKFLOWS = ROOT / ".github" / "workflows"
 CHECKOUT_PIN = (
-    "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1"
+    "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0"
 )
 SETUP_PYTHON_PIN = (
-    "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0"
+    "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0"
 )
 
 
@@ -27,6 +28,12 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.backfill = (
             WORKFLOWS / "scan-dcinside-backfill.yml"
         ).read_text(encoding="utf-8")
+        self.deploy_pages = (WORKFLOWS / "deploy-pages.yml").read_text(
+            encoding="utf-8"
+        )
+        self.deploy_scheduler = (WORKFLOWS / "deploy-scheduler.yml").read_text(
+            encoding="utf-8"
+        )
 
     def test_workflows_share_one_non_cancelling_concurrency_group(self) -> None:
         for workflow in (self.hot, self.backfill):
@@ -49,13 +56,42 @@ class CrawlWorkflowContractTests(unittest.TestCase):
                 )
 
     def test_public_workflows_keep_minimal_permissions_and_safe_triggers(self) -> None:
-        for workflow in (self.hot, self.backfill):
+        for workflow in (
+            self.hot,
+            self.backfill,
+            self.deploy_pages,
+            self.deploy_scheduler,
+        ):
             self.assertRegex(
                 workflow,
                 r"(?m)^permissions:\s*\n\s+contents: read\s*$",
             )
             self.assertNotIn("pull_request_target:", workflow)
             self.assertNotRegex(workflow, r"(?m)^\s*[A-Za-z_-]+:\s*write\s*$")
+
+        for workflow in (self.hot, self.backfill):
+            self.assertRegex(workflow, r"(?m)^\s+environment: collection\s*$")
+        for workflow in (self.deploy_pages, self.deploy_scheduler):
+            self.assertRegex(workflow, r"(?m)^\s+environment: production\s*$")
+
+    def test_deployment_workflows_use_locked_wrangler_and_split_tokens(self) -> None:
+        for workflow in (self.deploy_pages, self.deploy_scheduler):
+            self.assertIn(CHECKOUT_PIN, workflow)
+            self.assertIn("npm ci --ignore-scripts", workflow)
+            self.assertIn("./node_modules/.bin/wrangler", workflow)
+            self.assertNotIn("npx ", workflow)
+
+        self.assertIn("secrets.CLOUDFLARE_PAGES_API_TOKEN", self.deploy_pages)
+        self.assertNotIn("secrets.CLOUDFLARE_WORKERS_API_TOKEN", self.deploy_pages)
+        self.assertIn(
+            "secrets.CLOUDFLARE_WORKERS_API_TOKEN", self.deploy_scheduler
+        )
+        self.assertNotIn("secrets.CLOUDFLARE_PAGES_API_TOKEN", self.deploy_scheduler)
+
+        package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+        lock = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))
+        self.assertEqual(package["devDependencies"]["wrangler"], "4.112.0")
+        self.assertEqual(lock["packages"][""]["devDependencies"]["wrangler"], "4.112.0")
 
     def test_hot_dispatch_and_budget_contract(self) -> None:
         self.assertIn("workflow_dispatch:", self.hot)
@@ -111,7 +147,14 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         }
 
         self.assertTrue(
-            {".env", ".env.*", ".dev.vars", ".dev.vars.*", ".wrangler/"}
+            {
+                ".env",
+                ".env.*",
+                ".dev.vars",
+                ".dev.vars.*",
+                ".wrangler/",
+                "node_modules/",
+            }
             <= ignore_lines
         )
         self.assertIn("!.env.example", ignore_lines)
