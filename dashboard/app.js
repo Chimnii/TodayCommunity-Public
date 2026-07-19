@@ -13,6 +13,7 @@ const DEFAULT_STATE = Object.freeze({
 const VALID_SORTS = new Set(["created_at", "upvotes", "comments"]);
 const VALID_PAGE_SIZES = new Set([20, 30, 50, 100]);
 const SUBJECT_PREVIEW_LENGTH = 3;
+const PAGE_WINDOW_RADIUS = 4;
 const subjectSegmenter = typeof Intl.Segmenter === "function"
   ? new Intl.Segmenter("ko", { granularity: "grapheme" })
   : null;
@@ -23,7 +24,7 @@ const state = {
   dataSource: "unknown",
   activeRequest: null,
   filterTimer: null,
-  focusPaginationAfterLoad: false,
+  focusPageContentAfterLoad: false,
 };
 
 const elements = {
@@ -35,6 +36,7 @@ const elements = {
   runsClose: document.querySelector("#runs-close"),
   runsDrawer: document.querySelector("#runs-drawer"),
   runs: document.querySelector("#runs"),
+  archiveTitle: document.querySelector("#archive-title"),
   board: document.querySelector("#archive-board"),
   posts: document.querySelector("#posts"),
   resultCount: document.querySelector("#result-count"),
@@ -158,7 +160,7 @@ function render() {
   renderPosts(view.posts);
   renderResultStatus(view);
   renderPagination(view.pagination);
-  restorePaginationFocus();
+  restorePageChangeFocus();
 }
 
 function getViewModel() {
@@ -557,8 +559,14 @@ function renderPagination(pagination) {
     return;
   }
 
+  const pageList = document.createElement("div");
+  pageList.className = "pagination-pages";
+  pageList.setAttribute("role", "group");
+  pageList.setAttribute("aria-label", "페이지 번호");
+
   elements.pagination.append(
-    createPageButton("이전", pagination.page - 1, !pagination.has_previous, "pagination-direction")
+    createPageButton("이전", pagination.page - 1, !pagination.has_previous, "pagination-direction"),
+    pageList
   );
 
   for (const entry of getPageSequence(pagination.page, pagination.total_pages)) {
@@ -567,7 +575,7 @@ function renderPagination(pagination) {
       ellipsis.className = "pagination-ellipsis";
       ellipsis.setAttribute("aria-hidden", "true");
       ellipsis.textContent = "…";
-      elements.pagination.append(ellipsis);
+      pageList.append(ellipsis);
       continue;
     }
 
@@ -578,22 +586,41 @@ function renderPagination(pagination) {
     } else {
       button.setAttribute("aria-label", `${entry}페이지로 이동`);
     }
-    elements.pagination.append(button);
+    pageList.append(button);
   }
 
   elements.pagination.append(
-    createPageButton("다음", pagination.page + 1, !pagination.has_next, "pagination-direction")
+    createPageButton("다음", pagination.page + 1, !pagination.has_next, "pagination-direction"),
+    createPageJumpForm(pagination.page, pagination.total_pages)
   );
+  centerCurrentPage(pageList);
 }
 
-function restorePaginationFocus() {
-  if (!state.focusPaginationAfterLoad) {
+function centerCurrentPage(pageList) {
+  const currentPage = pageList.querySelector('[aria-current="page"]');
+  if (
+    !currentPage ||
+    typeof window.matchMedia !== "function" ||
+    !window.matchMedia("(max-width: 520px)").matches
+  ) {
     return;
   }
 
-  state.focusPaginationAfterLoad = false;
-  const currentPage = elements.pagination.querySelector('[aria-current="page"]');
-  currentPage?.focus({ preventScroll: true });
+  window.requestAnimationFrame(() => {
+    const listBounds = pageList.getBoundingClientRect();
+    const pageBounds = currentPage.getBoundingClientRect();
+    pageList.scrollLeft +=
+      pageBounds.left - listBounds.left - (listBounds.width - pageBounds.width) / 2;
+  });
+}
+
+function restorePageChangeFocus() {
+  if (!state.focusPageContentAfterLoad) {
+    return;
+  }
+
+  state.focusPageContentAfterLoad = false;
+  elements.archiveTitle.focus({ preventScroll: true });
 }
 
 function createPageButton(label, page, disabled, className) {
@@ -608,28 +635,119 @@ function createPageButton(label, page, disabled, className) {
   return button;
 }
 
+function createPageJumpForm(currentPage, totalPages) {
+  const form = document.createElement("form");
+  form.className = "pagination-jump";
+  form.noValidate = true;
+  form.setAttribute("aria-label", "페이지 직접 이동");
+
+  const label = document.createElement("label");
+  label.className = "pagination-jump-label";
+  label.htmlFor = "pagination-jump-input";
+  label.textContent = "페이지";
+
+  const input = document.createElement("input");
+  input.className = "pagination-jump-input";
+  input.id = "pagination-jump-input";
+  input.name = "page";
+  input.type = "number";
+  input.inputMode = "numeric";
+  input.autocomplete = "off";
+  input.min = "1";
+  input.max = String(totalPages);
+  input.step = "1";
+  input.required = true;
+  input.value = String(currentPage);
+  input.setAttribute("aria-describedby", "pagination-jump-total");
+
+  const total = document.createElement("span");
+  total.className = "pagination-jump-total";
+  total.id = "pagination-jump-total";
+  total.textContent = `/ ${numberFormatter.format(totalPages)}`;
+  total.setAttribute("aria-label", `전체 ${numberFormatter.format(totalPages)}페이지`);
+
+  const submit = document.createElement("button");
+  submit.className = "pagination-button pagination-jump-button";
+  submit.type = "submit";
+  submit.textContent = "가기";
+
+  input.addEventListener("input", () => input.setCustomValidity(""));
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      submit.click();
+    }
+  });
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const page = parsePageJump(input.value, totalPages);
+    if (page === null) {
+      input.setCustomValidity(
+        `1부터 ${numberFormatter.format(totalPages)} 사이의 정수를 입력하세요.`
+      );
+      input.reportValidity();
+      return;
+    }
+
+    input.setCustomValidity("");
+    if (page === currentPage) {
+      input.focus();
+      return;
+    }
+
+    goToPage(page);
+  });
+
+  form.append(label, input, total, submit);
+  return form;
+}
+
 function getPageSequence(currentPage, totalPages) {
-  if (totalPages <= 7) {
-    return Array.from({ length: totalPages }, (_, index) => index + 1);
+  const windowStart = Math.max(1, currentPage - PAGE_WINDOW_RADIUS);
+  const windowEnd = Math.min(totalPages, currentPage + PAGE_WINDOW_RADIUS);
+  const pages = new Set([1, totalPages]);
+
+  for (let page = windowStart; page <= windowEnd; page += 1) {
+    pages.add(page);
   }
 
-  if (currentPage <= 4) {
-    return [1, 2, 3, 4, 5, "ellipsis", totalPages];
+  const sortedPages = Array.from(pages)
+    .filter((page) => Number.isInteger(page) && page >= 1 && page <= totalPages)
+    .sort((left, right) => left - right);
+  const sequence = [];
+
+  for (const page of sortedPages) {
+    const previousPage = sequence[sequence.length - 1];
+    if (typeof previousPage === "number") {
+      const gap = page - previousPage;
+      if (gap === 2) {
+        sequence.push(previousPage + 1);
+      } else if (gap > 2) {
+        sequence.push("ellipsis");
+      }
+    }
+    sequence.push(page);
   }
 
-  if (currentPage >= totalPages - 3) {
-    return [1, "ellipsis", totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
+  return sequence;
+}
+
+function parsePageJump(value, totalPages) {
+  const normalized = String(value ?? "").trim();
+  if (!/^\d+$/.test(normalized)) {
+    return null;
   }
 
-  return [1, "ellipsis", currentPage - 1, currentPage, currentPage + 1, "ellipsis", totalPages];
+  const page = Number(normalized);
+  return Number.isSafeInteger(page) && page >= 1 && page <= totalPages ? page : null;
 }
 
 function goToPage(page) {
   state.page = Math.max(1, page);
-  state.focusPaginationAfterLoad = true;
+  state.focusPageContentAfterLoad = true;
   syncStateToUrl();
   loadArchive();
-  document.querySelector("#archive-title").scrollIntoView({ block: "start" });
+  elements.archiveTitle.scrollIntoView({ block: "start" });
 }
 
 function comparePosts(left, right) {
@@ -694,7 +812,7 @@ function scheduleFilterUpdate() {
   state.filterTimer = window.setTimeout(() => {
     readStateFromControls();
     state.page = 1;
-    state.focusPaginationAfterLoad = false;
+    state.focusPageContentAfterLoad = false;
     syncStateToUrl();
     loadArchive();
   }, 180);
@@ -702,7 +820,7 @@ function scheduleFilterUpdate() {
 
 function resetFilters() {
   Object.assign(state, DEFAULT_STATE);
-  state.focusPaginationAfterLoad = false;
+  state.focusPageContentAfterLoad = false;
   writeStateToControls();
   syncStateToUrl();
   loadArchive();

@@ -127,12 +127,34 @@ test("keeps the collection drawer keyboard and focus contract", () => {
   assert.match(app, /aria-expanded/);
 });
 
-test("restores pagination focus and follows the motion contract", () => {
-  assert.match(app, /focusPaginationAfterLoad/);
-  assert.match(app, /querySelector\('\[aria-current="page"\]'\)/);
-  assert.match(app, /focus\(\{ preventScroll: true \}\)/);
+test("moves page-change focus to visible content and follows the motion contract", () => {
+  assert.match(html, /id="archive-title"[^>]*tabindex="-1"/);
+  assert.match(app, /focusPageContentAfterLoad/);
+  assert.match(app, /elements\.archiveTitle\.focus\(\{ preventScroll: true \}\)/);
   assert.doesNotMatch(css, /transition\s*:[^;]*(?:background-color|border-color)/s);
   assert.doesNotMatch(css, /transition\s*:[^;]*,\s*color\s+/s);
+});
+
+test("supports direct page jumps and a wider page window", () => {
+  assert.match(app, /PAGE_WINDOW_RADIUS\s*=\s*4/);
+  assert.match(app, /createPageJumpForm\(pagination\.page, pagination\.total_pages\)/);
+  assert.match(app, /form\.setAttribute\("aria-label", "페이지 직접 이동"\)/);
+  assert.match(app, /label\.htmlFor = "pagination-jump-input"/);
+  assert.match(app, /input\.type = "number"/);
+  assert.match(app, /input\.min = "1"/);
+  assert.match(app, /input\.max = String\(totalPages\)/);
+  assert.match(app, /input\.step = "1"/);
+  assert.match(app, /input\.required = true/);
+  assert.match(app, /event\.key === "Enter"[\s\S]*submit\.click\(\)/);
+  assert.match(app, /form\.addEventListener\("submit"/);
+  assert.match(app, /const page = parsePageJump\(input\.value, totalPages\)/);
+  assert.match(app, /goToPage\(page\)/);
+  assert.match(css, /\.pagination-jump-input\s*{[^}]*height:\s*var\(--control-height\)/s);
+  assert.match(
+    css,
+    /@media \(max-width:\s*520px\)[\s\S]*\.pagination-pages\s*{[^}]*overflow-x:\s*auto/
+  );
+  assert.doesNotMatch(css, /\.pagination-page:not\(\[aria-current="page"\]\)[^{]*{[^}]*display:\s*none/);
 });
 
 test("keeps action states inside an ARIA table cell", () => {

@@ -6,8 +6,12 @@ import { fileURLToPath } from "node:url";
 
 const dashboardRoot = resolve(fileURLToPath(new URL("../dashboard/", import.meta.url)));
 const port = Number.parseInt(process.env.TC_FIXTURE_PORT || "4173", 10);
+const requestedPostCount = Number.parseInt(process.env.TC_FIXTURE_POST_COUNT || "73", 10);
+const postCount = Number.isInteger(requestedPostCount) && requestedPostCount > 0
+  ? Math.min(requestedPostCount, 1000)
+  : 73;
 
-const posts = Array.from({ length: 73 }, (_, index) => {
+const posts = Array.from({ length: postCount }, (_, index) => {
   const id = 1324407 - index;
   const upvotes = (index * 7) % 31;
   const comments = (index * 11) % 46;

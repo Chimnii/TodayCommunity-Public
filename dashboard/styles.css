@@ -549,6 +549,56 @@ a {
   text-align: center;
 }
 
+.pagination-pages {
+  display: contents;
+}
+
+.pagination-jump {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-left: var(--space-2);
+}
+
+.pagination-jump-label {
+  color: var(--color-ink-muted);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.pagination-jump-input {
+  width: 72px;
+  height: var(--control-height);
+  min-width: 0;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.pagination-jump-input:hover {
+  border-color: var(--color-border-strong);
+}
+
+.pagination-jump-total {
+  color: var(--color-ink-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pagination-jump-button {
+  min-width: var(--space-12);
+  font-family: var(--font-sans);
+}
+
 .runs-drawer {
   position: fixed;
   inset: 0 0 0 auto;
@@ -777,6 +827,15 @@ a {
   .cell-number {
     display: none;
   }
+
+  .board-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .pagination {
+    width: 100%;
+  }
 }
 
 @media (max-width: 520px) {
@@ -835,13 +894,29 @@ a {
     justify-content: space-between;
   }
 
-  .pagination-page:not([aria-current="page"]),
-  .pagination-ellipsis {
-    display: none;
-  }
-
   .pagination-direction {
     flex: 1 1 0;
+    order: 1;
+  }
+
+  .pagination-pages {
+    display: flex;
+    min-width: 0;
+    flex: 1 0 100%;
+    order: 2;
+    align-items: center;
+    gap: var(--space-1);
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    padding: var(--space-1) 0;
+    scrollbar-width: thin;
+  }
+
+  .pagination-jump {
+    flex: 1 0 100%;
+    order: 3;
+    justify-content: flex-end;
+    margin-left: 0;
   }
 
   .drawer-header,
