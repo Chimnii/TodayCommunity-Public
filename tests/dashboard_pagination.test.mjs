@@ -38,14 +38,14 @@ test("loads the dashboard's pagination helpers without running initialize", () =
   assert.equal(typeof parsePageJump, "function");
 });
 
-test("getPageSequence exposes a nine-page window around middle pages", () => {
+test("getPageSequence exposes a seven-page window around middle pages", () => {
   const cases = [
-    [1, 20, [1, 2, 3, 4, 5, "ellipsis", 20]],
-    [5, 20, [1, 2, 3, 4, 5, 6, 7, 8, 9, "ellipsis", 20]],
-    [6, 20, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, "ellipsis", 20]],
-    [10, 20, [1, "ellipsis", 6, 7, 8, 9, 10, 11, 12, 13, 14, "ellipsis", 20]],
-    [16, 20, [1, "ellipsis", 12, 13, 14, 15, 16, 17, 18, 19, 20]],
-    [20, 20, [1, "ellipsis", 16, 17, 18, 19, 20]],
+    [1, 20, [1, 2, 3, 4, "ellipsis", 20]],
+    [5, 20, [1, 2, 3, 4, 5, 6, 7, 8, "ellipsis", 20]],
+    [6, 20, [1, 2, 3, 4, 5, 6, 7, 8, 9, "ellipsis", 20]],
+    [10, 20, [1, "ellipsis", 7, 8, 9, 10, 11, 12, 13, "ellipsis", 20]],
+    [16, 20, [1, "ellipsis", 13, 14, 15, 16, 17, 18, 19, 20]],
+    [20, 20, [1, "ellipsis", 17, 18, 19, 20]],
   ];
 
   for (const [currentPage, totalPages, expected] of cases) {

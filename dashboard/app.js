@@ -13,7 +13,7 @@ const DEFAULT_STATE = Object.freeze({
 const VALID_SORTS = new Set(["created_at", "upvotes", "comments"]);
 const VALID_PAGE_SIZES = new Set([20, 30, 50, 100]);
 const SUBJECT_PREVIEW_LENGTH = 3;
-const PAGE_WINDOW_RADIUS = 4;
+const PAGE_WINDOW_RADIUS = 3;
 const subjectSegmenter = typeof Intl.Segmenter === "function"
   ? new Intl.Segmenter("ko", { granularity: "grapheme" })
   : null;
@@ -564,10 +564,7 @@ function renderPagination(pagination) {
   pageList.setAttribute("role", "group");
   pageList.setAttribute("aria-label", "페이지 번호");
 
-  elements.pagination.append(
-    createPageButton("이전", pagination.page - 1, !pagination.has_previous, "pagination-direction"),
-    pageList
-  );
+  elements.pagination.append(createPageJumpForm(pagination.page, pagination.total_pages), pageList);
 
   for (const entry of getPageSequence(pagination.page, pagination.total_pages)) {
     if (entry === "ellipsis") {
@@ -579,7 +576,7 @@ function renderPagination(pagination) {
       continue;
     }
 
-    const button = createPageButton(String(entry), entry, false, "pagination-page");
+    const button = createPageButton(String(entry), entry, "pagination-page");
     if (entry === pagination.page) {
       button.setAttribute("aria-current", "page");
       button.setAttribute("aria-label", `${entry}페이지, 현재 페이지`);
@@ -589,10 +586,6 @@ function renderPagination(pagination) {
     pageList.append(button);
   }
 
-  elements.pagination.append(
-    createPageButton("다음", pagination.page + 1, !pagination.has_next, "pagination-direction"),
-    createPageJumpForm(pagination.page, pagination.total_pages)
-  );
   centerCurrentPage(pageList);
 }
 
@@ -623,15 +616,12 @@ function restorePageChangeFocus() {
   elements.archiveTitle.focus({ preventScroll: true });
 }
 
-function createPageButton(label, page, disabled, className) {
+function createPageButton(label, page, className) {
   const button = document.createElement("button");
   button.className = `pagination-button ${className}`;
   button.type = "button";
   button.textContent = label;
-  button.disabled = disabled;
-  if (!disabled) {
-    button.addEventListener("click", () => goToPage(page));
-  }
+  button.addEventListener("click", () => goToPage(page));
   return button;
 }
 
@@ -640,11 +630,6 @@ function createPageJumpForm(currentPage, totalPages) {
   form.className = "pagination-jump";
   form.noValidate = true;
   form.setAttribute("aria-label", "페이지 직접 이동");
-
-  const label = document.createElement("label");
-  label.className = "pagination-jump-label";
-  label.htmlFor = "pagination-jump-input";
-  label.textContent = "페이지";
 
   const input = document.createElement("input");
   input.className = "pagination-jump-input";
@@ -658,13 +643,10 @@ function createPageJumpForm(currentPage, totalPages) {
   input.step = "1";
   input.required = true;
   input.value = String(currentPage);
-  input.setAttribute("aria-describedby", "pagination-jump-total");
-
-  const total = document.createElement("span");
-  total.className = "pagination-jump-total";
-  total.id = "pagination-jump-total";
-  total.textContent = `/ ${numberFormatter.format(totalPages)}`;
-  total.setAttribute("aria-label", `전체 ${numberFormatter.format(totalPages)}페이지`);
+  input.setAttribute(
+    "aria-label",
+    `이동할 페이지, 1부터 ${numberFormatter.format(totalPages)}까지`
+  );
 
   const submit = document.createElement("button");
   submit.className = "pagination-button pagination-jump-button";
@@ -698,11 +680,15 @@ function createPageJumpForm(currentPage, totalPages) {
     goToPage(page);
   });
 
-  form.append(label, input, total, submit);
+  form.append(input, submit);
   return form;
 }
 
 function getPageSequence(currentPage, totalPages) {
+  if (totalPages <= PAGE_WINDOW_RADIUS * 2 + 1) {
+    return Array.from({ length: totalPages }, (_, index) => index + 1);
+  }
+
   const windowStart = Math.max(1, currentPage - PAGE_WINDOW_RADIUS);
   const windowEnd = Math.min(totalPages, currentPage + PAGE_WINDOW_RADIUS);
   const pages = new Set([1, totalPages]);

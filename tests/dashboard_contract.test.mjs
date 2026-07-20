@@ -135,24 +135,34 @@ test("moves page-change focus to visible content and follows the motion contract
   assert.doesNotMatch(css, /transition\s*:[^;]*,\s*color\s+/s);
 });
 
-test("supports direct page jumps and a wider page window", () => {
-  assert.match(app, /PAGE_WINDOW_RADIUS\s*=\s*4/);
+test("supports compact direct page jumps and a seven-page window", () => {
+  assert.match(app, /PAGE_WINDOW_RADIUS\s*=\s*3/);
   assert.match(app, /createPageJumpForm\(pagination\.page, pagination\.total_pages\)/);
+  assert.doesNotMatch(app, /createPageButton\("(?:이전|다음)"/);
   assert.match(app, /form\.setAttribute\("aria-label", "페이지 직접 이동"\)/);
-  assert.match(app, /label\.htmlFor = "pagination-jump-input"/);
   assert.match(app, /input\.type = "number"/);
   assert.match(app, /input\.min = "1"/);
   assert.match(app, /input\.max = String\(totalPages\)/);
   assert.match(app, /input\.step = "1"/);
   assert.match(app, /input\.required = true/);
+  assert.match(app, /input\.setAttribute\([\s\S]*"aria-label"/);
+  assert.doesNotMatch(app, /pagination-jump-(?:label|total)/);
   assert.match(app, /event\.key === "Enter"[\s\S]*submit\.click\(\)/);
   assert.match(app, /form\.addEventListener\("submit"/);
   assert.match(app, /const page = parsePageJump\(input\.value, totalPages\)/);
   assert.match(app, /goToPage\(page\)/);
-  assert.match(css, /\.pagination-jump-input\s*{[^}]*height:\s*var\(--control-height\)/s);
+  assert.match(css, /--control-height:\s*40px/);
+  assert.match(css, /--pagination-control-size:\s*36px/);
   assert.match(
     css,
-    /@media \(max-width:\s*520px\)[\s\S]*\.pagination-pages\s*{[^}]*overflow-x:\s*auto/
+    /\.pagination-button\s*{[^}]*min-width:\s*var\(--pagination-control-size\)[^}]*height:\s*var\(--pagination-control-size\)/s
+  );
+  assert.doesNotMatch(css, /\.pagination-direction/);
+  assert.match(css, /\.pagination-jump\s*{[^}]*margin-right:\s*var\(--space-3\)/s);
+  assert.match(css, /\.pagination-jump-input\s*{[^}]*height:\s*var\(--pagination-control-size\)/s);
+  assert.match(
+    css,
+    /@media \(max-width:\s*1010px\)[\s\S]*\.pagination\s*{[^}]*flex-wrap:\s*nowrap[^}]*align-items:\s*flex-start[\s\S]*\.pagination-pages\s*{[^}]*overflow-x:\s*auto[\s\S]*\.pagination-jump\s*{[^}]*margin-top:\s*var\(--space-1\)/
   );
   assert.doesNotMatch(css, /\.pagination-page:not\(\[aria-current="page"\]\)[^{]*{[^}]*display:\s*none/);
 });
