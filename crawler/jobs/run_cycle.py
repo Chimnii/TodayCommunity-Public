@@ -131,6 +131,7 @@ class PhaseSummary:
     scanned_pages: int = 0
     scanned_posts: int = 0
     matched_posts: int = 0
+    hot_persisted_posts: Optional[int] = None
     target_complete: bool = False
     committed_intervals: int = 0
     confirmed_absences: int = 0
@@ -144,6 +145,7 @@ class PhaseSummary:
                 "target_complete": self.target_complete,
                 "committed_intervals": self.committed_intervals,
                 "confirmed_absences": self.confirmed_absences,
+                "hot_persisted_posts": self.hot_persisted_posts,
                 "stop_reason": self.stop_reason,
                 "oldest_seen_at": self.oldest_seen_at,
                 "pages": self.pages,
@@ -322,28 +324,50 @@ class CrawlCycle:
                 break
             page += 1
 
-        qualifying = [asdict(post) for post in deduped.values()]
+        qualifying_posts = list(deduped.values())
+        if self.mode == CYCLE_MODE_HOT:
+            # A later batch failure should leave the freshest Hot candidates
+            # persisted first. Keep the legacy scan order in full cycles.
+            qualifying_posts.sort(
+                key=lambda post: (
+                    parse_datetime(post.created_at),
+                    int(post.external_post_id),
+                ),
+                reverse=True,
+            )
+        qualifying = [asdict(post) for post in qualifying_posts]
         summary.matched_posts = len(qualifying)
         if self.client:
-            # Multi-row post upserts plus the phase run record. Defer the
-            # whole hot write when its configured worst-case HTTP time could
-            # consume the historical lane's reserved wall-clock window.
-            if not self._persistence_fits(
+            # A full cycle must preserve the historical lane that follows Hot.
+            # A dedicated Hot run has no later source-request lane to protect:
+            # its phase deadline already stopped new fetches, so attempt every
+            # idempotent D1 write for rows that were successfully scanned. The
+            # workflow timeout remains the outer bound and makes real D1 stalls
+            # visible as failures instead of green zero-write partial results.
+            if self.mode == CYCLE_MODE_FULL and not self._persistence_fits(
                 query_count=post_upsert_query_count(len(qualifying)) + 1,
-                reserve_seconds=(
-                    self.config.deep_reserved_seconds
-                    if self.mode == CYCLE_MODE_FULL
-                    else 0.0
-                ),
+                reserve_seconds=self.config.deep_reserved_seconds,
             ):
                 summary.status = "partial"
-                summary.stop_reason = (
-                    "deep_time_reservation"
-                    if self.mode == CYCLE_MODE_FULL
-                    else "cycle_persistence_budget"
-                )
+                summary.stop_reason = "deep_time_reservation"
                 return summary
-            upsert_posts(self.client, self.target, qualifying, self.run_started_at)
+            on_batch_persisted: Optional[Callable[[int], None]] = None
+            if self.mode == CYCLE_MODE_HOT:
+                summary.hot_persisted_posts = 0
+
+                def record_hot_persisted(count: int) -> None:
+                    assert summary.hot_persisted_posts is not None
+                    summary.hot_persisted_posts += count
+
+                on_batch_persisted = record_hot_persisted
+
+            upsert_posts(
+                self.client,
+                self.target,
+                qualifying,
+                self.run_started_at,
+                on_batch_persisted=on_batch_persisted,
+            )
             self._record_summary(summary)
         return summary
 

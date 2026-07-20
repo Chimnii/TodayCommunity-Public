@@ -159,6 +159,19 @@ class FailingPostClient(SqliteClient):
         return super().query(sql, params)
 
 
+class FailingSecondPostBatchClient(SqliteClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.post_write_calls = 0
+
+    def query(self, sql: str, params: Optional[Iterable[object]] = None):
+        if "INSERT INTO posts" in sql:
+            self.post_write_calls += 1
+            if self.post_write_calls == 2:
+                raise RuntimeError("injected second post batch failure")
+        return super().query(sql, params)
+
+
 class FailingAbsenceClient(SqliteClient):
     def query(self, sql: str, params: Optional[Iterable[object]] = None):
         if "INSERT INTO coverage_absences" in sql:
@@ -2399,6 +2412,222 @@ class CrawlCycleTests(unittest.TestCase):
             [{"external_post_id": "1000"}],
         )
         self.assertEqual(len(client.query("SELECT id FROM crawl_runs")), 1)
+
+    def test_dedicated_hot_attempts_writes_when_preflight_cannot_fit(self) -> None:
+        clock = FakeClock()
+        client = SqliteClient()
+        client.timeout_seconds = 10
+        settings = CycleConfig(
+            finalization_age_hours=24,
+            hot_lookback_minutes=60,
+            hot_max_seconds=20,
+            cycle_max_seconds=20,
+            min_request_interval_seconds=0.001,
+            deep_reserved_seconds=0,
+        )
+        cycle_runtime = CycleRuntime(
+            min_request_interval_seconds=0.001,
+            total_seconds=20,
+            hot_seconds=20,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
+        candidate_count = 29
+        qualifying_rows = [
+            row(1000 - index, "2026-07-16 20:00:00", upvotes=4)
+            for index in range(candidate_count)
+        ]
+        cycle = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=cycle_runtime,
+            client=client,
+            fetcher=MappingFetcher({1: page_html(*qualifying_rows)}),
+            cycle_started_at=FIXED_NOW,
+            mode=CYCLE_MODE_HOT,
+        )
+
+        self.assertFalse(cycle._persistence_fits(query_count=6))
+
+        summary = cycle._run_hot_scan()
+
+        self.assertEqual(summary.status, "completed")
+        self.assertEqual(summary.stop_reason, "lookback_reached")
+        self.assertEqual(summary.hot_persisted_posts, candidate_count)
+        self.assertEqual(len(client.query("SELECT id FROM posts")), candidate_count)
+        self.assertEqual(len(client.query("SELECT id FROM crawl_runs")), 1)
+
+    def test_dedicated_hot_persists_all_candidates_after_source_deadline(self) -> None:
+        clock = FakeClock()
+        client = SqliteClient()
+        candidate_count = 29
+        candidate_rows = [
+            row(
+                3000 - index,
+                "2026-07-16 20:30:00",
+                upvotes=4,
+            )
+            for index in range(candidate_count)
+        ]
+        settings = CycleConfig(
+            finalization_age_hours=24,
+            hot_lookback_minutes=60,
+            hot_max_seconds=20,
+            cycle_max_seconds=20,
+            min_request_interval_seconds=0.001,
+            deep_reserved_seconds=0,
+        )
+        cycle_runtime = CycleRuntime(
+            min_request_interval_seconds=0.001,
+            total_seconds=20,
+            hot_seconds=20,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
+        cycle = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=cycle_runtime,
+            client=client,
+            fetcher=TimedFetcher({1: page_html(*candidate_rows)}, clock),
+            cycle_started_at=FIXED_NOW,
+            mode=CYCLE_MODE_HOT,
+        )
+
+        summary = cycle._run_hot_scan()
+
+        self.assertEqual(summary.status, "partial")
+        self.assertEqual(summary.stop_reason, "request_timeout_budget")
+        self.assertEqual(summary.matched_posts, candidate_count)
+        self.assertEqual(summary.hot_persisted_posts, candidate_count)
+        self.assertEqual(len(client.query("SELECT id FROM posts")), candidate_count)
+        self.assertEqual(len(client.query("SELECT id FROM crawl_runs")), 1)
+
+    def test_dedicated_hot_reports_successful_batches_before_later_failure(
+        self,
+    ) -> None:
+        client = FailingSecondPostBatchClient()
+        minutes = [(index * 7) % 15 for index in range(15)]
+        candidate_rows = [
+            row(
+                4000 - index,
+                f"2026-07-16 20:{minute:02}:00",
+                upvotes=4,
+            )
+            for index, minute in enumerate(minutes)
+        ]
+        expected_first_batch = {
+            str(4000 - index)
+            for index, _minute in sorted(
+                enumerate(minutes),
+                key=lambda item: (item[1], 4000 - item[0]),
+                reverse=True,
+            )[:7]
+        }
+        settings = CycleConfig(
+            finalization_age_hours=24,
+            hot_lookback_minutes=60,
+            hot_max_seconds=180,
+            cycle_max_seconds=180,
+            min_request_interval_seconds=0.001,
+            deep_reserved_seconds=0,
+        )
+        cycle = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=runtime(settings),
+            client=client,
+            fetcher=MappingFetcher({1: page_html(*candidate_rows)}),
+            cycle_started_at=FIXED_NOW,
+            mode=CYCLE_MODE_HOT,
+        )
+
+        result = cycle.run()
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["phases"][0]["hot_persisted_posts"], 7)
+        persisted_ids = {
+            item["external_post_id"]
+            for item in client.query("SELECT external_post_id FROM posts")
+        }
+        self.assertEqual(persisted_ids, expected_first_batch)
+        self.assertEqual(
+            client.query("SELECT status, run_type FROM crawl_runs"),
+            [{"status": "failed", "run_type": "crawl_cycle"}],
+        )
+
+    def test_full_cycle_keeps_scan_order_when_later_hot_batch_fails(self) -> None:
+        client = FailingSecondPostBatchClient()
+        minutes = [(index * 7) % 15 for index in range(15)]
+        candidate_rows = [
+            row(
+                5000 - index,
+                f"2026-07-16 20:{minute:02}:00",
+                upvotes=4,
+            )
+            for index, minute in enumerate(minutes)
+        ]
+        settings = CycleConfig(
+            finalization_age_hours=24,
+            hot_lookback_minutes=60,
+            hot_max_seconds=180,
+            cycle_max_seconds=240,
+            min_request_interval_seconds=0.001,
+            deep_reserved_seconds=30,
+        )
+        cycle = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=runtime(settings),
+            client=client,
+            fetcher=MappingFetcher({1: page_html(*candidate_rows)}),
+            cycle_started_at=FIXED_NOW,
+        )
+
+        result = cycle.run()
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIsNone(result["phases"][0]["hot_persisted_posts"])
+        persisted_ids = {
+            item["external_post_id"]
+            for item in client.query("SELECT external_post_id FROM posts")
+        }
+        self.assertEqual(
+            persisted_ids,
+            {str(post_id) for post_id in range(5000, 4993, -1)},
+        )
+
+    def test_dedicated_hot_post_write_failure_is_not_a_green_partial(self) -> None:
+        client = FailingPostClient()
+        settings = CycleConfig(
+            finalization_age_hours=24,
+            hot_lookback_minutes=60,
+            hot_max_seconds=180,
+            cycle_max_seconds=180,
+            min_request_interval_seconds=0.001,
+            deep_reserved_seconds=0,
+        )
+        cycle = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=runtime(settings),
+            client=client,
+            fetcher=MappingFetcher(
+                {1: page_html(row(1000, "2026-07-16 20:00:00", upvotes=4))}
+            ),
+            cycle_started_at=FIXED_NOW,
+            mode=CYCLE_MODE_HOT,
+        )
+
+        result = cycle.run()
+
+        self.assertEqual(result["status"], "failed")
+        self.assertTrue(status_requires_failure_exit(result["status"]))
+        self.assertEqual(client.query("SELECT * FROM posts"), [])
+        self.assertEqual(
+            client.query("SELECT status, run_type FROM crawl_runs"),
+            [{"status": "failed", "run_type": "crawl_cycle"}],
+        )
 
     def test_finalization_budget_counts_only_connected_coverage_cleanup(self) -> None:
         settings = config()

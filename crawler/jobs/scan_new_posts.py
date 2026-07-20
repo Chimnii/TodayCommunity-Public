@@ -8,7 +8,7 @@ import sys
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
-from typing import Dict, List
+from typing import Callable, Dict, List, Optional
 from urllib import error, request
 
 from crawler.config import get_env, get_required_env, is_truthy
@@ -238,6 +238,7 @@ def upsert_posts(
     target: TargetBoard,
     posts: List[dict],
     checked_at: str,
+    on_batch_persisted: Optional[Callable[[int], None]] = None,
 ) -> None:
     for offset in range(0, len(posts), POSTS_PER_UPSERT):
         chunk = posts[offset : offset + POSTS_PER_UPSERT]
@@ -287,6 +288,8 @@ def upsert_posts(
             """,
             params,
         )
+        if on_batch_persisted is not None:
+            on_batch_persisted(len(chunk))
 
 
 def post_upsert_query_count(post_count: int) -> int:
