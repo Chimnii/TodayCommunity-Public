@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import http.client
+import socket
 import unittest
 from unittest.mock import patch
+from urllib import error
 
 from crawler.jobs.scan_new_posts import (
+    CrawlBlockedError,
+    CrawlTimeoutError,
     CrawlTransientError,
     EXISTING_POST_IDS_PER_QUERY,
     POSTS_PER_UPSERT,
@@ -58,7 +62,58 @@ class BlockDetectionTests(unittest.TestCase):
 
 
 class FetchHtmlTests(unittest.TestCase):
-    def test_interrupted_response_errors_are_classified_as_transient(self) -> None:
+    def test_direct_transport_timeout_uses_timeout_subclass(self) -> None:
+        with patch(
+            "crawler.jobs.scan_new_posts.request.urlopen",
+            side_effect=socket.timeout("timed out"),
+        ):
+            with self.assertRaises(CrawlTimeoutError):
+                fetch_html("https://example.com/list", 5)
+
+    def test_url_error_wrapping_transport_timeout_uses_timeout_subclass(self) -> None:
+        with patch(
+            "crawler.jobs.scan_new_posts.request.urlopen",
+            side_effect=error.URLError(socket.timeout("timed out")),
+        ):
+            with self.assertRaises(CrawlTimeoutError):
+                fetch_html("https://example.com/list", 5)
+
+    def test_http_timeout_status_stays_generic_transient(self) -> None:
+        http_error = error.HTTPError(
+            "https://example.com/list",
+            408,
+            "Request Timeout",
+            {},
+            None,
+        )
+
+        with patch(
+            "crawler.jobs.scan_new_posts.request.urlopen",
+            side_effect=http_error,
+        ):
+            with self.assertRaises(CrawlTransientError) as raised:
+                fetch_html("https://example.com/list", 5)
+
+        self.assertNotIsInstance(raised.exception, CrawlTimeoutError)
+
+    def test_non_timeout_url_errors_stay_generic_transient(self) -> None:
+        reasons = (
+            socket.gaierror("name resolution failed"),
+            ConnectionResetError("connection reset"),
+        )
+
+        for reason in reasons:
+            with self.subTest(error=type(reason).__name__):
+                with patch(
+                    "crawler.jobs.scan_new_posts.request.urlopen",
+                    side_effect=error.URLError(reason),
+                ):
+                    with self.assertRaises(CrawlTransientError) as raised:
+                        fetch_html("https://example.com/list", 5)
+
+                self.assertNotIsInstance(raised.exception, CrawlTimeoutError)
+
+    def test_interrupted_response_errors_are_generic_transient(self) -> None:
         errors = (
             http.client.RemoteDisconnected("remote closed the connection"),
             http.client.IncompleteRead(b"partial", 10),
@@ -71,7 +126,44 @@ class FetchHtmlTests(unittest.TestCase):
                     "crawler.jobs.scan_new_posts.request.urlopen",
                     side_effect=transport_error,
                 ):
-                    with self.assertRaises(CrawlTransientError):
+                    with self.assertRaises(CrawlTransientError) as raised:
+                        fetch_html("https://example.com/list", 5)
+
+                self.assertNotIsInstance(raised.exception, CrawlTimeoutError)
+
+    def test_http_5xx_stays_generic_transient(self) -> None:
+        http_error = error.HTTPError(
+            "https://example.com/list",
+            503,
+            "Service Unavailable",
+            {},
+            None,
+        )
+
+        with patch(
+            "crawler.jobs.scan_new_posts.request.urlopen",
+            side_effect=http_error,
+        ):
+            with self.assertRaises(CrawlTransientError) as raised:
+                fetch_html("https://example.com/list", 5)
+
+        self.assertNotIsInstance(raised.exception, CrawlTimeoutError)
+
+    def test_http_block_statuses_stay_blocked(self) -> None:
+        for status in (403, 429):
+            with self.subTest(status=status):
+                http_error = error.HTTPError(
+                    "https://example.com/list",
+                    status,
+                    "Blocked",
+                    {},
+                    None,
+                )
+                with patch(
+                    "crawler.jobs.scan_new_posts.request.urlopen",
+                    side_effect=http_error,
+                ):
+                    with self.assertRaises(CrawlBlockedError):
                         fetch_html("https://example.com/list", 5)
 
 

@@ -21,6 +21,7 @@ from crawler.d1 import D1Client
 from crawler.jobs.scan_new_posts import (
     CrawlBlockedError,
     CrawlSourceError,
+    CrawlTimeoutError,
     CrawlTransientError,
     existing_post_lookup_query_count,
     fetch_html,
@@ -51,6 +52,8 @@ DEFAULT_MIN_REQUEST_INTERVAL_SECONDS = 10.0
 DEFAULT_DEEP_RESERVED_SECONDS = 5 * 60.0
 DEFAULT_BLOCK_COOLDOWN_HOURS = 6.0
 DEFAULT_TRANSIENT_FETCH_ATTEMPTS = 2
+TIMEOUT_STREAK_METADATA_KEY = "consecutive_timeout_cycles"
+TIMEOUT_FAILURE_THRESHOLD = 3
 
 CYCLE_MODE_FULL = "full"
 CYCLE_MODE_HOT = "hot"
@@ -255,6 +258,8 @@ class CrawlCycle:
                 self._mark_active_phase("blocked", blocked.reason)
                 self._record_block(blocked.reason, self.summaries)
                 return self._result("blocked", self.summaries, str(blocked))
+        except CrawlTimeoutError as exc:
+            return self._handle_exhausted_timeout(exc)
         except (CrawlSourceError, RuntimeError) as exc:
             self._mark_active_phase("failed", str(exc))
             self._record_failure(str(exc), self.summaries)
@@ -264,10 +269,19 @@ class CrawlCycle:
             self._record_failure(str(exc), self.summaries)
             return self._result("failed", self.summaries, str(exc))
 
+        timeout_streak = self._timeout_streak()
+        if timeout_streak > 0:
+            self.source_state.state_metadata[TIMEOUT_STREAK_METADATA_KEY] = 0
+
         if self.client:
             try:
                 save_source_state(self.client, self.source_state)
             except Exception as exc:
+                if timeout_streak > 0:
+                    reason = f"Could not reset consecutive timeout state: {exc}"
+                    self._mark_active_phase("failed", reason)
+                    self._record_failure(reason, self.summaries)
+                    return self._result("failed", self.summaries, reason)
                 self.persistence_warnings.append(
                     f"Could not save non-authoritative source hints: {exc}"
                 )
@@ -1049,12 +1063,16 @@ class CrawlCycle:
         url = self.target.list_url_template.format(page=page)
         html = ""
         request_slot = None
+        last_timeout: Optional[CrawlTimeoutError] = None
+        all_transient_attempts_timed_out = True
         for attempt in range(1, self.config.transient_fetch_attempts + 1):
             remaining_for_request = (
                 self.runtime.remaining_seconds(phase) - max(0.0, reserve_seconds)
             )
             spacing_guard = self.runtime.next_request_delay_seconds()
             if remaining_for_request <= spacing_guard + 1.0:
+                if last_timeout is not None and all_transient_attempts_timed_out:
+                    raise last_timeout
                 raise RuntimeLimitReached(
                     scope="phase" if reserve_seconds > 0 else (
                         "cycle" if phase == BACKFILL_PHASE else "phase"
@@ -1066,11 +1084,18 @@ class CrawlCycle:
                     ),
                     phase=phase,
                 )
-            request_slot = self.runtime.acquire_request(phase)
+            try:
+                request_slot = self.runtime.acquire_request(phase)
+            except RuntimeLimitReached:
+                if last_timeout is not None and all_transient_attempts_timed_out:
+                    raise last_timeout
+                raise
             remaining_for_request = (
                 self.runtime.remaining_seconds(phase) - max(0.0, reserve_seconds)
             )
             if remaining_for_request <= 1.0:
+                if last_timeout is not None and all_transient_attempts_timed_out:
+                    raise last_timeout
                 raise RuntimeLimitReached(
                     scope="phase" if reserve_seconds > 0 else (
                         "cycle" if phase == BACKFILL_PHASE else "phase"
@@ -1090,7 +1115,14 @@ class CrawlCycle:
             except CrawlBlockedError as exc:
                 self.runtime.block(str(exc))
                 raise AssertionError("CycleRuntime.block always raises")
+            except CrawlTimeoutError as exc:
+                last_timeout = exc
+                if attempt >= self.config.transient_fetch_attempts:
+                    if not all_transient_attempts_timed_out:
+                        raise CrawlTransientError(str(exc)) from exc
+                    raise
             except CrawlTransientError:
+                all_transient_attempts_timed_out = False
                 if attempt >= self.config.transient_fetch_attempts:
                     raise
             finally:
@@ -1460,6 +1492,88 @@ class CrawlCycle:
         active.status = status
         active.stop_reason = reason[:500]
 
+    def _timeout_streak(self) -> int:
+        return positive_int(
+            self.source_state.state_metadata.get(TIMEOUT_STREAK_METADATA_KEY),
+            default=0,
+        )
+
+    def _persist_timeout_streak(self, streak: int) -> None:
+        """Persist only the shared counter after an aborted source action.
+
+        A timed-out Backfill may have changed page-hint metadata in memory before
+        the failing request. Saving the complete SourceState here would make
+        those unfinished hints authoritative, so the failure path updates only
+        the counter inside the existing JSON metadata column.
+        """
+
+        self.source_state.state_metadata[TIMEOUT_STREAK_METADATA_KEY] = streak
+        if not self.client:
+            return
+        self.client.query(
+            """
+            UPDATE source_state
+            SET state_metadata = json_set(
+                  CASE
+                    WHEN json_valid(state_metadata) THEN state_metadata
+                    ELSE '{}'
+                  END,
+                  '$.consecutive_timeout_cycles',
+                  ?
+                ),
+                updated_at = ?
+            WHERE source_key = ?
+            """,
+            [streak, utc_now(), self.target.key],
+        )
+
+    def _handle_exhausted_timeout(
+        self,
+        exc: CrawlTimeoutError,
+    ) -> Dict[str, object]:
+        streak = self._timeout_streak() + 1
+        timeout_reason = f"Consecutive timeout cycle {streak}: {exc}"
+        try:
+            self._persist_timeout_streak(streak)
+        except Exception as save_exc:
+            reason = f"Could not persist consecutive timeout state: {save_exc}"
+            self._mark_active_phase("failed", reason)
+            self._record_failure(reason, self.summaries)
+            return self._result("failed", self.summaries, reason)
+
+        if streak >= TIMEOUT_FAILURE_THRESHOLD:
+            self._mark_active_phase("failed", timeout_reason)
+            self._record_failure(timeout_reason, self.summaries)
+            return self._result("failed", self.summaries, timeout_reason)
+
+        self._mark_active_phase("partial", timeout_reason)
+        self._record_timeout_warning(timeout_reason, self.summaries)
+        return self._result("partial", self.summaries, timeout_reason)
+
+    def _record_timeout_warning(
+        self,
+        reason: str,
+        summaries: Sequence[PhaseSummary],
+    ) -> None:
+        if self.client:
+            try:
+                record_run(
+                    self.client,
+                    target=self.target,
+                    status="partial",
+                    scanned_pages=sum(item.scanned_pages for item in summaries),
+                    scanned_posts=sum(item.scanned_posts for item in summaries),
+                    matched_posts=sum(item.matched_posts for item in summaries),
+                    run_started_at=self.run_started_at,
+                    error_message=reason,
+                    ensure_source=False,
+                    run_type="crawl_cycle",
+                )
+            except Exception as record_exc:
+                self.persistence_warnings.append(
+                    f"Could not record timeout warning: {record_exc}"
+                )
+
     def _record_block(self, reason: str, summaries: Sequence[PhaseSummary]) -> None:
         timestamp = utc_now()
         blocked_at = parse_optional_datetime(timestamp) or datetime.now(timezone.utc)
@@ -1713,6 +1827,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def status_requires_failure_exit(status: str) -> bool:
+    return status in {"blocked", "failed"}
+
+
 def main() -> None:
     args = parse_args()
     config = config_from_env()
@@ -1738,7 +1856,7 @@ def main() -> None:
         mode=args.mode,
     ).run()
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    if result["status"] in {"blocked", "failed"}:
+    if status_requires_failure_exit(str(result["status"])):
         raise SystemExit(1)
 
 

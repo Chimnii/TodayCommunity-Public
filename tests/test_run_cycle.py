@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 import unittest
@@ -18,12 +19,15 @@ from crawler.jobs.run_cycle import (
     CYCLE_MODE_HOT,
     CrawlCycle,
     CycleConfig,
+    TIMEOUT_STREAK_METADATA_KEY,
     finalization_eligibility_is_id_suffix,
     select_history_target,
+    status_requires_failure_exit,
 )
 from crawler.jobs.scan_new_posts import (
     CrawlBlockedError,
     CrawlSourceError,
+    CrawlTimeoutError,
     CrawlTransientError,
     update_finalized_posts,
     upsert_posts,
@@ -169,6 +173,19 @@ class FailingAbsenceDeleteClient(SqliteClient):
         return super().query(sql, params)
 
 
+class FailingSourceStateWriteClient(SqliteClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_source_state_writes = False
+
+    def query(self, sql: str, params: Optional[Iterable[object]] = None):
+        if self.fail_source_state_writes and "source_state" in sql and (
+            "UPDATE source_state" in sql or "INSERT INTO source_state" in sql
+        ):
+            raise RuntimeError("injected source state write failure")
+        return super().query(sql, params)
+
+
 def config() -> CycleConfig:
     return CycleConfig(
         finalization_age_hours=24,
@@ -185,6 +202,25 @@ def runtime(settings: CycleConfig) -> CycleRuntime:
         total_seconds=settings.cycle_max_seconds,
         hot_seconds=settings.hot_max_seconds,
     )
+
+
+def source_state_metadata(client: SqliteClient) -> dict:
+    rows = client.query(
+        "SELECT state_metadata FROM source_state WHERE source_key = ?",
+        ["dcinside-singularity"],
+    )
+    return json.loads(rows[0]["state_metadata"]) if rows else {}
+
+
+class ExitStatusTests(unittest.TestCase):
+    def test_only_blocked_and_failed_results_fail_the_action(self) -> None:
+        for status in ("completed", "partial", "cooldown"):
+            with self.subTest(status=status):
+                self.assertFalse(status_requires_failure_exit(status))
+
+        for status in ("blocked", "failed"):
+            with self.subTest(status=status):
+                self.assertTrue(status_requires_failure_exit(status))
 
 
 def post(post_id: int, created_at: str, upvotes: int = 4) -> DcinsidePost:
@@ -357,6 +393,44 @@ class CrawlCycleTests(unittest.TestCase):
         self.assertEqual(attempts, [0.0])
         self.assertEqual(cycle_runtime.request_count, 1)
 
+    def test_exhausted_timeout_is_not_reclassified_as_runtime_limit(self) -> None:
+        clock = FakeClock()
+        attempts = []
+
+        def timeout_fetcher(url: str, timeout_seconds: float) -> str:
+            attempts.append(clock.monotonic())
+            raise CrawlTimeoutError("temporary timeout")
+
+        settings = CycleConfig(
+            finalization_age_hours=24,
+            hot_lookback_minutes=60,
+            hot_max_seconds=21,
+            cycle_max_seconds=60,
+            min_request_interval_seconds=20,
+            deep_reserved_seconds=10,
+            transient_fetch_attempts=2,
+        )
+        cycle_runtime = CycleRuntime(
+            min_request_interval_seconds=20,
+            total_seconds=60,
+            hot_seconds=21,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
+        cycle = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=cycle_runtime,
+            fetcher=timeout_fetcher,
+            cycle_started_at=FIXED_NOW,
+        )
+
+        with self.assertRaises(CrawlTimeoutError):
+            cycle._fetch_page(1, HOT_PHASE)
+
+        self.assertEqual(attempts, [0.0])
+        self.assertEqual(cycle_runtime.request_count, 1)
+
     def test_transient_fetch_retry_limit_is_bounded(self) -> None:
         attempts = []
 
@@ -386,6 +460,286 @@ class CrawlCycleTests(unittest.TestCase):
 
         self.assertEqual(len(attempts), 2)
         self.assertEqual(cycle_runtime.request_count, 2)
+
+    def test_timeout_streak_is_shared_across_modes_and_fails_from_third(self) -> None:
+        client = SqliteClient()
+        settings = config()
+        attempts = []
+
+        def timeout_fetcher(url: str, timeout_seconds: float) -> str:
+            attempts.append(url)
+            raise CrawlTimeoutError("temporary timeout")
+
+        statuses = []
+        for mode in (
+            CYCLE_MODE_HOT,
+            CYCLE_MODE_BACKFILL,
+            CYCLE_MODE_HOT,
+            CYCLE_MODE_BACKFILL,
+        ):
+            result = CrawlCycle(
+                target=get_target("dcinside-singularity"),
+                config=settings,
+                runtime=runtime(settings),
+                client=client,
+                fetcher=timeout_fetcher,
+                cycle_started_at=FIXED_NOW,
+                mode=mode,
+            ).run()
+            statuses.append(result["status"])
+
+        self.assertEqual(statuses, ["partial", "partial", "failed", "failed"])
+        self.assertEqual(len(attempts), 8)
+        self.assertEqual(
+            source_state_metadata(client)[TIMEOUT_STREAK_METADATA_KEY],
+            4,
+        )
+        self.assertEqual(
+            client.query(
+                "SELECT status FROM crawl_runs ORDER BY id"
+            ),
+            [
+                {"status": "partial"},
+                {"status": "partial"},
+                {"status": "failed"},
+                {"status": "failed"},
+            ],
+        )
+
+    def test_timeout_counter_write_does_not_commit_unfinished_state_hints(self) -> None:
+        client = SqliteClient()
+        settings = config()
+
+        def timeout_fetcher(url: str, timeout_seconds: float) -> str:
+            raise CrawlTimeoutError("temporary timeout")
+
+        cycle = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=runtime(settings),
+            client=client,
+            fetcher=timeout_fetcher,
+            cycle_started_at=FIXED_NOW,
+            mode=CYCLE_MODE_BACKFILL,
+        )
+        cycle.source_state.state_metadata["unfinished_backfill_hint"] = 99
+
+        result = cycle.run()
+
+        persisted_metadata = source_state_metadata(client)
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(persisted_metadata[TIMEOUT_STREAK_METADATA_KEY], 1)
+        self.assertNotIn("unfinished_backfill_hint", persisted_metadata)
+
+    def test_normal_partial_and_completed_cycles_reset_timeout_streak(self) -> None:
+        client = SqliteClient()
+        settings = config()
+
+        def timeout_fetcher(url: str, timeout_seconds: float) -> str:
+            raise CrawlTimeoutError("temporary timeout")
+
+        for _ in range(2):
+            result = CrawlCycle(
+                target=get_target("dcinside-singularity"),
+                config=settings,
+                runtime=runtime(settings),
+                client=client,
+                fetcher=timeout_fetcher,
+                cycle_started_at=FIXED_NOW,
+                mode=CYCLE_MODE_HOT,
+            ).run()
+            self.assertEqual(result["status"], "partial")
+
+        clock = FakeClock()
+        backfill_runtime = CycleRuntime(
+            min_request_interval_seconds=settings.min_request_interval_seconds,
+            total_seconds=settings.cycle_max_seconds,
+            hot_seconds=settings.hot_max_seconds,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
+        clock.advance(settings.cycle_max_seconds - 0.5)
+        backfill_result = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=backfill_runtime,
+            client=client,
+            fetcher=MappingFetcher(
+                {1: page_html(row(1000, "2026-07-15 19:00:00"))}
+            ),
+            cycle_started_at=FIXED_NOW,
+            mode=CYCLE_MODE_BACKFILL,
+        ).run()
+
+        self.assertEqual(backfill_result["status"], "partial")
+        self.assertEqual(
+            source_state_metadata(client)[TIMEOUT_STREAK_METADATA_KEY],
+            0,
+        )
+
+        for _ in range(2):
+            result = CrawlCycle(
+                target=get_target("dcinside-singularity"),
+                config=settings,
+                runtime=runtime(settings),
+                client=client,
+                fetcher=timeout_fetcher,
+                cycle_started_at=FIXED_NOW,
+                mode=CYCLE_MODE_BACKFILL,
+            ).run()
+            self.assertEqual(result["status"], "partial")
+
+        hot_result = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=runtime(settings),
+            client=client,
+            fetcher=MappingFetcher(
+                {1: page_html(row(1000, "2026-07-16 19:00:00"))}
+            ),
+            cycle_started_at=FIXED_NOW,
+            mode=CYCLE_MODE_HOT,
+        ).run()
+
+        self.assertEqual(hot_result["status"], "completed")
+        self.assertEqual(
+            source_state_metadata(client)[TIMEOUT_STREAK_METADATA_KEY],
+            0,
+        )
+
+        after_reset = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=runtime(settings),
+            client=client,
+            fetcher=timeout_fetcher,
+            cycle_started_at=FIXED_NOW,
+            mode=CYCLE_MODE_HOT,
+        ).run()
+        self.assertEqual(after_reset["status"], "partial")
+        self.assertEqual(
+            source_state_metadata(client)[TIMEOUT_STREAK_METADATA_KEY],
+            1,
+        )
+
+    def test_mixed_transient_and_blocked_failures_do_not_change_timeout_streak(self) -> None:
+        client = SqliteClient()
+        settings = config()
+
+        def timeout_fetcher(url: str, timeout_seconds: float) -> str:
+            raise CrawlTimeoutError("temporary timeout")
+
+        for _ in range(2):
+            CrawlCycle(
+                target=get_target("dcinside-singularity"),
+                config=settings,
+                runtime=runtime(settings),
+                client=client,
+                fetcher=timeout_fetcher,
+                cycle_started_at=FIXED_NOW,
+                mode=CYCLE_MODE_HOT,
+            ).run()
+
+        errors = [
+            CrawlTransientError("connection reset"),
+            CrawlTimeoutError("temporary timeout"),
+        ]
+
+        def mixed_fetcher(url: str, timeout_seconds: float) -> str:
+            raise errors.pop(0)
+
+        generic_result = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=runtime(settings),
+            client=client,
+            fetcher=mixed_fetcher,
+            cycle_started_at=FIXED_NOW,
+            mode=CYCLE_MODE_HOT,
+        ).run()
+
+        self.assertEqual(generic_result["status"], "failed")
+        self.assertEqual(
+            source_state_metadata(client)[TIMEOUT_STREAK_METADATA_KEY],
+            2,
+        )
+
+        blocked_result = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=runtime(settings),
+            client=client,
+            fetcher=MappingFetcher(
+                {1: page_html(row(1000, "2026-07-16 20:55:00"))},
+                blocked_page=1,
+            ),
+            cycle_started_at=FIXED_NOW,
+            mode=CYCLE_MODE_HOT,
+        ).run()
+
+        self.assertEqual(blocked_result["status"], "blocked")
+        self.assertEqual(
+            source_state_metadata(client)[TIMEOUT_STREAK_METADATA_KEY],
+            2,
+        )
+
+    def test_required_timeout_streak_writes_fail_the_cycle(self) -> None:
+        client = FailingSourceStateWriteClient()
+        settings = config()
+
+        def timeout_fetcher(url: str, timeout_seconds: float) -> str:
+            raise CrawlTimeoutError("temporary timeout")
+
+        increment_cycle = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=runtime(settings),
+            client=client,
+            fetcher=timeout_fetcher,
+            cycle_started_at=FIXED_NOW,
+            mode=CYCLE_MODE_HOT,
+        )
+        client.fail_source_state_writes = True
+
+        increment_result = increment_cycle.run()
+
+        self.assertEqual(increment_result["status"], "failed")
+        self.assertIn("persist consecutive timeout state", increment_result["error"])
+        self.assertNotIn(TIMEOUT_STREAK_METADATA_KEY, source_state_metadata(client))
+
+        client.fail_source_state_writes = False
+        for _ in range(2):
+            CrawlCycle(
+                target=get_target("dcinside-singularity"),
+                config=settings,
+                runtime=runtime(settings),
+                client=client,
+                fetcher=timeout_fetcher,
+                cycle_started_at=FIXED_NOW,
+                mode=CYCLE_MODE_HOT,
+            ).run()
+
+        reset_cycle = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=runtime(settings),
+            client=client,
+            fetcher=MappingFetcher(
+                {1: page_html(row(1000, "2026-07-16 19:00:00"))}
+            ),
+            cycle_started_at=FIXED_NOW,
+            mode=CYCLE_MODE_HOT,
+        )
+        client.fail_source_state_writes = True
+
+        reset_result = reset_cycle.run()
+
+        self.assertEqual(reset_result["status"], "failed")
+        self.assertIn("reset consecutive timeout state", reset_result["error"])
+        self.assertEqual(
+            source_state_metadata(client)[TIMEOUT_STREAK_METADATA_KEY],
+            2,
+        )
 
     def test_live_style_adjacent_id_swap_remains_fetchable(self) -> None:
         pages = {

@@ -58,6 +58,10 @@ class CrawlTransientError(CrawlSourceError):
     """Raised for a temporary transport failure that is safe to retry."""
 
 
+class CrawlTimeoutError(CrawlTransientError):
+    """Raised when a source request fails because its transport timed out."""
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Scan target boards for qualifying posts.")
     parser.add_argument("--target", default="dcinside-singularity")
@@ -86,11 +90,13 @@ def fetch_html(url: str, timeout_seconds: float = 30.0) -> str:
             ) from exc
         raise CrawlSourceError(f"Source returned HTTP {exc.code} while requesting {url}.") from exc
     except error.URLError as exc:
+        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+            raise CrawlTimeoutError(f"Timed out while requesting {url}.") from exc
         raise CrawlTransientError(
             f"Failed to reach source while requesting {url}: {exc.reason}."
         ) from exc
     except (TimeoutError, socket.timeout) as exc:
-        raise CrawlTransientError(f"Timed out while requesting {url}.") from exc
+        raise CrawlTimeoutError(f"Timed out while requesting {url}.") from exc
     except (http.client.HTTPException, ConnectionError) as exc:
         raise CrawlTransientError(
             f"Connection was interrupted while requesting {url}: {exc}."
