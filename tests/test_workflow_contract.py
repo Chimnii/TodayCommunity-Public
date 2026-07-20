@@ -99,7 +99,20 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertIn("workflow_dispatch:", self.hot)
         self.assertNotRegex(self.hot, r"(?m)^\s*schedule:\s*$")
         self.assertIn('TC_BLOCK_COOLDOWN_HOURS: "6"', self.hot)
-        self.assertIn('TC_HOT_LOOKBACK_MINUTES: "180"', self.hot)
+        self.assertRegex(
+            self.hot,
+            r"(?ms)^\s{6}hot_lookback_minutes:\s*$.*?"
+            r"^\s{8}default: 180\s*$.*?^\s{8}type: number\s*$",
+        )
+        self.assertIn(
+            "TC_HOT_LOOKBACK_MINUTES: ${{ inputs.hot_lookback_minutes }}",
+            self.hot,
+        )
+        self.assertIn(
+            "HOT_LOOKBACK_MINUTES: ${{ inputs.hot_lookback_minutes }}",
+            self.hot,
+        )
+        self.assertIn("not 15 <= numeric <= 1440", self.hot)
         self.assertIn('TC_HOT_MAX_SECONDS: "180"', self.hot)
         self.assertIn('TC_CYCLE_MAX_SECONDS: "180"', self.hot)
         self.assertIn('TC_DEEP_RESERVED_SECONDS: "0"', self.hot)
@@ -114,6 +127,33 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertIn('TC_DEEP_RESERVED_SECONDS: "300"', self.backfill)
         self.assertIn("--mode backfill", self.backfill)
         self.assertIn("check_schema", self.backfill)
+
+    def test_private_ops_script_supports_one_run_hot_lookback_override(self) -> None:
+        if not IS_PRIVATE_SOURCE:
+            self.skipTest("private operations script is not exported")
+
+        script = (ROOT / "scripts" / "manage_crawl_workflow.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("[ValidateRange(15, 1440)]", script)
+        self.assertIn(
+            '$PSBoundParameters.ContainsKey(\n    "HotLookbackMinutes"\n)',
+            script,
+        )
+        self.assertIn(
+            "hot_lookback_minutes = [string]$HotLookbackMinutes",
+            script,
+        )
+        self.assertIn("$dispatchBody.inputs", script)
+        self.assertIn('ConvertTo-Json -Depth 4 -Compress', script)
+        self.assertIn(
+            '[ValidateSet("scan-dcinside.yml", "scan-dcinside-backfill.yml")]',
+            script,
+        )
+        self.assertIn(
+            "An active Hot or Backfill run already exists",
+            script,
+        )
 
     def test_scheduler_deploys_only_relevant_main_changes_after_verification(self) -> None:
         self.assertIn("workflow_dispatch:", self.deploy_scheduler)
