@@ -104,17 +104,27 @@ class CrawlWorkflowContractTests(unittest.TestCase):
             r"(?ms)^\s{6}hot_lookback_minutes:\s*$.*?"
             r"^\s{8}default: 180\s*$.*?^\s{8}type: number\s*$",
         )
-        self.assertIn(
-            "TC_HOT_LOOKBACK_MINUTES: ${{ inputs.hot_lookback_minutes }}",
+        self.assertRegex(
             self.hot,
+            r"(?ms)^\s{6}hot_source_minutes:\s*$.*?"
+            r"^\s{8}default: 3\s*$.*?^\s{8}type: number\s*$",
         )
         self.assertIn(
             "HOT_LOOKBACK_MINUTES: ${{ inputs.hot_lookback_minutes }}",
             self.hot,
         )
-        self.assertIn("not 15 <= numeric <= 1440", self.hot)
-        self.assertIn('TC_HOT_MAX_SECONDS: "180"', self.hot)
-        self.assertIn('TC_CYCLE_MAX_SECONDS: "180"', self.hot)
+        self.assertIn(
+            "HOT_SOURCE_MINUTES: ${{ inputs.hot_source_minutes }}",
+            self.hot,
+        )
+        self.assertIn(
+            'integer_input("HOT_LOOKBACK_MINUTES", 15, 1440)',
+            self.hot,
+        )
+        self.assertIn('integer_input("HOT_SOURCE_MINUTES", 1, 10)', self.hot)
+        self.assertIn("TC_HOT_MAX_SECONDS={source_minutes * 60}", self.hot)
+        self.assertIn("TC_CYCLE_MAX_SECONDS={source_minutes * 60}", self.hot)
+        self.assertRegex(self.hot, r"(?m)^\s{4}timeout-minutes: 15\s*$")
         self.assertIn('TC_DEEP_RESERVED_SECONDS: "0"', self.hot)
         self.assertIn("--mode hot", self.hot)
         self.assertNotIn("check_schema", self.hot)
@@ -136,14 +146,20 @@ class CrawlWorkflowContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("[ValidateRange(15, 1440)]", script)
+        self.assertIn("[ValidateRange(1, 10)]", script)
         self.assertIn(
             '$PSBoundParameters.ContainsKey(\n    "HotLookbackMinutes"\n)',
             script,
         )
         self.assertIn(
-            "hot_lookback_minutes = [string]$HotLookbackMinutes",
+            "hot_lookback_minutes = [string]$effectiveHotLookbackMinutes",
             script,
         )
+        self.assertIn(
+            "hot_source_minutes = [string]$effectiveHotSourceMinutes",
+            script,
+        )
+        self.assertIn("[Math]::Ceiling($HotLookbackMinutes / 60.0)", script)
         self.assertIn("$dispatchBody.inputs", script)
         self.assertIn('ConvertTo-Json -Depth 4 -Compress', script)
         self.assertIn(

@@ -8,6 +8,11 @@ on:
         required: false
         default: 180
         type: number
+      hot_source_minutes:
+        description: "Source scan budget for this Hot run only (1-10 minutes)"
+        required: false
+        default: 3
+        type: number
 
 permissions:
   contents: read
@@ -20,7 +25,7 @@ jobs:
   hot:
     runs-on: ubuntu-latest
     environment: collection
-    timeout-minutes: 8
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -35,20 +40,33 @@ jobs:
       - name: Validate Hot settings
         env:
           HOT_LOOKBACK_MINUTES: ${{ inputs.hot_lookback_minutes }}
+          HOT_SOURCE_MINUTES: ${{ inputs.hot_source_minutes }}
         run: |
           python - <<'PY'
           import os
 
-          raw = os.environ["HOT_LOOKBACK_MINUTES"]
-          try:
-              numeric = float(raw)
-          except ValueError as exc:
-              raise SystemExit("hot_lookback_minutes must be a number") from exc
-          if not numeric.is_integer() or not 15 <= numeric <= 1440:
-              raise SystemExit(
-                  "hot_lookback_minutes must be an integer from 15 to 1440"
-              )
-          print(f"Hot lookback for this run: {int(numeric)} minutes")
+          def integer_input(name: str, minimum: int, maximum: int) -> int:
+              raw = os.environ[name]
+              try:
+                  numeric = float(raw)
+              except ValueError as exc:
+                  raise SystemExit(f"{name.lower()} must be a number") from exc
+              if not numeric.is_integer() or not minimum <= numeric <= maximum:
+                  raise SystemExit(
+                      f"{name.lower()} must be an integer from {minimum} to {maximum}"
+                  )
+              return int(numeric)
+
+          lookback_minutes = integer_input("HOT_LOOKBACK_MINUTES", 15, 1440)
+          source_minutes = integer_input("HOT_SOURCE_MINUTES", 1, 10)
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
+              env_file.write(f"TC_HOT_LOOKBACK_MINUTES={lookback_minutes}\n")
+              env_file.write(f"TC_HOT_MAX_SECONDS={source_minutes * 60}\n")
+              env_file.write(f"TC_CYCLE_MAX_SECONDS={source_minutes * 60}\n")
+          print(
+              f"Hot settings for this run: lookback={lookback_minutes} minutes, "
+              f"source budget={source_minutes} minutes"
+          )
           PY
 
       - name: Run Hot crawl
@@ -58,9 +76,6 @@ jobs:
           TC_CF_API_TOKEN: ${{ secrets.TC_CF_API_TOKEN }}
           TC_PERSIST: "1"
           TC_FINALIZATION_AGE_HOURS: "12"
-          TC_HOT_LOOKBACK_MINUTES: ${{ inputs.hot_lookback_minutes }}
-          TC_HOT_MAX_SECONDS: "180"
-          TC_CYCLE_MAX_SECONDS: "180"
           TC_REQUEST_INTERVAL_SECONDS: "10"
           TC_DEEP_RESERVED_SECONDS: "0"
           TC_BLOCK_COOLDOWN_HOURS: "6"
