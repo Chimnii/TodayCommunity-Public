@@ -1,6 +1,29 @@
-const TARGET_KEY = "dcinside-singularity";
+const DEFAULT_TARGET = "dcinside-singularity";
+const TARGET_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const SOURCE_DESCRIPTION =
   "추천수 또는 댓글수가 일정 조건을 만족하는 글을 모읍니다. 본문 내용은 수집하지 않고 제목과 원문 링크 등 목록 정보만 수집합니다.";
+const LIST_ONLY_DESCRIPTION =
+  "본문 내용은 수집하지 않고 제목과 원문 링크 등 목록 정보만 수집합니다.";
+const FALLBACK_ARCHIVES = Object.freeze([
+  {
+    archive_key: "dcinside-singularity",
+    display_name: "특이점이 온다",
+    description: "디시인사이드 특이점이 온다 갤러리 인기글",
+    display_order: 10,
+  },
+  {
+    archive_key: "dcinside-agent-stack",
+    display_name: "에이전트 스택",
+    description: "디시인사이드 에이전트 스택 갤러리 인기글",
+    display_order: 20,
+  },
+  {
+    archive_key: "fmkorea-munich",
+    display_name: "뮌헨",
+    description: "에펨코리아의 뮌헨 관련 인기글",
+    display_order: 30,
+  },
+]);
 const DEFAULT_STATE = Object.freeze({
   search: "",
   subject: "",
@@ -20,14 +43,17 @@ const subjectSegmenter = typeof Intl.Segmenter === "function"
 
 const state = {
   ...DEFAULT_STATE,
+  target: DEFAULT_TARGET,
   archive: null,
   dataSource: "unknown",
   activeRequest: null,
   filterTimer: null,
   focusPageContentAfterLoad: false,
+  focusArchiveTabAfterLoad: false,
 };
 
 const elements = {
+  archiveTabs: document.querySelector("#archive-tabs"),
   sourceDescription: document.querySelector("#source-description"),
   summaryTotal: document.querySelector("#summary-total"),
   summaryLatest: document.querySelector("#summary-latest"),
@@ -93,8 +119,14 @@ async function loadArchive() {
       return;
     }
 
-    state.archive = payload;
+    state.archive = withArchiveCatalog(payload);
     state.dataSource = "live";
+
+    const responseTarget = normalizeTarget(payload.target);
+    if (responseTarget && responseTarget !== state.target) {
+      state.target = responseTarget;
+      syncStateToUrl();
+    }
 
     const currentPage = normalizePositiveNumber(payload.pagination?.page, state.page);
     if (currentPage !== state.page) {
@@ -109,11 +141,15 @@ async function loadArchive() {
     }
 
     const fallback = window.__TODAY_COMMUNITY_ARCHIVE__;
-    if (fallback) {
-      state.archive = fallback;
+    if (fallback && (!fallback.target || fallback.target === state.target)) {
+      state.archive = withArchiveCatalog(fallback);
       state.dataSource = "fallback";
     } else {
       state.archive = {
+        target: state.target,
+        archives: FALLBACK_ARCHIVES,
+        archive: findArchive(FALLBACK_ARCHIVES, state.target),
+        sources: [],
         source: null,
         summary: { total_posts: 0, filtered_posts: 0, recent_runs: 0 },
         runs: [],
@@ -132,7 +168,7 @@ async function loadArchive() {
 
 function buildApiUrl() {
   const params = new URLSearchParams({
-    target: TARGET_KEY,
+    target: state.target,
     page: String(state.page),
     page_size: String(state.pageSize),
     min_upvotes: String(state.minUpvotes),
@@ -150,9 +186,139 @@ function buildApiUrl() {
   return `/api/archive?${params.toString()}`;
 }
 
+function withArchiveCatalog(payload) {
+  const archives = Array.isArray(payload?.archives) && payload.archives.length
+    ? payload.archives
+    : FALLBACK_ARCHIVES;
+  const target = normalizeTarget(payload?.target) || state.target;
+  const sources = Array.isArray(payload?.sources)
+    ? payload.sources
+    : payload?.source
+      ? [payload.source]
+      : [];
+
+  return {
+    ...payload,
+    target,
+    archives,
+    archive: payload?.archive || findArchive(archives, target),
+    sources,
+    source: payload?.source || sources[0] || null,
+  };
+}
+
+function getAvailableArchives() {
+  const archives = Array.isArray(state.archive?.archives) && state.archive.archives.length
+    ? state.archive.archives
+    : FALLBACK_ARCHIVES;
+  return [...archives].sort((left, right) => {
+    const orderDifference =
+      normalizeNonNegativeNumber(left?.display_order, 0) -
+      normalizeNonNegativeNumber(right?.display_order, 0);
+    return orderDifference || String(left?.archive_key || "").localeCompare(
+      String(right?.archive_key || "")
+    );
+  });
+}
+
+function getCurrentArchive() {
+  const candidate = state.archive?.archive;
+  if (candidate?.archive_key === state.target) {
+    return candidate;
+  }
+  return findArchive(getAvailableArchives(), state.target);
+}
+
+function getCurrentSources() {
+  return Array.isArray(state.archive?.sources) ? state.archive.sources : [];
+}
+
+function findArchive(archives, target) {
+  return Array.isArray(archives)
+    ? archives.find((archive) => archive?.archive_key === target) || null
+    : null;
+}
+
+function renderArchiveTabs() {
+  const tabs = getAvailableArchives().map((archive) => {
+    const key = normalizeTarget(archive?.archive_key);
+    if (!key) {
+      return null;
+    }
+
+    const tab = document.createElement("a");
+    tab.className = "archive-tab";
+    tab.setAttribute("role", "tab");
+    tab.href = buildArchiveHref(key);
+    tab.textContent = String(archive.display_name || key);
+    tab.setAttribute("aria-controls", "archive-board");
+    tab.setAttribute("aria-selected", String(key === state.target));
+    tab.tabIndex = key === state.target ? 0 : -1;
+    tab.addEventListener("click", (event) => {
+      event.preventDefault();
+      selectArchive(key);
+    });
+    tab.addEventListener("keydown", handleArchiveTabKeydown);
+    return tab;
+  }).filter(Boolean);
+
+  elements.archiveTabs.replaceChildren(...tabs);
+}
+
+function buildArchiveHref(target) {
+  const url = new URL(window.location.href);
+  url.search = "";
+  url.searchParams.set("target", target);
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
+function handleArchiveTabKeydown(event) {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+    return;
+  }
+
+  const tabs = Array.from(elements.archiveTabs.querySelectorAll('[role="tab"]'));
+  const currentIndex = tabs.indexOf(event.currentTarget);
+  if (currentIndex < 0 || tabs.length === 0) {
+    return;
+  }
+
+  event.preventDefault();
+  let nextIndex;
+  if (event.key === "Home") {
+    nextIndex = 0;
+  } else if (event.key === "End") {
+    nextIndex = tabs.length - 1;
+  } else {
+    const direction = event.key === "ArrowRight" ? 1 : -1;
+    nextIndex = (currentIndex + direction + tabs.length) % tabs.length;
+  }
+
+  tabs[nextIndex].focus();
+  tabs[nextIndex].click();
+}
+
+function selectArchive(target) {
+  const normalizedTarget = normalizeTarget(target);
+  if (!normalizedTarget || normalizedTarget === state.target) {
+    return;
+  }
+
+  window.clearTimeout(state.filterTimer);
+  Object.assign(state, DEFAULT_STATE);
+  state.target = normalizedTarget;
+  state.focusPageContentAfterLoad = false;
+  state.focusArchiveTabAfterLoad = true;
+  writeStateToControls();
+  syncStateToUrl({ replace: false });
+  renderArchiveTabs();
+  loadArchive();
+}
+
 function render() {
   const view = getViewModel();
   elements.board.setAttribute("aria-busy", "false");
+  renderArchiveTabs();
   renderSubjectOptions();
   renderSummary(view);
   renderNotice();
@@ -160,6 +326,7 @@ function render() {
   renderPosts(view.posts);
   renderResultStatus(view);
   renderPagination(view.pagination);
+  restoreArchiveTabFocus();
   restorePageChangeFocus();
 }
 
@@ -190,8 +357,10 @@ function getLocalViewModel() {
   const filtered = [...allPosts]
     .filter((post) => {
       if (
-        normalizeNonNegativeNumber(post.upvotes, 0) < state.minUpvotes ||
-        normalizeNonNegativeNumber(post.comments, 0) < state.minComments
+        (state.minUpvotes > 0 &&
+          normalizeSignedInteger(post.upvotes, 0) < state.minUpvotes) ||
+        (state.minComments > 0 &&
+          normalizeNonNegativeNumber(post.comments, 0) < state.minComments)
       ) {
         return false;
       }
@@ -303,13 +472,28 @@ function normalizePagination(rawPagination, filteredPosts, visibleCount) {
 }
 
 function renderSummary(view) {
-  const source = state.archive?.source;
+  const archive = getCurrentArchive();
+  const sources = getCurrentSources();
+  const source = sources[0] || state.archive?.source;
   const summary = state.archive?.summary || {};
 
-  if (source) {
+  if (archive) {
+    const isFilteredArchive = String(archive.archive_key || "").startsWith("dcinside-");
+    const collectionDescription = isFilteredArchive ? SOURCE_DESCRIPTION : LIST_ONLY_DESCRIPTION;
+    elements.sourceDescription.textContent = `${archive.description}. ${collectionDescription}`;
+    elements.archiveTitle.textContent = `${archive.display_name} 아카이브`;
+    elements.board.setAttribute("aria-label", `${archive.display_name} 저장 글`);
+    document.title = `${archive.display_name} | 오늘의 커뮤니티`;
+  } else if (source) {
     elements.sourceDescription.textContent = `${source.board_name}에서 ${SOURCE_DESCRIPTION}`;
+    elements.archiveTitle.textContent = "선별 글 아카이브";
+    elements.board.setAttribute("aria-label", "저장된 커뮤니티 글");
+    document.title = "오늘의 커뮤니티 | 선별 글 아카이브";
   } else {
     elements.sourceDescription.textContent = state.archive?.error || "대상 게시판 정보를 확인할 수 없습니다.";
+    elements.archiveTitle.textContent = "선별 글 아카이브";
+    elements.board.setAttribute("aria-label", "저장된 커뮤니티 글");
+    document.title = "오늘의 커뮤니티 | 선별 글 아카이브";
   }
 
   elements.summaryTotal.textContent = numberFormatter.format(view.totalPosts);
@@ -364,7 +548,8 @@ function renderRuns() {
     status.textContent = statusInfo.label;
 
     const type = document.createElement("span");
-    type.textContent = getRunTypeLabel(run.run_type);
+    const runType = getRunTypeLabel(run.run_type);
+    type.textContent = run.board_name ? `${run.board_name} · ${runType}` : runType;
 
     const started = document.createElement("time");
     started.dateTime = String(run.started_at || "");
@@ -430,7 +615,7 @@ function renderPosts(posts) {
       createSubjectCell(post.subject),
       createTitleCell(post),
       createCell(formatPostDate(post.created_at), "cell-date numeric-cell"),
-      createCell(numberFormatter.format(normalizeNonNegativeNumber(post.upvotes, 0)), "cell-upvotes numeric-cell"),
+      createCell(numberFormatter.format(normalizeSignedInteger(post.upvotes, 0)), "cell-upvotes numeric-cell"),
       createCell(numberFormatter.format(normalizeNonNegativeNumber(post.comments, 0)), "cell-comments numeric-cell")
     );
 
@@ -616,6 +801,16 @@ function restorePageChangeFocus() {
   elements.archiveTitle.focus({ preventScroll: true });
 }
 
+function restoreArchiveTabFocus() {
+  if (!state.focusArchiveTabAfterLoad) {
+    return;
+  }
+
+  state.focusArchiveTabAfterLoad = false;
+  const selectedTab = elements.archiveTabs.querySelector('[role="tab"][aria-selected="true"]');
+  selectedTab?.focus({ preventScroll: true });
+}
+
 function createPageButton(label, page, className) {
   const button = document.createElement("button");
   button.className = `pagination-button ${className}`;
@@ -739,7 +934,7 @@ function goToPage(page) {
 function comparePosts(left, right) {
   if (state.sortBy === "upvotes") {
     return (
-      normalizeNonNegativeNumber(right.upvotes, 0) - normalizeNonNegativeNumber(left.upvotes, 0) ||
+      normalizeSignedInteger(right.upvotes, 0) - normalizeSignedInteger(left.upvotes, 0) ||
       compareDate(right.created_at, left.created_at) ||
       compareExternalId(right.external_post_id, left.external_post_id)
     );
@@ -790,6 +985,14 @@ function bindEvents() {
       event.preventDefault();
       elements.runsDrawer.close();
     }
+  });
+  window.addEventListener("popstate", () => {
+    window.clearTimeout(state.filterTimer);
+    hydrateStateFromUrl();
+    state.focusPageContentAfterLoad = false;
+    state.focusArchiveTabAfterLoad = false;
+    writeStateToControls();
+    loadArchive();
   });
 }
 
@@ -847,7 +1050,9 @@ function hydrateStateFromUrl() {
   const sortBy = params.get("sort") || DEFAULT_STATE.sortBy;
   const pageSize = normalizePositiveNumber(params.get("page_size"), DEFAULT_STATE.pageSize);
   const minUpvotes = params.get("min_upvotes");
+  const target = normalizeTarget(params.get("target"));
 
+  state.target = target || DEFAULT_TARGET;
   state.search = String(params.get("q") || "").trim().slice(0, 100);
   state.subject = normalizeSubject(params.get("subject"));
   state.minUpvotes =
@@ -860,9 +1065,10 @@ function hydrateStateFromUrl() {
   state.pageSize = VALID_PAGE_SIZES.has(pageSize) ? pageSize : DEFAULT_STATE.pageSize;
 }
 
-function syncStateToUrl() {
+function syncStateToUrl({ replace = true } = {}) {
   const url = new URL(window.location.href);
   const values = {
+    target: state.target,
     q: state.search || null,
     subject: state.subject || null,
     min_upvotes:
@@ -881,10 +1087,12 @@ function syncStateToUrl() {
     }
   }
 
-  window.history.replaceState(null, "", url);
+  const method = replace ? "replaceState" : "pushState";
+  window.history[method](null, "", url);
 }
 
 function renderLoadingState() {
+  renderArchiveTabs();
   reserveBoardRows(state.pageSize);
   elements.board.setAttribute("aria-busy", "true");
   elements.resultCount.textContent = "목록을 불러오는 중입니다.";
@@ -974,9 +1182,19 @@ function normalizeSubject(value) {
   return characters.length <= 100 ? characters.join("") : "";
 }
 
+function normalizeTarget(value) {
+  const target = String(value || "").trim();
+  return TARGET_PATTERN.test(target) ? target : "";
+}
+
 function normalizeNonNegativeNumber(value, fallback) {
   const number = Number.parseInt(value, 10);
   return Number.isNaN(number) || number < 0 ? fallback : number;
+}
+
+function normalizeSignedInteger(value, fallback) {
+  const number = Number(value);
+  return Number.isSafeInteger(number) ? number : fallback;
 }
 
 function normalizePositiveNumber(value, fallback) {

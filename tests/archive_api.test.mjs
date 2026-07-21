@@ -28,8 +28,10 @@ class MockStatement {
   async first() {
     this.database.calls.push({ method: "first", sql: this.sql, values: this.values });
 
-    if (this.sql.includes("FROM sources")) {
-      return this.database.source;
+    if (this.sql.includes("FROM archives")) {
+      return this.database.archives.find(
+        (archive) => archive.archive_key === this.values[0]
+      ) ?? null;
     }
     if (this.sql.includes("AS total_posts")) {
       return this.database.summary;
@@ -44,6 +46,16 @@ class MockStatement {
   async all() {
     this.database.calls.push({ method: "all", sql: this.sql, values: this.values });
 
+    if (this.sql.includes("FROM archives")) {
+      return { results: this.database.archives };
+    }
+    if (this.sql.includes("FROM sources") && !this.sql.includes("JOIN sources")) {
+      return {
+        results: this.database.sources.filter(
+          (source) => source.archive_key === this.values[0]
+        ),
+      };
+    }
     if (this.sql.includes("FROM crawl_runs")) {
       return { results: this.database.runs };
     }
@@ -62,13 +74,41 @@ class MockDatabase {
     subjectOptionsJson = "[]",
     posts = [],
     runs = [],
+    archives,
+    sources,
   } = {}) {
     this.calls = [];
-    this.source = {
-      source_key: "dcinside-singularity",
-      site_name: "DCInside",
-      board_name: "Singularity",
-    };
+    this.archives = archives ?? [
+      {
+        archive_key: "dcinside-singularity",
+        display_name: "특이점이 온다",
+        description: "디시인사이드 특이점이 온다 갤러리 인기글",
+        display_order: 10,
+        updated_at: "2026-07-17T01:07:00Z",
+      },
+      {
+        archive_key: "dcinside-agent-stack",
+        display_name: "에이전트 스택",
+        description: "디시인사이드 에이전트 스택 갤러리 인기글",
+        display_order: 20,
+        updated_at: "2026-07-17T01:07:00Z",
+      },
+      {
+        archive_key: "fmkorea-munich",
+        display_name: "뮌헨",
+        description: "에펨코리아의 뮌헨 관련 인기글",
+        display_order: 30,
+        updated_at: "2026-07-17T01:07:00Z",
+      },
+    ];
+    this.sources = sources ?? [
+      {
+        source_key: "dcinside-singularity",
+        archive_key: "dcinside-singularity",
+        site_name: "DCInside",
+        board_name: "Singularity",
+      },
+    ];
     this.summary = {
       total_posts: totalPosts,
       latest_seen_at: "2026-07-17T01:07:00Z",
@@ -133,6 +173,13 @@ test("defaults to the first 30 globally counted posts and preserves recent runs"
   );
   assert.equal(response.headers.get("x-content-type-options"), "nosniff");
   assert.equal(body.target, "dcinside-singularity");
+  assert.equal(body.archive.display_name, "특이점이 온다");
+  assert.deepEqual(
+    body.archives.map((archive) => archive.archive_key),
+    ["dcinside-singularity", "dcinside-agent-stack", "fmkorea-munich"]
+  );
+  assert.equal(body.sources.length, 1);
+  assert.deepEqual(body.source, body.sources[0]);
   assert.deepEqual(
     body.subject_options,
     ["일반", "AI 소식", "로봇 연구"].sort((left, right) =>
@@ -159,7 +206,8 @@ test("defaults to the first 30 globally counted posts and preserves recent runs"
   assert.equal(body.runs.length, 10);
 
   const filteredCountCall = findCall(database, "AS filtered_posts", "first");
-  assert.deepEqual(filteredCountCall.values, ["dcinside-singularity", 0, 0]);
+  assert.deepEqual(filteredCountCall.values, ["dcinside-singularity"]);
+  assert.doesNotMatch(filteredCountCall.sql, /upvotes >= \?|comments >= \?/);
 
   const summaryCall = findCall(database, "AS total_posts", "first");
   assert.match(summaryCall.sql, /json_group_array\(subject\)/);
@@ -168,16 +216,18 @@ test("defaults to the first 30 globally counted posts and preserves recent runs"
   assert.match(summaryCall.sql, /ORDER BY subject COLLATE NOCASE, subject LIMIT 100/);
   assert.deepEqual(summaryCall.values, ["dcinside-singularity", "dcinside-singularity"]);
 
-  const postCall = findCall(database, "SELECT source_key, external_post_id", "all");
+  const postCall = findCall(database, "SELECT archive_key, source_key, external_post_id", "all");
   assert.match(postCall.sql, /external_post_id, subject, title/);
   assert.match(postCall.sql, /ORDER BY created_at DESC, id DESC LIMIT \? OFFSET \?/);
-  assert.deepEqual(postCall.values, ["dcinside-singularity", 0, 0, 30, 0]);
+  assert.deepEqual(postCall.values, ["dcinside-singularity", 30, 0]);
   assert.equal(body.posts[0].subject, "AI 소식");
 
   const runCall = findCall(database, "FROM crawl_runs", "all");
-  assert.match(runCall.sql, /ORDER BY id DESC LIMIT 10/);
-  assert.match(runCall.sql, /WHEN status IN \('failed', 'blocked'\)/);
-  assert.match(runCall.sql, /AND TRIM\(error_message\) <> ''/);
+  assert.match(runCall.sql, /INNER JOIN sources ON sources\.source_key = runs\.source_key/);
+  assert.match(runCall.sql, /WHERE sources\.archive_key = \?/);
+  assert.match(runCall.sql, /ORDER BY runs\.id DESC LIMIT 10/);
+  assert.match(runCall.sql, /WHEN runs\.status IN \('failed', 'blocked'\)/);
+  assert.match(runCall.sql, /AND TRIM\(runs\.error_message\) <> ''/);
   assert.match(runCall.sql, /END AS had_error/);
   assert.deepEqual(runCall.values, ["dcinside-singularity"]);
 });
@@ -263,7 +313,7 @@ test("applies escaped title and numeric filters before paginating with a stable 
   assert.deepEqual(filteredCountCall.values, expectedFilterBindings);
   assert.ok(!filteredCountCall.sql.includes(selectedSubject));
 
-  const postCall = findCall(database, "SELECT source_key, external_post_id", "all");
+  const postCall = findCall(database, "SELECT archive_key, source_key, external_post_id", "all");
   assert.match(postCall.sql, /ORDER BY upvotes DESC, created_at DESC, id DESC/);
   assert.deepEqual(postCall.values, [...expectedFilterBindings, 20, 20]);
   assert.ok(!postCall.sql.includes(target));
@@ -280,6 +330,67 @@ test("rejects an unsupported target before querying D1", async () => {
   assert.equal(response.headers.get("cache-control"), "no-store");
   assert.equal(body.error, "Unknown archive target.");
   assert.deepEqual(database.calls, []);
+});
+
+test("validates well-formed targets against public archives", async () => {
+  const database = new MockDatabase();
+
+  const { response, body } = await requestArchive(database, "?target=missing-archive");
+
+  assert.equal(response.status, 400);
+  assert.equal(body.error, "Unknown archive target.");
+  assert.equal(database.calls.length, 1);
+  assert.equal(database.calls[0].method, "first");
+  assert.match(database.calls[0].sql, /FROM archives/);
+  assert.match(database.calls[0].sql, /WHERE archive_key = \? AND is_public = 1/);
+  assert.deepEqual(database.calls[0].values, ["missing-archive"]);
+});
+
+test("combines multiple collection sources under one archive", async () => {
+  const target = "fmkorea-munich";
+  const sources = [
+    {
+      source_key: "fmkorea-best-munich-search",
+      archive_key: target,
+      site_name: "fmkorea",
+      board_name: "포텐 터짐 '뮌헨' 검색",
+    },
+    {
+      source_key: "fmkorea-bayern-board",
+      archive_key: target,
+      site_name: "fmkorea",
+      board_name: "해외축구 바이에른 게시판",
+    },
+  ];
+  const database = new MockDatabase({
+    sources,
+    totalPosts: 2,
+    posts: makeRows(2),
+    runs: [
+      {
+        source_key: sources[1].source_key,
+        board_name: sources[1].board_name,
+        status: "completed",
+        had_error: 0,
+      },
+    ],
+  });
+
+  const { response, body } = await requestArchive(database, `?target=${target}`);
+
+  assert.equal(response.status, 200);
+  assert.equal(body.target, target);
+  assert.equal(body.archive.display_name, "뮌헨");
+  assert.deepEqual(body.sources, sources);
+  assert.deepEqual(body.source, sources[0]);
+  assert.equal(body.runs[0].source_key, "fmkorea-bayern-board");
+  assert.equal(body.runs[0].board_name, "해외축구 바이에른 게시판");
+
+  const countCall = findCall(database, "AS filtered_posts", "first");
+  assert.deepEqual(countCall.values, [target]);
+  assert.doesNotMatch(countCall.sql, /upvotes >= \?|comments >= \?/);
+  const sourceCall = findCall(database, "FROM sources", "all");
+  assert.deepEqual(sourceCall.values, [target]);
 });
 
 test("normalizes cache keys and reuses a short-lived edge response", async () => {
@@ -336,8 +447,8 @@ test("clamps an out-of-range page to the last filtered page before querying rows
     has_next: false,
   });
 
-  const postCall = findCall(database, "SELECT source_key, external_post_id", "all");
-  assert.deepEqual(postCall.values, ["dcinside-singularity", 0, 0, 30, 60]);
+  const postCall = findCall(database, "SELECT archive_key, source_key, external_post_id", "all");
+  assert.deepEqual(postCall.values, ["dcinside-singularity", 30, 60]);
 });
 
 test("bounds query controls and allowlists every sort expression", async (t) => {
@@ -362,7 +473,7 @@ test("bounds query controls and allowlists every sort expression", async (t) => 
       });
 
       const { body } = await requestArchive(database, `?${params}`);
-      const postCall = findCall(database, "SELECT source_key, external_post_id", "all");
+      const postCall = findCall(database, "SELECT archive_key, source_key, external_post_id", "all");
 
       assert.equal(body.pagination.page, 1);
       assert.equal(body.pagination.page_size, 100);
@@ -373,8 +484,6 @@ test("bounds query controls and allowlists every sort expression", async (t) => 
       assert.ok(!postCall.sql.includes("DROP TABLE"));
       assert.deepEqual(postCall.values, [
         "dcinside-singularity",
-        0,
-        0,
         "😀".repeat(100),
         `%${"x".repeat(100)}%`,
         100,

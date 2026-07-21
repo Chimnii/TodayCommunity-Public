@@ -19,7 +19,7 @@ from crawler.parsers.dcinside import (
     meets_collection_threshold,
 )
 from crawler.state import ensure_source_state
-from crawler.targets import TargetBoard, get_target
+from crawler.targets import TargetBoard, canonical_post_key, get_target
 
 
 DEFAULT_USER_AGENT = (
@@ -36,9 +36,12 @@ BLOCKED_HTML_HINTS = (
     ('class="g-recaptcha"', "captcha challenge"),
     ('id="captcha"', "captcha challenge"),
 )
-POST_UPSERT_BOUND_PARAMETERS = 13
+POST_UPSERT_BOUND_PARAMETERS = 14
+POST_UPSERT_SHARED_PARAMETERS = 1
 MAX_D1_BOUND_PARAMETERS = 100
-POSTS_PER_UPSERT = MAX_D1_BOUND_PARAMETERS // POST_UPSERT_BOUND_PARAMETERS
+POSTS_PER_UPSERT = (
+    MAX_D1_BOUND_PARAMETERS - POST_UPSERT_SHARED_PARAMETERS
+) // POST_UPSERT_BOUND_PARAMETERS
 EXISTING_POST_IDS_PER_QUERY = MAX_D1_BOUND_PARAMETERS - 1
 
 
@@ -82,7 +85,7 @@ def fetch_html(url: str, timeout_seconds: float = 30.0) -> str:
         with request.urlopen(http_request, timeout=max(1.0, timeout_seconds)) as response:
             html = response.read().decode("utf-8", errors="replace")
     except error.HTTPError as exc:
-        if exc.code in {403, 429}:
+        if exc.code in {403, 429, 430}:
             raise CrawlBlockedError(f"Blocked by source with HTTP {exc.code} while requesting {url}.") from exc
         if exc.code == 408 or 500 <= exc.code <= 599:
             raise CrawlTransientError(
@@ -148,12 +151,37 @@ def scan_target(target: TargetBoard, pages: int, page_delay_seconds: float) -> D
 
 
 def upsert_source(client: D1Client, target: TargetBoard, run_started_at: str) -> None:
+    archive = target.archive
+    client.query(
+        """
+        INSERT INTO archives (
+          archive_key, display_name, description, display_order, is_public, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(archive_key) DO UPDATE SET
+          display_name = excluded.display_name,
+          description = excluded.description,
+          display_order = excluded.display_order,
+          is_public = excluded.is_public,
+          updated_at = excluded.updated_at
+        """,
+        [
+            archive.key,
+            archive.display_name,
+            archive.description,
+            archive.display_order,
+            int(archive.is_public),
+            run_started_at,
+            run_started_at,
+        ],
+    )
     client.query(
         """
         INSERT INTO sources (
-          source_key, site_name, board_name, board_url, min_upvotes, min_comments, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          source_key, archive_key, site_name, board_name, board_url,
+          min_upvotes, min_comments, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_key) DO UPDATE SET
+          archive_key = excluded.archive_key,
           site_name = excluded.site_name,
           board_name = excluded.board_name,
           board_url = excluded.board_url,
@@ -163,6 +191,7 @@ def upsert_source(client: D1Client, target: TargetBoard, run_started_at: str) ->
         """,
         [
             target.key,
+            archive.key,
             target.site_name,
             target.board_name,
             target.board_url,
@@ -243,14 +272,20 @@ def upsert_posts(
     for offset in range(0, len(posts), POSTS_PER_UPSERT):
         chunk = posts[offset : offset + POSTS_PER_UPSERT]
         value_clause = ",\n              ".join(
-            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)" for _ in chunk
+            """(
+                ?, (SELECT archive_key FROM target_archive), ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?, ?, ?
+              )"""
+            for _ in chunk
         )
-        params = []
+        params = [target.archive_key]
         for post in chunk:
+            external_post_id = str(post["external_post_id"]).strip()
             params.extend(
                 [
                     target.key,
-                    post["external_post_id"],
+                    canonical_post_key(target, external_post_id),
+                    external_post_id,
                     post["post_url"],
                     post["subject"],
                     post["title"],
@@ -269,12 +304,26 @@ def upsert_posts(
         # by routine metric refreshes.
         client.query(
             f"""
+            WITH target_archive(archive_key) AS (VALUES (?))
             INSERT INTO posts (
-              source_key, external_post_id, post_url, subject, title, created_at, created_at_raw,
-              upvotes, comments, fetched_at, first_seen_at, last_seen_at, qualifies_by
+              source_key, archive_key, canonical_post_key, external_post_id,
+              post_url, subject, title, created_at, created_at_raw, upvotes,
+              comments, fetched_at, first_seen_at, last_seen_at, qualifies_by
             ) VALUES
               {value_clause}
-            ON CONFLICT(source_key, external_post_id) DO UPDATE SET
+            ON CONFLICT DO UPDATE SET
+              archive_key = CASE
+                WHEN posts.canonical_post_key IS NULL
+                  OR TRIM(posts.canonical_post_key) = ''
+                THEN excluded.archive_key
+                ELSE posts.archive_key
+              END,
+              canonical_post_key = CASE
+                WHEN posts.canonical_post_key IS NULL
+                  OR TRIM(posts.canonical_post_key) = ''
+                THEN excluded.canonical_post_key
+                ELSE posts.canonical_post_key
+              END,
               post_url = excluded.post_url,
               title = excluded.title,
               created_at = excluded.created_at,
@@ -334,30 +383,41 @@ def update_finalized_posts(
     if not posts:
         return
 
-    existing_ids = set()
+    existing_canonical_keys = set()
     for offset in range(0, len(posts), EXISTING_POST_IDS_PER_QUERY):
         chunk = posts[offset : offset + EXISTING_POST_IDS_PER_QUERY]
+        canonical_keys = [
+            canonical_post_key(target, post["external_post_id"])
+            for post in chunk
+        ]
         placeholders = ", ".join("?" for _ in chunk)
         existing_rows = client.query(
             f"""
-            SELECT external_post_id
+            SELECT canonical_post_key
             FROM posts
-            WHERE source_key = ?
-              AND external_post_id IN ({placeholders})
+            WHERE archive_key = ?
+              AND canonical_post_key IN ({placeholders})
             """,
-            [target.key, *[post["external_post_id"] for post in chunk]],
+            [target.archive_key, *canonical_keys],
         )
-        existing_ids.update(str(row["external_post_id"]) for row in existing_rows)
+        existing_canonical_keys.update(
+            str(row["canonical_post_key"])
+            for row in existing_rows
+        )
     persistable = [
         post
         for post in posts
-        if meets_collection_threshold(
-            post["upvotes"],
-            post["comments"],
-            min_upvotes=target.min_upvotes,
-            min_comments=target.min_comments,
+        if (
+            target.collect_all
+            or meets_collection_threshold(
+                post["upvotes"],
+                post["comments"],
+                min_upvotes=target.min_upvotes,
+                min_comments=target.min_comments,
+            )
+            or canonical_post_key(target, post["external_post_id"])
+            in existing_canonical_keys
         )
-        or str(post["external_post_id"]) in existing_ids
     ]
     upsert_posts(client, target, persistable, checked_at)
 

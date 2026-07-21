@@ -272,6 +272,7 @@ class DcinsideListParser(HTMLParser):
                     "normal_view_link_seen": False,
                     "survey_signal_seen": data_no.casefold() in {"survey", "\uc124\ubb38"},
                     "interview_signal_seen": False,
+                    "advertisement_icon_count": 0,
                 }
                 return
 
@@ -347,6 +348,15 @@ class DcinsideListParser(HTMLParser):
                 self._inspect_non_numeric_link(self.current_row, href)
             else:
                 self._inspect_candidate_title_link(self.current_row, href)
+            return
+
+        if (
+            tag == "em"
+            and self.current_row.get("row_kind") == "non_numeric"
+            and self.current_cell == "title"
+            and set(attrs.get("class", "").split()) == {"icon_img", "icon_ad"}
+        ):
+            self.current_row["advertisement_icon_count"] += 1
             return
 
         if tag == "span" and self.current_row.get("row_kind") == "candidate":
@@ -554,11 +564,20 @@ class DcinsideListParser(HTMLParser):
             and subject_label == "이슈"
             and int(row["title_link_count"]) == 1
         )
+        advertisement_auxiliary = (
+            str(row["external_post_id"]) == ""
+            and data_type == ""
+            and row_classes == {"ub-content"}
+            and subject_label == "ad"
+            and int(row["title_link_count"]) == 1
+            and int(row["advertisement_icon_count"]) == 1
+        )
         explicitly_auxiliary = (
             data_type == "icon_survey"
             or "survey" in row_classes
             or bool(row["survey_signal_seen"])
             or interview_auxiliary
+            or advertisement_auxiliary
             or subject_label in SURVEY_SUBJECT_LABELS
         ) and not normal_view_link_seen
         if explicitly_auxiliary:

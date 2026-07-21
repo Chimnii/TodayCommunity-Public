@@ -17,6 +17,13 @@ SUBJECT_MIGRATION_PATH = (
     / "001_add_posts_subject.sql"
 )
 SUBJECT_MIGRATION = SUBJECT_MIGRATION_PATH.read_text(encoding="utf-8")
+MULTI_ARCHIVE_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "cloudflare"
+    / "migrations"
+    / "002_multi_archive.sql"
+)
+MULTI_ARCHIVE_MIGRATION = MULTI_ARCHIVE_MIGRATION_PATH.read_text(encoding="utf-8")
 
 
 class SqliteClient:
@@ -49,6 +56,18 @@ class SchemaPreflightTests(unittest.TestCase):
             ),
         )
         self.assertEqual(
+            ["archive_key", "canonical_post_key"],
+            next(
+                key
+                for key in report["tables"]["posts"]["unique_keys"]
+                if key == ["archive_key", "canonical_post_key"]
+            ),
+        )
+        self.assertEqual(
+            ["archive_key"],
+            report["tables"]["archives"]["primary_key"],
+        )
+        self.assertEqual(
             ["source_key", "oldest_post_id", "newest_post_id"],
             report["tables"]["coverage_intervals"]["primary_key"],
         )
@@ -64,6 +83,94 @@ class SchemaPreflightTests(unittest.TestCase):
         self.assertEqual(subject_column["type"], "TEXT")
         self.assertEqual(subject_column["notnull"], 1)
         self.assertEqual(subject_column["dflt_value"], "''")
+        canonical_column = next(
+            row
+            for row in client.query("PRAGMA table_info(posts)")
+            if row["name"] == "canonical_post_key"
+        )
+        self.assertEqual(canonical_column["type"], "TEXT")
+        self.assertEqual(canonical_column["notnull"], 0)
+        self.assertIsNone(canonical_column["dflt_value"])
+
+    def test_multi_archive_migration_backfills_existing_singularity_rows(self) -> None:
+        client = SqliteClient(
+            """
+            CREATE TABLE sources (
+              source_key TEXT PRIMARY KEY,
+              site_name TEXT NOT NULL,
+              board_name TEXT NOT NULL,
+              board_url TEXT NOT NULL,
+              min_upvotes INTEGER NOT NULL DEFAULT 0,
+              min_comments INTEGER NOT NULL DEFAULT 0,
+              created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+              updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE posts (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              source_key TEXT NOT NULL,
+              external_post_id TEXT NOT NULL,
+              post_url TEXT NOT NULL,
+              subject TEXT NOT NULL DEFAULT '',
+              title TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              created_at_raw TEXT NOT NULL,
+              upvotes INTEGER NOT NULL DEFAULT 0,
+              comments INTEGER NOT NULL DEFAULT 0,
+              fetched_at TEXT NOT NULL,
+              first_seen_at TEXT NOT NULL,
+              last_seen_at TEXT NOT NULL,
+              qualifies_by TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'active',
+              UNIQUE(source_key, external_post_id)
+            );
+            """
+        )
+        client.query(
+            """
+            INSERT INTO sources (source_key, site_name, board_name, board_url)
+            VALUES (
+              'dcinside-singularity', 'dcinside', 'board',
+              'https://gall.dcinside.com/'
+            )
+            """
+        )
+        client.query(
+            """
+            INSERT INTO posts (
+              source_key, external_post_id, post_url, title, created_at,
+              created_at_raw, fetched_at, first_seen_at, last_seen_at, qualifies_by
+            ) VALUES (
+              'dcinside-singularity', '123', 'https://example.com/123', 'old',
+              '2026-07-19T00:00:00Z', '2026-07-19', '2026-07-19T00:00:00Z',
+              '2026-07-19T00:00:00Z', '2026-07-19T00:00:00Z', 'upvotes'
+            )
+            """
+        )
+
+        client.connection.executescript(MULTI_ARCHIVE_MIGRATION)
+
+        self.assertEqual(
+            client.query("SELECT archive_key FROM sources"),
+            [{"archive_key": "dcinside-singularity"}],
+        )
+        self.assertEqual(
+            client.query(
+                "SELECT archive_key, canonical_post_key FROM posts"
+            ),
+            [
+                {
+                    "archive_key": "dcinside-singularity",
+                    "canonical_post_key": "dcinside:thesingularity:123",
+                }
+            ],
+        )
+        unique_indexes = client.query("PRAGMA index_list(posts)")
+        self.assertTrue(
+            any(
+                row["name"] == "idx_posts_archive_canonical" and row["unique"] == 1
+                for row in unique_indexes
+            )
+        )
 
     def test_subject_migration_keeps_existing_posts_with_an_empty_value(self) -> None:
         subject_definition = "  subject TEXT NOT NULL DEFAULT '',\n"
@@ -135,6 +242,19 @@ class SchemaPreflightTests(unittest.TestCase):
             caught.exception.report["errors"],
         )
 
+    def test_missing_archives_table_fails_with_clear_error(self) -> None:
+        client = SqliteClient()
+        client.connection.execute("PRAGMA foreign_keys = OFF")
+        client.connection.execute("DROP TABLE archives")
+
+        with self.assertRaises(SchemaValidationError) as caught:
+            validate_schema(client)
+
+        self.assertIn(
+            "missing required table: archives",
+            caught.exception.report["errors"],
+        )
+
     def test_missing_absence_table_fails_with_clear_error(self) -> None:
         client = SqliteClient()
         client.connection.execute("DROP TABLE coverage_absences")
@@ -196,6 +316,22 @@ class SchemaPreflightTests(unittest.TestCase):
             any(
                 "table 'posts' must have UNIQUE (source_key, external_post_id)"
                 in error
+                for error in caught.exception.report["errors"]
+            )
+        )
+
+    def test_missing_archive_canonical_unique_constraint_fails(self) -> None:
+        fragment = "  UNIQUE(archive_key, canonical_post_key),\n"
+        self.assertIn(fragment, SCHEMA)
+        client = SqliteClient(SCHEMA.replace(fragment, "", 1))
+
+        with self.assertRaises(SchemaValidationError) as caught:
+            validate_schema(client)
+
+        self.assertTrue(
+            any(
+                "table 'posts' must have UNIQUE "
+                "(archive_key, canonical_post_key)" in error
                 for error in caught.exception.report["errors"]
             )
         )

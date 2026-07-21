@@ -111,6 +111,20 @@ LIVE_INTERVIEW_ROW = """
 """
 
 
+LIVE_AD_ROW = """
+<tr class="ub-content " data-no="" data-type="">
+  <td class="gall_num">-</td>
+  <td class="gall_subject">AD</td>
+  <td class="gall_tit ub-word">
+    <a href="https://ad.example.test/campaign">
+      <em class="icon_img icon_ad"></em>광고
+    </a>
+  </td>
+  <td class="gall_date">26/07/22</td>
+</tr>
+"""
+
+
 def pagination(
     *,
     current: int = 1,
@@ -161,6 +175,22 @@ class DcinsideDatetimeTests(unittest.TestCase):
 
 
 class DcinsideListParserTests(unittest.TestCase):
+    def test_agent_stack_uses_the_same_board_parameterized_parser(self) -> None:
+        agent_url = (
+            "https://gall.dcinside.com/mgallery/board/lists/?id=agent_stack"
+        )
+        parser = DcinsideListParser(agent_url, now=FIXED_NOW, requested_page=1)
+        parser.feed(
+            regular_row("105").replace("thesingularity", "agent_stack")
+            + pagination(board_id="agent_stack")
+        )
+        parser.close()
+
+        self.assertEqual([post.external_post_id for post in parser.posts], ["105"])
+        self.assertTrue(parser.diagnostics.is_collection_safe)
+        self.assertTrue(parser.diagnostics.is_coverage_safe)
+        self.assertTrue(parser.navigation.is_valid)
+
     def test_subject_is_parsed_separately_from_the_title(self) -> None:
         parser = DcinsideListParser(BASE_URL, now=FIXED_NOW)
         parser.feed(regular_row("105", subject="  AI 소식  ", title="새 모델 발표"))
@@ -592,6 +622,53 @@ class DcinsideRowIntegrityTests(unittest.TestCase):
         self.assertEqual(parser.diagnostics.errors, [])
         self.assertFalse(parser.diagnostics.is_collection_safe)
         self.assertFalse(parser.diagnostics.is_coverage_safe)
+
+    def test_exact_advertisement_auxiliary_row_is_excluded(self) -> None:
+        parser = self.parse_row(LIVE_AD_ROW + regular_row("105"))
+
+        self.assertEqual(parser.diagnostics.non_numeric_rows, 1)
+        self.assertEqual(parser.diagnostics.errors, [])
+        self.assertEqual(
+            [post.external_post_id for post in parser.posts],
+            ["105"],
+        )
+        self.assertTrue(parser.diagnostics.is_coverage_safe)
+
+    def test_advertisement_near_matches_block_coverage(self) -> None:
+        near_matches = (
+            LIVE_AD_ROW.replace(
+                '<em class="icon_img icon_ad"></em>',
+                "",
+            ),
+            LIVE_AD_ROW.replace(
+                '<em class="icon_img icon_ad"></em>',
+                '<em class="icon_img icon_ad"></em><em class="icon_img icon_ad"></em>',
+            ),
+            LIVE_AD_ROW.replace(
+                '<tr class="ub-content " data-no="" data-type="">',
+                '<tr class="ub-content us-post" data-no="" data-type="">',
+            ),
+            LIVE_AD_ROW.replace('data-no=""', 'data-no="ad"'),
+            LIVE_AD_ROW.replace(
+                '<a href="https://ad.example.test/campaign">',
+                '<a href="/mgallery/board/view/?id=thesingularity&amp;no=105">',
+            ),
+            LIVE_AD_ROW.replace(
+                "</a>",
+                '</a><a href="https://ad.example.test/extra">extra</a>',
+                1,
+            ),
+        )
+        for near_match in near_matches:
+            with self.subTest(near_match=near_match):
+                parser = self.parse_row(near_match + regular_row("104"))
+
+                self.assertIn(
+                    "non_numeric_post_id",
+                    [error.code for error in parser.diagnostics.errors],
+                )
+                self.assertTrue(parser.diagnostics.is_collection_safe)
+                self.assertFalse(parser.diagnostics.is_coverage_safe)
 
     def test_interview_link_near_matches_block_coverage(self) -> None:
         live_url = (

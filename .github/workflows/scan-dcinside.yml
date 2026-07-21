@@ -1,15 +1,15 @@
-name: Run DCInside Hot crawl
+name: Run all-source Hot crawl
 
 on:
   workflow_dispatch:
     inputs:
       hot_lookback_minutes:
-        description: "Publication-age lookback for this Hot run only (15-1440 minutes)"
+        description: "Singularity lookback for this Hot run only (15-1440 minutes)"
         required: false
         default: 180
         type: number
       hot_source_minutes:
-        description: "Source scan budget for this Hot run only (1-10 minutes)"
+        description: "Singularity scan budget for this Hot run only (1-10 minutes)"
         required: false
         default: 3
         type: number
@@ -25,7 +25,7 @@ jobs:
   hot:
     runs-on: ubuntu-latest
     environment: collection
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -69,7 +69,14 @@ jobs:
           )
           PY
 
-      - name: Run Hot crawl
+      - name: Verify D1 schema
+        env:
+          TC_CF_ACCOUNT_ID: ${{ secrets.TC_CF_ACCOUNT_ID }}
+          TC_CF_DATABASE_ID: ${{ secrets.TC_CF_DATABASE_ID }}
+          TC_CF_API_TOKEN: ${{ secrets.TC_CF_API_TOKEN }}
+        run: python -m crawler.jobs.check_schema
+
+      - name: Run all-source Hot crawl
         env:
           TC_CF_ACCOUNT_ID: ${{ secrets.TC_CF_ACCOUNT_ID }}
           TC_CF_DATABASE_ID: ${{ secrets.TC_CF_DATABASE_ID }}
@@ -80,4 +87,4 @@ jobs:
           TC_DEEP_RESERVED_SECONDS: "0"
           TC_BLOCK_COOLDOWN_HOURS: "6"
           TC_TRANSIENT_FETCH_ATTEMPTS: "2"
-        run: python -m crawler.jobs.run_cycle --mode hot --target dcinside-singularity --persist
+        run: python -m crawler.jobs.run_all_sources --mode hot --persist

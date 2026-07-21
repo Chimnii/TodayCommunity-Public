@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import http.client
+import sqlite3
 import socket
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 from urllib import error
 
@@ -18,6 +20,7 @@ from crawler.jobs.scan_new_posts import (
     post_upsert_query_count,
     update_finalized_posts,
     upsert_posts,
+    upsert_source,
 )
 from crawler.targets import get_target
 
@@ -29,6 +32,21 @@ class RecordingClient:
     def query(self, sql, params=None):
         self.calls.append((sql, list(params or [])))
         return []
+
+
+class SqliteClient:
+    def __init__(self) -> None:
+        schema_path = Path(__file__).resolve().parents[1] / "cloudflare" / "schema.sql"
+        self.connection = sqlite3.connect(":memory:")
+        self.connection.executescript(schema_path.read_text(encoding="utf-8"))
+
+    def query(self, sql, params=None):
+        cursor = self.connection.execute(sql, list(params or []))
+        if cursor.description is None:
+            self.connection.commit()
+            return []
+        columns = [item[0] for item in cursor.description]
+        return [dict(zip(columns, row)) for row in cursor.fetchall()]
 
 
 def sample_post(post_id: int) -> dict:
@@ -150,7 +168,7 @@ class FetchHtmlTests(unittest.TestCase):
         self.assertNotIsInstance(raised.exception, CrawlTimeoutError)
 
     def test_http_block_statuses_stay_blocked(self) -> None:
-        for status in (403, 429):
+        for status in (403, 429, 430):
             with self.subTest(status=status):
                 http_error = error.HTTPError(
                     "https://example.com/list",
@@ -214,7 +232,7 @@ class BatchedPostUpsertTests(unittest.TestCase):
 
         self.assertEqual(post_upsert_query_count(len(posts)), 2)
         self.assertEqual(len(client.calls), 2)
-        self.assertEqual([len(params) for _, params in client.calls], [91, 13])
+        self.assertEqual([len(params) for _, params in client.calls], [99, 15])
         self.assertTrue(all("INSERT INTO posts" in sql for sql, _ in client.calls))
 
     def test_subject_is_inserted_but_not_backfilled_on_conflict(self) -> None:
@@ -229,7 +247,7 @@ class BatchedPostUpsertTests(unittest.TestCase):
 
         sql, params = client.calls[0]
         insert_clause, update_clause = sql.split(
-            "ON CONFLICT(source_key, external_post_id) DO UPDATE SET",
+            "ON CONFLICT DO UPDATE SET",
             1,
         )
         self.assertIn("subject", insert_clause)
@@ -266,11 +284,147 @@ class BatchedPostUpsertTests(unittest.TestCase):
         select_calls = [
             (sql, params)
             for sql, params in client.calls
-            if "SELECT external_post_id" in sql
+            if "SELECT canonical_post_key" in sql
         ]
         self.assertEqual(len(select_calls), 2)
         self.assertEqual([len(params) for _, params in select_calls], [100, 2])
         self.assertEqual(existing_post_lookup_query_count(len(posts)), 2)
+
+    def test_shared_archive_deduplicates_by_canonical_post_key(self) -> None:
+        client = SqliteClient()
+        search_target = get_target("fmkorea-best-munich-search")
+        board_target = get_target("fmkorea-bayern-board")
+        checked_at = "2026-07-22T00:00:00+00:00"
+        upsert_source(client, search_target, checked_at)
+        upsert_source(client, board_target, checked_at)
+
+        upsert_posts(
+            client,
+            search_target,
+            [
+                {
+                    **sample_post(1234),
+                    "post_url": "https://www.fmkorea.com/1234?from=search",
+                    "subject": "포텐",
+                    "title": "first title",
+                    "upvotes": 100,
+                    "comments": 20,
+                }
+            ],
+            checked_at,
+        )
+        upsert_posts(
+            client,
+            board_target,
+            [
+                {
+                    **sample_post(1234),
+                    "post_url": "https://www.fmkorea.com/1234",
+                    "subject": "바이에른",
+                    "title": "latest title",
+                    "upvotes": 150,
+                    "comments": 30,
+                }
+            ],
+            "2026-07-22T01:00:00+00:00",
+        )
+
+        rows = client.query(
+            """
+            SELECT source_key, archive_key, canonical_post_key, subject,
+                   title, post_url, upvotes, comments
+            FROM posts
+            """
+        )
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source_key"], search_target.key)
+        self.assertEqual(rows[0]["archive_key"], "fmkorea-munich")
+        self.assertEqual(rows[0]["canonical_post_key"], "fmkorea:1234")
+        self.assertEqual(rows[0]["subject"], "포텐")
+        self.assertEqual(rows[0]["title"], "latest title")
+        self.assertEqual(rows[0]["post_url"], "https://www.fmkorea.com/1234")
+        self.assertEqual(rows[0]["upvotes"], 150)
+        self.assertEqual(rows[0]["comments"], 30)
+
+    def test_new_upsert_repairs_a_legacy_null_canonical_key(self) -> None:
+        client = SqliteClient()
+        target = get_target("dcinside-singularity")
+        checked_at = "2026-07-22T00:00:00+00:00"
+        upsert_source(client, target, checked_at)
+        client.query(
+            """
+            INSERT INTO posts (
+              source_key, archive_key, external_post_id, post_url, subject,
+              title, created_at, created_at_raw, upvotes, comments, fetched_at,
+              first_seen_at, last_seen_at, qualifies_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                target.key,
+                target.archive_key,
+                "9876",
+                "https://example.com/legacy",
+                "기존",
+                "legacy title",
+                checked_at,
+                checked_at,
+                4,
+                0,
+                checked_at,
+                checked_at,
+                checked_at,
+                "upvotes",
+            ],
+        )
+
+        upsert_posts(
+            client,
+            target,
+            [{**sample_post(9876), "title": "repaired title"}],
+            "2026-07-22T01:00:00+00:00",
+        )
+
+        rows = client.query(
+            "SELECT canonical_post_key, title, subject FROM posts"
+        )
+        self.assertEqual(
+            rows,
+            [
+                {
+                    "canonical_post_key": "dcinside:thesingularity:9876",
+                    "title": "repaired title",
+                    "subject": "기존",
+                }
+            ],
+        )
+
+    def test_finalizer_finds_existing_post_from_another_shared_source(self) -> None:
+        client = SqliteClient()
+        search_target = get_target("fmkorea-best-munich-search")
+        board_target = get_target("fmkorea-bayern-board")
+        checked_at = "2026-07-22T00:00:00+00:00"
+        upsert_source(client, search_target, checked_at)
+        upsert_source(client, board_target, checked_at)
+        upsert_posts(client, search_target, [sample_post(4321)], checked_at)
+
+        update_finalized_posts(
+            client,
+            board_target,
+            [
+                {
+                    **sample_post(4321),
+                    "upvotes": 0,
+                    "comments": 0,
+                    "qualifies_by": "none",
+                }
+            ],
+            "2026-07-22T01:00:00+00:00",
+        )
+
+        self.assertEqual(
+            client.query("SELECT upvotes, comments, qualifies_by FROM posts"),
+            [{"upvotes": 0, "comments": 0, "qualifies_by": "none"}],
+        )
 
 
 if __name__ == "__main__":

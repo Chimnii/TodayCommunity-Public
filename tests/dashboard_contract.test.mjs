@@ -43,6 +43,44 @@ test("ships the compact archive surface and hidden collection dialog", () => {
   );
 });
 
+test("ships three accessible archive tabs and replaces them from the API catalog", () => {
+  assert.match(html, /id="archive-tabs"[^>]*role="tablist"/);
+  assert.match(html, /role="tab"[\s\S]*href="\/?\?target=dcinside-singularity"/);
+  assert.match(html, /href="\/?\?target=dcinside-agent-stack"/);
+  assert.match(html, /href="\/?\?target=fmkorea-munich"/);
+  assert.match(html, />특이점이 온다<\/a>/);
+  assert.match(html, />에이전트 스택<\/a>/);
+  assert.match(html, />뮌헨<\/a>/);
+
+  assert.match(app, /Array\.isArray\(state\.archive\?\.archives\)/);
+  assert.match(app, /getAvailableArchives\(\)\.map/);
+  assert.match(app, /tab\.setAttribute\("role", "tab"\)/);
+  assert.match(app, /tab\.setAttribute\("aria-selected", String\(key === state\.target\)\)/);
+  assert.match(app, /\["ArrowLeft", "ArrowRight", "Home", "End"\]/);
+  assert.match(app, /archive\.display_name/);
+  assert.match(css, /\.archive-tab\[aria-selected="true"\]/);
+});
+
+test("switches archive targets with clean filters and history-aware URLs", () => {
+  assert.match(app, /target:\s*DEFAULT_TARGET/);
+  assert.match(app, /target: state\.target/);
+  assert.match(app, /params\.get\("target"\)/);
+  assert.match(app, /Object\.assign\(state, DEFAULT_STATE\)[\s\S]*state\.target = normalizedTarget/);
+  assert.match(app, /syncStateToUrl\(\{ replace: false \}\)/);
+  assert.match(app, /window\.history\[method\]\(null, "", url\)/);
+  assert.match(app, /window\.addEventListener\("popstate"/);
+  assert.match(app, /state\.page = 1/);
+  assert.match(app, /elements\.archiveTitle\.textContent = `\$\{archive\.display_name\} 아카이브`/);
+  assert.match(app, /document\.title = `\$\{archive\.display_name\} \| 오늘의 커뮤니티`/);
+});
+
+test("keeps source provenance when a display archive combines feeds", () => {
+  assert.match(app, /Array\.isArray\(payload\?\.sources\)/);
+  assert.match(app, /payload\?\.source[\s\S]*\[payload\.source\]/);
+  assert.match(app, /run\.board_name \? `\$\{run\.board_name\} · \$\{runType\}`/);
+  assert.match(app, /archive_key: "fmkorea-munich"[\s\S]*display_name: "뮌헨"/);
+});
+
 test("requests globally filtered, sorted, and paginated archive data", () => {
   for (const parameter of [
     "page",
@@ -69,6 +107,25 @@ test("requests globally filtered, sorted, and paginated archive data", () => {
   assert.match(app, /summary\.filtered_posts/);
   assert.match(app, /renderPagination\(view\.pagination\)/);
   assert.doesNotMatch(app, /limit=100/);
+});
+
+test("preserves signed FMKorea recommendation counts in local rendering", () => {
+  assert.match(
+    app,
+    /numberFormatter\.format\(normalizeSignedInteger\(post\.upvotes, 0\)\)/
+  );
+  assert.match(
+    app,
+    /normalizeSignedInteger\(right\.upvotes, 0\) - normalizeSignedInteger\(left\.upvotes, 0\)/
+  );
+  assert.match(
+    app,
+    /state\.minUpvotes > 0[\s\S]*normalizeSignedInteger\(post\.upvotes, 0\) < state\.minUpvotes/
+  );
+  assert.doesNotMatch(
+    app,
+    /normalizeNonNegativeNumber\((?:post|left|right)\.upvotes/
+  );
 });
 
 test("filters by exact subjects from the complete saved set", () => {

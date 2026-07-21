@@ -11,6 +11,75 @@ const postCount = Number.isInteger(requestedPostCount) && requestedPostCount > 0
   ? Math.min(requestedPostCount, 1000)
   : 73;
 
+const archives = [
+  {
+    archive_key: "dcinside-singularity",
+    display_name: "특이점이 온다",
+    description: "디시인사이드 특이점이 온다 갤러리 인기글",
+    display_order: 10,
+    updated_at: "2026-07-17T00:30:00.000Z",
+  },
+  {
+    archive_key: "dcinside-agent-stack",
+    display_name: "에이전트 스택",
+    description: "디시인사이드 에이전트 스택 갤러리 인기글",
+    display_order: 20,
+    updated_at: "2026-07-17T00:30:00.000Z",
+  },
+  {
+    archive_key: "fmkorea-munich",
+    display_name: "뮌헨",
+    description: "에펨코리아의 뮌헨 관련 인기글",
+    display_order: 30,
+    updated_at: "2026-07-17T00:30:00.000Z",
+  },
+];
+
+const sourcesByArchive = {
+  "dcinside-singularity": [
+    {
+      source_key: "dcinside-singularity",
+      archive_key: "dcinside-singularity",
+      site_name: "dcinside",
+      board_name: "특이점이 온다 마이너 갤러리",
+      board_url: "https://gall.dcinside.com/mgallery/board/lists/?id=thesingularity",
+      min_upvotes: 4,
+      min_comments: 20,
+    },
+  ],
+  "dcinside-agent-stack": [
+    {
+      source_key: "dcinside-agent-stack",
+      archive_key: "dcinside-agent-stack",
+      site_name: "dcinside",
+      board_name: "에이전트 스택(Agent Stack) 마이너 갤러리",
+      board_url: "https://gall.dcinside.com/mgallery/board/lists/?id=agent_stack",
+      min_upvotes: 10,
+      min_comments: 100,
+    },
+  ],
+  "fmkorea-munich": [
+    {
+      source_key: "fmkorea-best-munich-search",
+      archive_key: "fmkorea-munich",
+      site_name: "fmkorea",
+      board_name: "포텐 터짐 '뮌헨' 검색",
+      board_url: "https://www.fmkorea.com/search.php?mid=best&search_keyword=%EB%AE%8C%ED%97%A8&search_target=title_content",
+      min_upvotes: 0,
+      min_comments: 0,
+    },
+    {
+      source_key: "fmkorea-bayern-board",
+      archive_key: "fmkorea-munich",
+      site_name: "fmkorea",
+      board_name: "해외축구 바이에른 게시판",
+      board_url: "https://www.fmkorea.com/index.php?mid=football_world&category=853073246",
+      min_upvotes: 15,
+      min_comments: 150,
+    },
+  ],
+};
+
 const posts = Array.from({ length: postCount }, (_, index) => {
   const id = 1324407 - index;
   const upvotes = (index * 7) % 31;
@@ -90,6 +159,18 @@ function sendJson(response, body, statusCode = 200) {
 }
 
 function handleArchive(requestUrl, response) {
+  const target = String(requestUrl.searchParams.get("target") || "dcinside-singularity");
+  const archive = archives.find((candidate) => candidate.archive_key === target);
+  if (!archive) {
+    sendJson(response, { error: "Unknown archive target." }, 400);
+    return;
+  }
+  const sources = sourcesByArchive[target];
+  const archivePosts = posts.map((post, index) => ({
+    ...post,
+    archive_key: target,
+    source_key: sources[index % sources.length].source_key,
+  }));
   const search = String(requestUrl.searchParams.get("q") || "").trim().toLocaleLowerCase("ko-KR");
   const subject = normalizeSubject(requestUrl.searchParams.get("subject"));
   const minUpvotes = normalizeNonNegative(requestUrl.searchParams.get("min_upvotes"));
@@ -100,7 +181,7 @@ function handleArchive(requestUrl, response) {
   const pageSize = Math.min(normalizePositive(requestUrl.searchParams.get("page_size"), 30), 100);
   const requestedPage = normalizePositive(requestUrl.searchParams.get("page"), 1);
 
-  const filtered = posts
+  const filtered = archivePosts
     .filter((post) => {
       return (
         post.upvotes >= minUpvotes &&
@@ -117,18 +198,13 @@ function handleArchive(requestUrl, response) {
   const visiblePosts = filtered.slice(offset, offset + pageSize);
 
   sendJson(response, {
-    target: "dcinside-singularity",
-    source: {
-      source_key: "dcinside-singularity",
-      site_name: "dcinside",
-      board_name: "특이점이 온다 마이너 갤러리",
-      board_url: "https://gall.dcinside.com/mgallery/board/lists/?id=thesingularity",
-      min_upvotes: 4,
-      min_comments: 20,
-      updated_at: "2026-07-17T00:30:00.000Z",
-    },
+    target,
+    archives,
+    archive,
+    sources,
+    source: sources[0],
     summary: {
-      total_posts: posts.length,
+      total_posts: archivePosts.length,
       filtered_posts: filtered.length,
       latest_seen_at: posts[0].last_seen_at,
       exported_posts: visiblePosts.length,
@@ -144,7 +220,11 @@ function handleArchive(requestUrl, response) {
       has_next: totalPages > 0 && page < totalPages,
     },
     subject_options: subjectOptions,
-    runs,
+    runs: runs.map((run, index) => ({
+      ...run,
+      source_key: sources[index % sources.length].source_key,
+      board_name: sources[index % sources.length].board_name,
+    })),
     posts: visiblePosts,
   });
 }

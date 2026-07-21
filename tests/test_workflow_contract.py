@@ -124,10 +124,13 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertIn('integer_input("HOT_SOURCE_MINUTES", 1, 10)', self.hot)
         self.assertIn("TC_HOT_MAX_SECONDS={source_minutes * 60}", self.hot)
         self.assertIn("TC_CYCLE_MAX_SECONDS={source_minutes * 60}", self.hot)
-        self.assertRegex(self.hot, r"(?m)^\s{4}timeout-minutes: 15\s*$")
+        self.assertRegex(self.hot, r"(?m)^\s{4}timeout-minutes: 30\s*$")
         self.assertIn('TC_DEEP_RESERVED_SECONDS: "0"', self.hot)
-        self.assertIn("--mode hot", self.hot)
-        self.assertNotIn("check_schema", self.hot)
+        self.assertIn(
+            "python -m crawler.jobs.run_all_sources --mode hot --persist",
+            self.hot,
+        )
+        self.assertIn("check_schema", self.hot)
 
     def test_backfill_dispatch_and_budget_contract(self) -> None:
         self.assertIn("workflow_dispatch:", self.backfill)
@@ -135,7 +138,11 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertIn('TC_BLOCK_COOLDOWN_HOURS: "6"', self.backfill)
         self.assertIn('TC_CYCLE_MAX_SECONDS: "600"', self.backfill)
         self.assertIn('TC_DEEP_RESERVED_SECONDS: "300"', self.backfill)
-        self.assertIn("--mode backfill", self.backfill)
+        self.assertRegex(self.backfill, r"(?m)^\s{4}timeout-minutes: 45\s*$")
+        self.assertIn(
+            "python -m crawler.jobs.run_all_sources --mode backfill --persist",
+            self.backfill,
+        )
         self.assertIn("check_schema", self.backfill)
 
     def test_private_ops_script_supports_one_run_hot_lookback_override(self) -> None:

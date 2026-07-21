@@ -8,8 +8,18 @@ from crawler.d1 import D1Client
 
 
 REQUIRED_COLUMNS: Dict[str, Tuple[str, ...]] = {
+    "archives": (
+        "archive_key",
+        "display_name",
+        "description",
+        "display_order",
+        "is_public",
+        "created_at",
+        "updated_at",
+    ),
     "sources": (
         "source_key",
+        "archive_key",
         "site_name",
         "board_name",
         "board_url",
@@ -21,6 +31,8 @@ REQUIRED_COLUMNS: Dict[str, Tuple[str, ...]] = {
     "posts": (
         "id",
         "source_key",
+        "archive_key",
+        "canonical_post_key",
         "external_post_id",
         "post_url",
         "subject",
@@ -86,6 +98,7 @@ REQUIRED_COLUMNS: Dict[str, Tuple[str, ...]] = {
 }
 
 REQUIRED_PRIMARY_KEYS: Dict[str, Tuple[str, ...]] = {
+    "archives": ("archive_key",),
     "sources": ("source_key",),
     "posts": ("id",),
     "crawl_runs": ("id",),
@@ -99,11 +112,26 @@ REQUIRED_PRIMARY_KEYS: Dict[str, Tuple[str, ...]] = {
 }
 
 REQUIRED_UNIQUE_KEYS: Dict[str, Tuple[Tuple[str, ...], ...]] = {
-    "posts": (("source_key", "external_post_id"),),
+    "posts": (
+        ("source_key", "external_post_id"),
+        ("archive_key", "canonical_post_key"),
+    ),
 }
 
 REQUIRED_COLUMN_PROPERTIES = {
+    "sources": {
+        "archive_key": {
+            "type": "TEXT",
+            "notnull": 1,
+            "default": "'dcinside-singularity'",
+        },
+    },
     "posts": {
+        "archive_key": {
+            "type": "TEXT",
+            "notnull": 1,
+            "default": "'dcinside-singularity'",
+        },
         "subject": {
             "type": "TEXT",
             "notnull": 1,

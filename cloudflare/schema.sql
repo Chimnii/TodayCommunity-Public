@@ -1,17 +1,60 @@
+CREATE TABLE IF NOT EXISTS archives (
+  archive_key TEXT PRIMARY KEY,
+  display_name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  display_order INTEGER NOT NULL DEFAULT 0,
+  is_public INTEGER NOT NULL DEFAULT 1 CHECK (is_public IN (0, 1)),
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT OR IGNORE INTO archives (
+  archive_key,
+  display_name,
+  description,
+  display_order,
+  is_public
+) VALUES
+  (
+    'dcinside-singularity',
+    '특이점이 온다',
+    '디시인사이드 특이점이 온다 갤러리 인기글',
+    10,
+    1
+  ),
+  (
+    'dcinside-agent-stack',
+    '에이전트 스택',
+    '디시인사이드 에이전트 스택 갤러리 인기글',
+    20,
+    1
+  ),
+  (
+    'fmkorea-munich',
+    '뮌헨',
+    '에펨코리아의 뮌헨 관련 인기글',
+    30,
+    1
+  );
+
 CREATE TABLE IF NOT EXISTS sources (
   source_key TEXT PRIMARY KEY,
+  archive_key TEXT NOT NULL DEFAULT 'dcinside-singularity',
   site_name TEXT NOT NULL,
   board_name TEXT NOT NULL,
   board_url TEXT NOT NULL,
   min_upvotes INTEGER NOT NULL DEFAULT 0,
   min_comments INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (archive_key) REFERENCES archives(archive_key)
 );
 
 CREATE TABLE IF NOT EXISTS posts (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   source_key TEXT NOT NULL,
+  archive_key TEXT NOT NULL DEFAULT 'dcinside-singularity',
+  canonical_post_key TEXT,
   external_post_id TEXT NOT NULL,
   post_url TEXT NOT NULL,
   subject TEXT NOT NULL DEFAULT '',
@@ -26,8 +69,22 @@ CREATE TABLE IF NOT EXISTS posts (
   qualifies_by TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active',
   UNIQUE(source_key, external_post_id),
-  FOREIGN KEY (source_key) REFERENCES sources(source_key)
+  UNIQUE(archive_key, canonical_post_key),
+  FOREIGN KEY (source_key) REFERENCES sources(source_key),
+  FOREIGN KEY (archive_key) REFERENCES archives(archive_key)
 );
+
+CREATE INDEX IF NOT EXISTS idx_sources_archive
+  ON sources (archive_key, source_key);
+
+CREATE INDEX IF NOT EXISTS idx_posts_archive_created_at
+  ON posts (archive_key, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_posts_archive_upvotes
+  ON posts (archive_key, upvotes DESC);
+
+CREATE INDEX IF NOT EXISTS idx_posts_archive_comments
+  ON posts (archive_key, comments DESC);
 
 CREATE INDEX IF NOT EXISTS idx_posts_source_created_at
   ON posts (source_key, created_at DESC);

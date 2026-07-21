@@ -5,7 +5,7 @@ const MAX_PAGE_SIZE = 100;
 const MAX_SEARCH_LENGTH = 100;
 const MAX_SUBJECT_LENGTH = 100;
 const MAX_SUBJECT_OPTIONS = 100;
-const ALLOWED_TARGETS = new Set([DEFAULT_TARGET]);
+const TARGET_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 const SORT_COLUMNS = {
   created_at: "created_at",
@@ -102,8 +102,18 @@ function normalizeSubjectOptions(rawValue) {
 }
 
 function buildPostFilter(target, query, minUpvotes, minComments, subject) {
-  const clauses = ["source_key = ?", "upvotes >= ?", "comments >= ?"];
-  const bindings = [target, minUpvotes, minComments];
+  const clauses = ["archive_key = ?"];
+  const bindings = [target];
+
+  if (minUpvotes > 0) {
+    clauses.push("upvotes >= ?");
+    bindings.push(minUpvotes);
+  }
+
+  if (minComments > 0) {
+    clauses.push("comments >= ?");
+    bindings.push(minComments);
+  }
 
   if (subject) {
     clauses.push("subject = ?");
@@ -153,13 +163,28 @@ function buildCacheKey(
   return new Request(cacheUrl.toString(), { method: "GET" });
 }
 
+function publicArchive(row) {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    archive_key: row.archive_key,
+    display_name: row.display_name,
+    description: row.description ?? "",
+    display_order: Number(row.display_order ?? 0),
+    updated_at: row.updated_at ?? "",
+  };
+}
+
 export async function onRequestGet(context) {
   try {
     const url = new URL(context.request.url);
     const target = (url.searchParams.get("target") || DEFAULT_TARGET).trim();
-    if (!ALLOWED_TARGETS.has(target)) {
+    if (!TARGET_PATTERN.test(target)) {
       return jsonResponse({ error: "Unknown archive target." }, 400);
     }
+
     const pageSize = normalizePositiveInteger(
       url.searchParams.get("page_size"),
       DEFAULT_PAGE_SIZE,
@@ -200,18 +225,48 @@ export async function onRequestGet(context) {
     }
 
     const db = context.env.DB;
+    const archive = publicArchive(
+      await db
+        .prepare(
+          `
+          SELECT archive_key, display_name, description, display_order, updated_at
+          FROM archives
+          WHERE archive_key = ? AND is_public = 1
+          LIMIT 1
+          `
+        )
+        .bind(target)
+        .first()
+    );
+    if (!archive) {
+      return jsonResponse({ error: "Unknown archive target." }, 400);
+    }
 
-    const source = await db
+    const archiveResult = await db
       .prepare(
         `
-        SELECT source_key, site_name, board_name, board_url, min_upvotes, min_comments, updated_at
+        SELECT archive_key, display_name, description, display_order, updated_at
+        FROM archives
+        WHERE is_public = 1
+        ORDER BY display_order ASC, archive_key ASC
+        `
+      )
+      .all();
+    const archives = (archiveResult.results ?? []).map(publicArchive);
+
+    const sourceResult = await db
+      .prepare(
+        `
+        SELECT source_key, archive_key, site_name, board_name, board_url,
+               min_upvotes, min_comments, updated_at
         FROM sources
-        WHERE source_key = ?
-        LIMIT 1
+        WHERE archive_key = ?
+        ORDER BY source_key ASC
         `
       )
       .bind(target)
-      .first();
+      .all();
+    const sources = sourceResult.results ?? [];
 
     const summary = await db
       .prepare(
@@ -224,7 +279,7 @@ export async function onRequestGet(context) {
             FROM (
               SELECT DISTINCT TRIM(subject) AS subject
               FROM posts
-              WHERE source_key = ?
+              WHERE archive_key = ?
                 AND TRIM(subject) <> ''
                 AND length(TRIM(subject)) <= ${MAX_SUBJECT_LENGTH}
               ORDER BY subject COLLATE NOCASE, subject
@@ -232,7 +287,7 @@ export async function onRequestGet(context) {
             )
           ) AS subject_options_json
         FROM posts
-        WHERE source_key = ?
+        WHERE archive_key = ?
         `
       )
       .bind(target, target)
@@ -257,17 +312,20 @@ export async function onRequestGet(context) {
     const runResult = await db
       .prepare(
         `
-        SELECT source_key, run_type, status, scanned_pages, scanned_posts, matched_posts, started_at, finished_at,
+        SELECT runs.source_key, sources.site_name, sources.board_name,
+               runs.run_type, runs.status, runs.scanned_pages, runs.scanned_posts,
+               runs.matched_posts, runs.started_at, runs.finished_at,
                CASE
-                 WHEN status IN ('failed', 'blocked')
-                  AND error_message IS NOT NULL
-                  AND TRIM(error_message) <> ''
+                 WHEN runs.status IN ('failed', 'blocked')
+                  AND runs.error_message IS NOT NULL
+                  AND TRIM(runs.error_message) <> ''
                  THEN 1
                  ELSE 0
                END AS had_error
-        FROM crawl_runs
-        WHERE source_key = ?
-        ORDER BY id DESC
+        FROM crawl_runs AS runs
+        INNER JOIN sources ON sources.source_key = runs.source_key
+        WHERE sources.archive_key = ?
+        ORDER BY runs.id DESC
         LIMIT 10
         `
       )
@@ -277,8 +335,9 @@ export async function onRequestGet(context) {
     const postResult = await db
       .prepare(
         `
-        SELECT source_key, external_post_id, subject, title, post_url, created_at, created_at_raw, upvotes, comments,
-               qualifies_by, fetched_at, first_seen_at, last_seen_at, status
+        SELECT archive_key, source_key, external_post_id, subject, title, post_url,
+               created_at, created_at_raw, upvotes, comments, qualifies_by,
+               fetched_at, first_seen_at, last_seen_at, status
         FROM posts
         WHERE ${filter.sql}
         ORDER BY ${buildOrderClause(sort)}
@@ -303,7 +362,10 @@ export async function onRequestGet(context) {
 
     const response = jsonResponse({
       target,
-      source,
+      archives,
+      archive,
+      sources,
+      source: sources[0] ?? null,
       subject_options: normalizeSubjectOptions(summary?.subject_options_json),
       summary: {
         total_posts: totalPosts,

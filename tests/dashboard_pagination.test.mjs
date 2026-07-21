@@ -22,12 +22,13 @@ const context = {
 };
 
 vm.runInNewContext(
-  `${appWithoutInitialization}\nglobalThis.__dashboardPaginationFunctions = {\n  getPageSequence: typeof getPageSequence === "function" ? getPageSequence : undefined,\n  parsePageJump: typeof parsePageJump === "function" ? parsePageJump : undefined,\n};`,
+  `${appWithoutInitialization}\nglobalThis.__dashboardPaginationFunctions = {\n  getPageSequence: typeof getPageSequence === "function" ? getPageSequence : undefined,\n  parsePageJump: typeof parsePageJump === "function" ? parsePageJump : undefined,\n  normalizeSignedInteger: typeof normalizeSignedInteger === "function" ? normalizeSignedInteger : undefined,\n};`,
   context,
   { filename: appUrl.pathname }
 );
 
-const { getPageSequence, parsePageJump } = context.__dashboardPaginationFunctions;
+const { getPageSequence, parsePageJump, normalizeSignedInteger } =
+  context.__dashboardPaginationFunctions;
 
 function pageSequence(currentPage, totalPages) {
   return Array.from(getPageSequence(currentPage, totalPages));
@@ -36,6 +37,15 @@ function pageSequence(currentPage, totalPages) {
 test("loads the dashboard's pagination helpers without running initialize", () => {
   assert.equal(typeof getPageSequence, "function");
   assert.equal(typeof parsePageJump, "function");
+  assert.equal(typeof normalizeSignedInteger, "function");
+});
+
+test("normalizeSignedInteger preserves valid negative recommendation counts", () => {
+  assert.equal(normalizeSignedInteger(-7, 0), -7);
+  assert.equal(normalizeSignedInteger("-12", 0), -12);
+  assert.equal(normalizeSignedInteger("1,200", 0), 0);
+  assert.equal(normalizeSignedInteger("3.5", 0), 0);
+  assert.equal(normalizeSignedInteger("not-a-number", 0), 0);
 });
 
 test("getPageSequence exposes a seven-page window around middle pages", () => {
