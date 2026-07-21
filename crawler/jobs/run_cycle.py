@@ -1204,7 +1204,7 @@ class CrawlCycle:
             page=page,
             posts=parser.posts,
             fetch_order=request_slot.request_number,
-            coverage_ordered=parser.diagnostics.ids_coverage_ordered,
+            coverage_ordered=parser.diagnostics.is_coverage_safe,
             navigation_valid=navigation.is_valid,
             current_page=navigation.current_page,
             last_page=navigation.last_page,

@@ -95,16 +95,21 @@ class DcinsideParseDiagnostics:
 
     @property
     def is_collection_safe(self) -> bool:
+        # Preserve every fully parsed canonical post even when an unfamiliar
+        # non-numeric table row is present. Such rows remain diagnostics errors
+        # and therefore cannot make the page authoritative coverage evidence.
         return (
             self.candidate_rows > 0
-            and self.is_complete
+            and self.failed_rows == 0
             and self.has_unique_canonical_ids
+            and all(error.code == "non_numeric_post_id" for error in self.errors)
         )
 
     @property
     def is_coverage_safe(self) -> bool:
         return (
             self.is_collection_safe
+            and self.is_complete
             and self.ids_coverage_ordered
         )
 
@@ -263,8 +268,10 @@ class DcinsideListParser(HTMLParser):
                     "data_type": data_type,
                     "row_class_tokens": set(row_class.split()),
                     "subject_text_parts": [],
+                    "title_link_count": 0,
                     "normal_view_link_seen": False,
                     "survey_signal_seen": data_no.casefold() in {"survey", "\uc124\ubb38"},
+                    "interview_signal_seen": False,
                 }
                 return
 
@@ -433,6 +440,7 @@ class DcinsideListParser(HTMLParser):
             self.current_row["recommend_text_parts"].append(cleaned)
 
     def _inspect_non_numeric_link(self, row: Dict[str, object], href: str) -> None:
+        row["title_link_count"] += 1
         if not href:
             return
         resolved = urlparse(urljoin(self.base_url, href))
@@ -442,6 +450,18 @@ class DcinsideListParser(HTMLParser):
         path = resolved.path.casefold()
         if "survey" in host or "survey" in path or host == "event.dcinside.com":
             row["survey_signal_seen"] = True
+        if (
+            resolved.scheme == "http"
+            and resolved.netloc == "gall.dcinside.com"
+            and resolved.path == "/list.php"
+            and not resolved.params
+            and re.fullmatch(
+                r"id=dcinterview&no=[1-9][0-9]*",
+                resolved.query,
+            )
+            and not resolved.fragment
+        ):
+            row["interview_signal_seen"] = True
 
     def _inspect_candidate_title_link(self, row: Dict[str, object], href: str) -> None:
         if not href:
@@ -525,12 +545,22 @@ class DcinsideListParser(HTMLParser):
         data_type = str(row["data_type"])
         row_classes = set(row["row_class_tokens"])
         subject_label = " ".join(row["subject_text_parts"]).strip().casefold()
+        normal_view_link_seen = bool(row["normal_view_link_seen"])
+        interview_auxiliary = (
+            bool(row["interview_signal_seen"])
+            and str(row["external_post_id"]) == ""
+            and data_type == ""
+            and row_classes == {"ub-content"}
+            and subject_label == "이슈"
+            and int(row["title_link_count"]) == 1
+        )
         explicitly_auxiliary = (
             data_type == "icon_survey"
             or "survey" in row_classes
             or bool(row["survey_signal_seen"])
+            or interview_auxiliary
             or subject_label in SURVEY_SUBJECT_LABELS
-        ) and not bool(row["normal_view_link_seen"])
+        ) and not normal_view_link_seen
         if explicitly_auxiliary:
             return
 

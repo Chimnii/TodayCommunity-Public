@@ -779,6 +779,76 @@ class CrawlCycleTests(unittest.TestCase):
             ["109", "107", "108", "106"],
         )
 
+    def test_unknown_non_numeric_row_keeps_posts_but_blocks_coverage(self) -> None:
+        unknown_row = """
+        <tr class="ub-content" data-no="" data-type="">
+          <td class="gall_num">-</td>
+          <td class="gall_subject">새 보조 유형</td>
+          <td class="gall_tit"><a href="/event/new-format">auxiliary</a></td>
+          <td class="gall_count">-</td>
+          <td class="gall_recommend">-</td>
+        </tr>
+        """
+        pages = {
+            1: page_html(
+                row(110, "2026-07-16 20:59:00", upvotes=4),
+                unknown_row,
+                row(109, "2026-07-16 20:58:00", upvotes=4),
+            )
+        }
+        settings = config()
+        cycle = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=runtime(settings),
+            fetcher=MappingFetcher(pages),
+            cycle_started_at=FIXED_NOW,
+        )
+
+        snapshot = cycle._fetch_page(1, HOT_PHASE)
+
+        self.assertEqual(
+            [post.external_post_id for post in snapshot.posts],
+            ["110", "109"],
+        )
+        self.assertFalse(snapshot.coverage_ordered)
+
+    def test_unknown_non_numeric_row_cannot_stop_hot_scan_early(self) -> None:
+        unknown_row = """
+        <tr class="ub-content" data-no="" data-type="">
+          <td class="gall_num">-</td>
+          <td class="gall_subject">새 보조 유형</td>
+          <td class="gall_tit"><a href="/event/new-format">auxiliary</a></td>
+        </tr>
+        """
+        pages = {
+            1: page_html(
+                row(110, "2026-07-16 20:59:00"),
+                unknown_row,
+                row(109, "2026-07-16 19:00:00", upvotes=4),
+            ),
+            2: page_html(
+                row(108, "2026-07-16 19:59:00"),
+                row(107, "2026-07-16 19:58:00"),
+            ),
+        }
+        fetcher = MappingFetcher(pages)
+        settings = config()
+        cycle = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=runtime(settings),
+            fetcher=fetcher,
+            cycle_started_at=FIXED_NOW,
+        )
+
+        summary = cycle._run_hot_scan()
+
+        self.assertEqual(fetcher.requested_pages, [1, 2])
+        self.assertTrue(summary.target_complete)
+        self.assertEqual(summary.stop_reason, "lookback_reached")
+        self.assertEqual(summary.matched_posts, 1)
+
     def test_manager_bump_is_collection_safe_but_not_coverage_ordered(self) -> None:
         pages = {
             1: page_html(

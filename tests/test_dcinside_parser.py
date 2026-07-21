@@ -97,6 +97,20 @@ LIVE_SURVEY_ROW = """
 """
 
 
+LIVE_INTERVIEW_ROW = """
+<tr class="ub-content " data-no="" data-type="">
+  <td class="gall_num">-</td>
+  <td class="gall_subject">이슈</td>
+  <td class="gall_tit ub-word">
+    <a href="http://gall.dcinside.com/list.php?id=dcinterview&amp;no=28989">
+      인터뷰
+    </a>
+  </td>
+  <td class="gall_date">26/07/21</td>
+</tr>
+"""
+
+
 def pagination(
     *,
     current: int = 1,
@@ -381,6 +395,7 @@ class DcinsideRowIntegrityTests(unittest.TestCase):
             [error.code for error in parser.diagnostics.errors],
         )
         self.assertFalse(parser.diagnostics.is_complete)
+        self.assertFalse(parser.diagnostics.is_collection_safe)
         self.assertFalse(parser.diagnostics.is_coverage_safe)
         return parser
 
@@ -543,6 +558,7 @@ class DcinsideRowIntegrityTests(unittest.TestCase):
             [error.code for error in parser.diagnostics.errors],
         )
         self.assertFalse(parser.diagnostics.is_complete)
+        self.assertTrue(parser.diagnostics.is_collection_safe)
         self.assertFalse(parser.diagnostics.is_coverage_safe)
 
     def test_explicit_survey_auxiliary_row_remains_excluded(self) -> None:
@@ -558,6 +574,87 @@ class DcinsideRowIntegrityTests(unittest.TestCase):
         self.assertEqual(parser.diagnostics.non_numeric_rows, 1)
         self.assertEqual(parser.diagnostics.errors, [])
         self.assertTrue(parser.diagnostics.is_coverage_safe)
+
+    def test_interview_auxiliary_row_is_excluded(self) -> None:
+        parser = self.parse_row(LIVE_INTERVIEW_ROW + regular_row("105"))
+
+        self.assertEqual(parser.diagnostics.non_numeric_rows, 1)
+        self.assertEqual(parser.diagnostics.errors, [])
+        self.assertEqual(
+            [post.external_post_id for post in parser.posts],
+            ["105"],
+        )
+        self.assertTrue(parser.diagnostics.is_coverage_safe)
+
+    def test_interview_auxiliary_row_alone_is_not_collection_evidence(self) -> None:
+        parser = self.parse_row(LIVE_INTERVIEW_ROW)
+
+        self.assertEqual(parser.diagnostics.errors, [])
+        self.assertFalse(parser.diagnostics.is_collection_safe)
+        self.assertFalse(parser.diagnostics.is_coverage_safe)
+
+    def test_interview_link_near_matches_block_coverage(self) -> None:
+        live_url = (
+            "http://gall.dcinside.com/list.php?"
+            "id=dcinterview&amp;no=28989"
+        )
+        near_matches = (
+            "https://gall.dcinside.com/list.php?id=dcinterview&amp;no=28989",
+            "http://gall.dcinside.com:444/list.php?id=dcinterview&amp;no=28989",
+            "http://user@gall.dcinside.com/list.php?id=dcinterview&amp;no=28989",
+            "http://gall.dcinside.com/LIST.php?id=dcinterview&amp;no=28989",
+            "http://gall.dcinside.com/list.php/?id=dcinterview&amp;no=28989",
+            "http://gall.dcinside.com/list.php?id=dcinterviews&amp;no=28989",
+            "http://gall.dcinside.com/list.php?id=dcinterview&amp;no=028989",
+            (
+                "http://gall.dcinside.com/list.php?"
+                "id=dcinterview&amp;no=28989&amp;kind=ordinary"
+            ),
+            "http://gall.dcinside.com/list.php?no=28989&amp;id=dcinterview",
+        )
+        for near_match_url in near_matches:
+            with self.subTest(near_match_url=near_match_url):
+                near_match = LIVE_INTERVIEW_ROW.replace(
+                    live_url,
+                    near_match_url,
+                )
+                parser = self.parse_row(near_match + regular_row("105"))
+
+                self.assertIn(
+                    "non_numeric_post_id",
+                    [error.code for error in parser.diagnostics.errors],
+                )
+                self.assertTrue(parser.diagnostics.is_collection_safe)
+                self.assertFalse(parser.diagnostics.is_coverage_safe)
+
+    def test_interview_link_does_not_override_post_like_row_shape(self) -> None:
+        post_like = LIVE_INTERVIEW_ROW.replace(
+            '<tr class="ub-content " data-no="" data-type="">',
+            '<tr class="ub-content us-post" data-no="post-105" data-type="icon_txt">',
+        )
+        parser = self.parse_row(post_like + regular_row("104"))
+
+        self.assertIn(
+            "non_numeric_post_id",
+            [error.code for error in parser.diagnostics.errors],
+        )
+        self.assertTrue(parser.diagnostics.is_collection_safe)
+        self.assertFalse(parser.diagnostics.is_coverage_safe)
+
+    def test_interview_row_with_an_extra_empty_link_blocks_coverage(self) -> None:
+        extra_link = LIVE_INTERVIEW_ROW.replace(
+            "</a>",
+            "</a><a>unknown</a>",
+            1,
+        )
+        parser = self.parse_row(extra_link + regular_row("105"))
+
+        self.assertIn(
+            "non_numeric_post_id",
+            [error.code for error in parser.diagnostics.errors],
+        )
+        self.assertTrue(parser.diagnostics.is_collection_safe)
+        self.assertFalse(parser.diagnostics.is_coverage_safe)
 
     def test_numeric_post_with_survey_text_subject_is_not_excluded(self) -> None:
         parser = self.parse_row(regular_row("105", subject="설문"))
@@ -580,21 +677,28 @@ class DcinsideRowIntegrityTests(unittest.TestCase):
             "non_numeric_post_id",
             [error.code for error in parser.diagnostics.errors],
         )
+        self.assertTrue(parser.diagnostics.is_collection_safe)
         self.assertFalse(parser.diagnostics.is_coverage_safe)
 
-    def test_approximate_survey_subject_is_not_excluded(self) -> None:
-        suspicious_row = """
+    def test_unknown_non_numeric_row_allows_collection_but_blocks_coverage(self) -> None:
+        unknown_row = """
         <tr class="ub-content" data-no="" data-type="">
-          <td class="gall_subject">\uc124\ubb38\uc870\uc0ac</td>
-          <td class="gall_tit"><a href="javascript:;">title</a></td>
+          <td class="gall_subject">새 보조 유형</td>
+          <td class="gall_tit"><a href="/event/new-format">title</a></td>
         </tr>
         """
-        parser = self.parse_row(suspicious_row + regular_row("105"))
+        parser = self.parse_row(unknown_row + regular_row("105"))
 
+        self.assertEqual(parser.diagnostics.non_numeric_rows, 1)
         self.assertIn(
             "non_numeric_post_id",
             [error.code for error in parser.diagnostics.errors],
         )
+        self.assertEqual(
+            [post.external_post_id for post in parser.posts],
+            ["105"],
+        )
+        self.assertTrue(parser.diagnostics.is_collection_safe)
         self.assertFalse(parser.diagnostics.is_coverage_safe)
 
     def test_post_link_must_match_origin_board_and_row_id(self) -> None:
