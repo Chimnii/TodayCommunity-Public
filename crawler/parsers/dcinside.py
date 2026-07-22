@@ -862,8 +862,10 @@ class DcinsideListParser(HTMLParser):
                 "Candidate row must have exactly one creation-date cell.",
             )
 
+        # DCInside permits posts whose title is only whitespace (for example,
+        # ``&nbsp;``). The validated numeric row ID and canonical post link are
+        # the identity evidence; an empty title remains valid source data.
         required_values = (
-            ("missing_title", "title", title),
             ("missing_datetime", "creation datetime", created_at_title or created_at_raw),
         )
         for code, label, value in required_values:

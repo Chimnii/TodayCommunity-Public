@@ -462,6 +462,25 @@ class DcinsideRowIntegrityTests(unittest.TestCase):
         self.assertEqual(parser.posts[0].subject, "")
         self.assertTrue(parser.diagnostics.is_coverage_safe)
 
+    def test_title_may_be_empty_when_numeric_id_and_post_link_are_valid(self) -> None:
+        parser = self.parse_row(
+            regular_row(
+                "105",
+                title='<em class="icon_img icon_pic"></em>&nbsp;',
+            )
+        )
+
+        self.assertEqual(parser.posts[0].external_post_id, "105")
+        self.assertEqual(parser.posts[0].title, "")
+        self.assertEqual(
+            parser.posts[0].post_url,
+            "https://gall.dcinside.com/mgallery/board/view/"
+            "?id=thesingularity&no=105&page=1",
+        )
+        self.assertEqual(parser.diagnostics.errors, [])
+        self.assertTrue(parser.diagnostics.is_collection_safe)
+        self.assertTrue(parser.diagnostics.is_coverage_safe)
+
     def test_recommendation_cell_must_exist_exactly_once(self) -> None:
         fixtures = (
             ("missing_recommend_cell", ""),

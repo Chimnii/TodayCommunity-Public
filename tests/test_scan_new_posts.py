@@ -280,6 +280,46 @@ class BatchedPostUpsertTests(unittest.TestCase):
         self.assertNotIn("subject", update_clause)
         self.assertIn("일반", params)
 
+    def test_blank_title_is_persisted_with_canonical_identity(self) -> None:
+        client = SqliteClient()
+        target = get_target("dcinside-agent-stack")
+        checked_at = "2026-07-22T09:08:48+00:00"
+        post_url = (
+            "https://gall.dcinside.com/mgallery/board/view/"
+            "?id=agent_stack&no=7905&page=3"
+        )
+        upsert_source(client, target, checked_at)
+
+        upsert_posts(
+            client,
+            target,
+            [
+                {
+                    **sample_post(7905),
+                    "post_url": post_url,
+                    "title": "",
+                }
+            ],
+            checked_at,
+        )
+
+        self.assertEqual(
+            client.query(
+                """
+                SELECT canonical_post_key, external_post_id, post_url, title
+                FROM posts
+                """
+            ),
+            [
+                {
+                    "canonical_post_key": "dcinside:agent_stack:7905",
+                    "external_post_id": "7905",
+                    "post_url": post_url,
+                    "title": "",
+                }
+            ],
+        )
+
     def test_empty_post_list_issues_no_query(self) -> None:
         client = RecordingClient()
 

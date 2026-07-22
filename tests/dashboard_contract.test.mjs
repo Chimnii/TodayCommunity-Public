@@ -157,6 +157,7 @@ test("shows a stable collection summary without volatile numeric thresholds", ()
 test("renders untrusted archive data without HTML injection", () => {
   assert.doesNotMatch(app, /\.innerHTML\s*=/);
   assert.match(app, /document\.createElement\("a"\)/);
+  assert.match(app, /String\(post\.title \|\| "제목 없음"\)/);
   assert.match(app, /titleText\.textContent = title/);
   assert.match(app, /content\.rel = "noreferrer noopener"/);
   assert.match(app, /getSafeHttpUrl/);

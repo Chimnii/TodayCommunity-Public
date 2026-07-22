@@ -45,11 +45,18 @@ from crawler.targets import get_target
 FIXED_NOW = datetime(2026, 7, 16, 12, 0, 0, tzinfo=timezone.utc)
 
 
-def row(post_id: int, created_at_kst: str, upvotes: int = 0, comments: int = 0) -> str:
+def row(
+    post_id: int,
+    created_at_kst: str,
+    upvotes: int = 0,
+    comments: int = 0,
+    title_markup: Optional[str] = None,
+) -> str:
+    title = title_markup if title_markup is not None else f"post {post_id}"
     return f"""
     <tr class="ub-content" data-no="{post_id}" data-type="icon_txt">
       <td class="gall_subject">일반</td>
-      <td class="gall_tit"><a href="/mgallery/board/view/?id=thesingularity&amp;no={post_id}">post {post_id}</a><span class="reply_num">[{comments}]</span></td>
+      <td class="gall_tit"><a href="/mgallery/board/view/?id=thesingularity&amp;no={post_id}">{title}</a><span class="reply_num">[{comments}]</span></td>
       <td class="gall_date" title="{created_at_kst}">07.16</td>
       <td class="gall_recommend">{upvotes}</td>
     </tr>
@@ -778,6 +785,34 @@ class CrawlCycleTests(unittest.TestCase):
             [post.external_post_id for post in snapshot.posts],
             ["109", "107", "108", "106"],
         )
+
+    def test_blank_title_post_remains_fetchable_with_valid_id_and_link(self) -> None:
+        pages = {
+            1: page_html(
+                row(
+                    109,
+                    "2026-07-16 20:59:09",
+                    title_markup='<em class="icon_img icon_pic"></em>&nbsp;',
+                ),
+                row(108, "2026-07-16 20:59:08"),
+            )
+        }
+        settings = config()
+        cycle = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=runtime(settings),
+            fetcher=MappingFetcher(pages),
+            cycle_started_at=FIXED_NOW,
+        )
+
+        snapshot = cycle._fetch_page(1, HOT_PHASE)
+
+        self.assertEqual(
+            [(post.external_post_id, post.title) for post in snapshot.posts],
+            [("109", ""), ("108", "post 108")],
+        )
+        self.assertTrue(snapshot.coverage_ordered)
 
     def test_unknown_non_numeric_row_keeps_posts_but_blocks_coverage(self) -> None:
         unknown_row = """
