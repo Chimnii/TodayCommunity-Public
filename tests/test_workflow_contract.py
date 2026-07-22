@@ -132,36 +132,11 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         )
         self.assertIn("check_schema", self.hot)
 
-    def test_hot_workflow_has_a_secretless_fmkorea_browser_smoke(self) -> None:
-        self.assertRegex(
-            self.hot,
-            r"(?ms)^\s{6}fmkorea_browser_smoke:\s*$.*?"
-            r"^\s{8}default: false\s*$.*?^\s{8}type: boolean\s*$",
-        )
-        self.assertIn(
-            "if: ${{ inputs.fmkorea_browser_smoke != true }}",
-            self.hot,
-        )
-        self.assertIn(
-            "if: ${{ inputs.fmkorea_browser_smoke == true }}",
-            self.hot,
-        )
-        smoke = self.hot.split("  fm-browser-smoke:\n", 1)[1]
-        self.assertIn(CHECKOUT_PIN, smoke)
-        self.assertIn(SETUP_PYTHON_PIN, smoke)
-        self.assertIn("timeout-minutes: 10", smoke)
-        self.assertIn("crawler/requirements-fmkorea-browser.txt", smoke)
-        self.assertIn("command -v google-chrome", smoke)
-        self.assertIn('TC_PERSIST: "0"', smoke)
-        self.assertIn('TC_FMKOREA_HEADLESS: "0"', smoke)
-        self.assertIn('TC_FMKOREA_REQUEST_INTERVAL_SECONDS: "10"', smoke)
-        self.assertIn("command -v xvfb-run", smoke)
-        self.assertIn("xvfb-run -a python", smoke)
-        self.assertIn("--mode hot --headed --max-pages-per-target 1", smoke)
-        self.assertNotIn("environment:", smoke)
-        self.assertNotIn("secrets.", smoke)
-        self.assertNotIn("--persist", smoke)
-        self.assertNotIn("upload-artifact", smoke)
+    def test_hosted_hot_remains_dc_only_after_fmkorea_browser_block(self) -> None:
+        self.assertNotIn("fmkorea_browser_smoke", self.hot)
+        self.assertNotIn("run_fmkorea_sources", self.hot)
+        self.assertNotIn("requirements-fmkorea-browser", self.hot)
+        self.assertNotIn("playwright", self.hot.lower())
 
     def test_backfill_dispatch_and_budget_contract(self) -> None:
         self.assertIn("workflow_dispatch:", self.backfill)
@@ -208,16 +183,6 @@ class CrawlWorkflowContractTests(unittest.TestCase):
             "An active Hot or Backfill run already exists",
             script,
         )
-        self.assertIn("[switch]$FmkoreaBrowserSmoke", script)
-        self.assertIn(
-            'fmkorea_browser_smoke = "true"',
-            script,
-        )
-        self.assertIn(
-            "FMKorea browser smoke cannot be combined with DC Hot overrides.",
-            script,
-        )
-
     def test_scheduler_deploys_only_relevant_main_changes_after_verification(self) -> None:
         self.assertIn("workflow_dispatch:", self.deploy_scheduler)
         self.assertRegex(self.deploy_scheduler, r"(?m)^  push:\s*$")
