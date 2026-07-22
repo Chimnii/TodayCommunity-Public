@@ -128,9 +128,13 @@ jobs:
       - name: Run secretless FMKorea browser smoke
         env:
           TC_PERSIST: "0"
-          TC_FMKOREA_HEADLESS: "1"
+          TC_FMKOREA_HEADLESS: "0"
           TC_FMKOREA_STARTUP_TIMEOUT_SECONDS: "30"
           TC_FMKOREA_REQUEST_INTERVAL_SECONDS: "10"
-        run: >-
-          python -m crawler.jobs.run_fmkorea_sources
-          --mode hot --headless --max-pages-per-target 1
+        run: |
+          if ! command -v xvfb-run >/dev/null 2>&1; then
+            echo "xvfb-run was not found on this runner." >&2
+            exit 1
+          fi
+          xvfb-run -a python -m crawler.jobs.run_fmkorea_sources \
+            --mode hot --headed --max-pages-per-target 1

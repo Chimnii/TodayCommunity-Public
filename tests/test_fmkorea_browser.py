@@ -19,9 +19,11 @@ from crawler.fmkorea_browser import (
     FmkoreaChromeSession,
     HostSessionLock,
     assert_cdp_port_available,
+    is_loopback_port_listening,
     is_cdp_endpoint_ready,
     prepare_dedicated_profile,
     validate_fmkorea_url,
+    wait_for_cdp_listener_to_stop,
 )
 from crawler.jobs.scan_new_posts import (
     CrawlBlockedError,
@@ -248,6 +250,33 @@ class DedicatedProfileTests(unittest.TestCase):
                 assert_cdp_port_available(port)
         finally:
             listener.close()
+
+    def test_cleanup_listener_probe_distinguishes_listening_from_released(self) -> None:
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+        try:
+            self.assertTrue(is_loopback_port_listening(port))
+        finally:
+            listener.close()
+        self.assertFalse(is_loopback_port_listening(port))
+
+    def test_cleanup_listener_wait_retries_until_release(self) -> None:
+        clock = FakeClock()
+        with patch(
+            "crawler.fmkorea_browser.is_loopback_port_listening",
+            side_effect=[True, True, False],
+        ):
+            stopped = wait_for_cdp_listener_to_stop(
+                39224,
+                timeout_seconds=1.0,
+                monotonic=clock.monotonic,
+                sleep=clock.sleep,
+            )
+
+        self.assertTrue(stopped)
+        self.assertEqual(clock.sleeps, [0.1, 0.1])
 
 
 class CdpReadinessTests(unittest.TestCase):

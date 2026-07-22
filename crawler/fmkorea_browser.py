@@ -327,6 +327,32 @@ def assert_cdp_port_available(port: int) -> None:
         probe.close()
 
 
+def is_loopback_port_listening(port: int) -> bool:
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.settimeout(0.25)
+    try:
+        return probe.connect_ex(("127.0.0.1", port)) == 0
+    except OSError:
+        return False
+    finally:
+        probe.close()
+
+
+def wait_for_cdp_listener_to_stop(
+    port: int,
+    *,
+    timeout_seconds: float = 3.0,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bool:
+    deadline = monotonic() + timeout_seconds
+    while is_loopback_port_listening(port):
+        if monotonic() >= deadline:
+            return False
+        sleep(0.1)
+    return True
+
+
 def _posix_process_group_exists(process_group_id: int) -> bool:
     try:
         os.killpg(process_group_id, 0)
@@ -583,11 +609,14 @@ class FmkoreaChromeSession:
                 )
         if process is not None:
             self._stop_owned_process_tree(process)
-            try:
-                assert_cdp_port_available(self.config.cdp_port)
-            except FmkoreaBrowserStartupError as exc:
+            if not wait_for_cdp_listener_to_stop(
+                self.config.cdp_port,
+                monotonic=self._monotonic,
+                sleep=self._sleep,
+            ):
                 self.cleanup_warnings.append(
-                    f"Chrome CDP port remained occupied after cleanup: {exc}"
+                    "Chrome CDP listener remained active after cleanup "
+                    f"(port={self.config.cdp_port})."
                 )
         if host_lock is not None:
             try:
