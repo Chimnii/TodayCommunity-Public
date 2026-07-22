@@ -356,6 +356,12 @@ test("combines multiple collection sources under one archive", async () => {
       board_name: "포텐 터짐 '뮌헨' 검색",
     },
     {
+      source_key: "fmkorea-best-bayern-search",
+      archive_key: target,
+      site_name: "fmkorea",
+      board_name: "포텐 터짐 '바이에른' 검색",
+    },
+    {
       source_key: "fmkorea-bayern-board",
       archive_key: target,
       site_name: "fmkorea",
@@ -368,8 +374,8 @@ test("combines multiple collection sources under one archive", async () => {
     posts: makeRows(2),
     runs: [
       {
-        source_key: sources[1].source_key,
-        board_name: sources[1].board_name,
+        source_key: sources[2].source_key,
+        board_name: sources[2].board_name,
         status: "completed",
         had_error: 0,
       },

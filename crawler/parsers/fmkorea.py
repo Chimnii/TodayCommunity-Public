@@ -460,6 +460,7 @@ class _FmkoreaParserBase(HTMLParser):
         self._row_depth = 0
         self._eof_checked = False
         self._navigation_container_tag = ""
+        self._navigation_container_kind = ""
         self._navigation_container_depth = 0
         self._navigation_anchor: Optional[Dict[str, object]] = None
         self._navigation_current_tag = ""
@@ -484,6 +485,7 @@ class _FmkoreaParserBase(HTMLParser):
             )
             self._navigation_container_depth = 0
             self._navigation_container_tag = ""
+            self._navigation_container_kind = ""
         if self._navigation_anchor is not None:
             self.navigation.errors.append(
                 FmkoreaNavigationError(
@@ -534,6 +536,7 @@ class _FmkoreaParserBase(HTMLParser):
             "date_parts": [],
             "date_comments": [],
             "upvote_parts": [],
+            "upvote_cell_observations": 0,
             "comment_parts": [],
             "comment_observations": 0,
         }
@@ -545,10 +548,15 @@ class _FmkoreaParserBase(HTMLParser):
     ) -> bool:
         tokens = _class_tokens(attrs)
         if not self._navigation_container_depth:
-            if tag not in {"div", "nav"} or "pagination" not in tokens:
+            if tag in {"div", "nav"} and "pagination" in tokens:
+                container_kind = "legacy"
+            elif tag == "form" and tokens == {"bd_pg", "clear"}:
+                container_kind = "current"
+            else:
                 return False
             self.navigation.container_count += 1
             self._navigation_container_tag = tag
+            self._navigation_container_kind = container_kind
             self._navigation_container_depth = 1
             return True
 
@@ -566,11 +574,27 @@ class _FmkoreaParserBase(HTMLParser):
                 "href": attrs.get("href", "").strip(),
                 "parts": [],
             }
-            if "current" in tokens or "active" in tokens:
+            is_current = (
+                self._navigation_container_kind == "current"
+                and tokens == {"this"}
+            ) or (
+                self._navigation_container_kind == "legacy"
+                and ("current" in tokens or "active" in tokens)
+            )
+            if is_current:
+                if self._navigation_current_tag:
+                    self.navigation.errors.append(
+                        FmkoreaNavigationError(
+                            "ambiguous_current_page",
+                            "Pagination exposes more than one current-page marker.",
+                        )
+                    )
                 self._navigation_current_tag = "a"
                 self._navigation_current_parts = []
-        elif tag in {"strong", "em", "span"} and (
-            tag == "strong" or "current" in tokens or "active" in tokens
+        elif (
+            self._navigation_container_kind == "legacy"
+            and tag in {"strong", "em", "span"}
+            and (tag == "strong" or "current" in tokens or "active" in tokens)
         ):
             if self._navigation_current_tag:
                 self.navigation.errors.append(
@@ -609,6 +633,7 @@ class _FmkoreaParserBase(HTMLParser):
             if self._navigation_container_depth == 0:
                 self.navigation.closed_container_count += 1
                 self._navigation_container_tag = ""
+                self._navigation_container_kind = ""
         return True
 
     def _record_current_page(self) -> None:
@@ -633,6 +658,13 @@ class _FmkoreaParserBase(HTMLParser):
         if not page_values and text_page == 1:
             page_values = ["1"]
         if not page_values:
+            if text_page is not None:
+                self.navigation.errors.append(
+                    FmkoreaNavigationError(
+                        "invalid_pagination_page",
+                        "Numeric pagination links after page 1 must include a page parameter.",
+                    )
+                )
             return
         if _origin(resolved.geturl()) != _origin(self.base_url):
             self.navigation.errors.append(
@@ -774,10 +806,7 @@ class _FmkoreaParserBase(HTMLParser):
             return None
 
         try:
-            upvotes = parse_count(
-                _clean_text(list(row["upvote_parts"])),
-                allow_negative=True,
-            )
+            upvotes = self._upvote_count(row)
             comments = self._comment_count(row)
             self._validate_datetime_evidence(
                 created_at_raw,
@@ -812,6 +841,12 @@ class _FmkoreaParserBase(HTMLParser):
             upvotes=upvotes,
             comments=comments,
             qualifies_by=qualifies_by,
+        )
+
+    def _upvote_count(self, row: Dict[str, object]) -> int:
+        return parse_count(
+            _clean_text(list(row["upvote_parts"])),
+            allow_negative=True,
         )
 
     def _comment_count(self, row: Dict[str, object]) -> int:
@@ -1025,6 +1060,7 @@ class FmkoreaBoardParser(_FmkoreaParserBase):
                 self._cell = "date"
             elif "m_no_voted" in tokens:
                 self._cell = "upvotes"
+                row["upvote_cell_observations"] += 1
             else:
                 self._cell = ""
         elif tag == "a" and self._cell == "title" and "hx" in tokens:
@@ -1080,6 +1116,16 @@ class FmkoreaBoardParser(_FmkoreaParserBase):
 
     def _comments_are_bracketed(self) -> bool:
         return False
+
+    def _upvote_count(self, row: Dict[str, object]) -> int:
+        if int(row["upvote_cell_observations"]) != 1:
+            raise ValueError(
+                "Board candidate must contain exactly one recommendation cell."
+            )
+        value = _clean_text(list(row["upvote_parts"]))
+        if not value:
+            return 0
+        return parse_count(value, allow_negative=True)
 
     def _comment_count(self, row: Dict[str, object]) -> int:
         observations = int(row["comment_observations"])

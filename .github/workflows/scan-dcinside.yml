@@ -13,6 +13,11 @@ on:
         required: false
         default: 3
         type: number
+      fmkorea_browser_smoke:
+        description: "Run a secretless one-page FMKorea Chrome smoke instead of DC Hot"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -23,6 +28,7 @@ concurrency:
 
 jobs:
   hot:
+    if: ${{ inputs.fmkorea_browser_smoke != true }}
     runs-on: ubuntu-latest
     environment: collection
     timeout-minutes: 30
@@ -88,3 +94,43 @@ jobs:
           TC_BLOCK_COOLDOWN_HOURS: "6"
           TC_TRANSIENT_FETCH_ATTEMPTS: "2"
         run: python -m crawler.jobs.run_all_sources --mode hot --persist
+
+  fm-browser-smoke:
+    if: ${{ inputs.fmkorea_browser_smoke == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.11"
+
+      - name: Install Playwright transport only
+        run: python -m pip install --disable-pip-version-check -r crawler/requirements-fmkorea-browser.txt
+
+      - name: Locate installed Google Chrome
+        shell: bash
+        run: |
+          chrome_path="$(command -v google-chrome || command -v google-chrome-stable || true)"
+          if [[ -z "$chrome_path" || ! -x "$chrome_path" ]]; then
+            echo "Installed Google Chrome was not found on this runner." >&2
+            exit 1
+          fi
+          "$chrome_path" --version
+          echo "TC_FMKOREA_CHROME_PATH=$chrome_path" >> "$GITHUB_ENV"
+          echo "TC_FMKOREA_PROFILE_DIR=$RUNNER_TEMP/todaycommunity-fmkorea-profile" >> "$GITHUB_ENV"
+
+      - name: Run secretless FMKorea browser smoke
+        env:
+          TC_PERSIST: "0"
+          TC_FMKOREA_HEADLESS: "1"
+          TC_FMKOREA_STARTUP_TIMEOUT_SECONDS: "30"
+          TC_FMKOREA_REQUEST_INTERVAL_SECONDS: "10"
+        run: >-
+          python -m crawler.jobs.run_fmkorea_sources
+          --mode hot --headless --max-pages-per-target 1

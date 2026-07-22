@@ -16,6 +16,11 @@ from crawler.parsers.fmkorea import (
 KST = timezone(timedelta(hours=9))
 NOW = datetime(2026, 7, 22, 0, 39, tzinfo=KST)
 BASE = "https://www.fmkorea.com/index.php?mid=best"
+SEARCH_BASE = BASE + "&search_keyword=munich&search_target=title_content"
+SEARCH_HREF = (
+    "/index.php?mid=best&amp;search_keyword=munich"
+    "&amp;search_target=title_content"
+)
 
 
 def search_row(
@@ -74,6 +79,7 @@ def board_row(
     category: str = "바이에른",
     views: str = "9,999",
     upvotes: str = "14",
+    vote_cells: int = 1,
     comments: str | None = "[10]",
     date: str = "00:37",
     close: bool = True,
@@ -82,6 +88,7 @@ def board_row(
     comment_html = (
         f'<a class="replyNum">{comments}</a>' if comments is not None else ""
     )
+    vote_html = f'<td class="m_no m_no_voted">{upvotes}</td>' * vote_cells
     ending = "</tr>" if close else ""
     return (
         f'<tr data-document-srl="{document_id}">'
@@ -91,8 +98,27 @@ def board_row(
         "</td>"
         f'<td class="time">{date}</td>'
         f'<td class="m_no">{views}</td>'
-        f'<td class="m_no m_no_voted">{upvotes}</td>'
+        f"{vote_html}"
         f"{ending}"
+    )
+
+
+def current_pagination(current: int, *, form_classes: str = "bd_pg clear") -> str:
+    def href(page: int) -> str:
+        page_query = "" if page == 1 else f"&amp;page={page}"
+        return SEARCH_HREF + page_query
+
+    page_links = []
+    for page in (1, 2, 3):
+        marker = ' class="this"' if page == current else ""
+        page_links.append(f'<a{marker} href="{href(page)}">{page}</a>')
+    return (
+        f'<form class="{form_classes}"><fieldset>'
+        '<strong class="direction"><i class="fa fa-angle-left"></i></strong>'
+        + "".join(page_links)
+        + f'<a class="direction" href="{href(11)}">'
+        '<i class="fa fa-angle-right"></i></a>'
+        "</fieldset></form>"
     )
 
 
@@ -297,6 +323,161 @@ class FmkoreaSearchParserTests(unittest.TestCase):
         self.assertFalse(parser.navigation.is_valid)
         self.assertEqual(parser.navigation.current_page, 1)
 
+    def test_current_pagination_accepts_observed_first_page_form(self) -> None:
+        parser = FmkoreaSearchParser(
+            base_url=SEARCH_BASE,
+            now=NOW,
+            min_upvotes=0,
+            min_comments=0,
+            requested_page=1,
+        )
+        parser.feed(current_pagination(1))
+        parser.close()
+
+        self.assertTrue(parser.navigation.is_valid)
+        self.assertEqual(parser.navigation.current_page, 1)
+        self.assertEqual(parser.navigation.linked_pages, [1, 2, 3, 11])
+        self.assertTrue(parser.navigation.has_later_page)
+
+    def test_current_pagination_accepts_observed_later_page_form(self) -> None:
+        parser = FmkoreaSearchParser(
+            base_url=SEARCH_BASE,
+            now=NOW,
+            min_upvotes=0,
+            min_comments=0,
+            requested_page=2,
+        )
+        parser.feed(current_pagination(2))
+        parser.close()
+
+        self.assertTrue(parser.navigation.is_valid)
+        self.assertEqual(parser.navigation.current_page, 2)
+        self.assertEqual(parser.navigation.linked_pages, [1, 2, 3, 11])
+
+    def test_current_pagination_rejects_partial_or_wrong_form_classes(self) -> None:
+        for form_classes in (
+            "bd_pg",
+            "clear",
+            "bd_pg clearfix",
+            "bd_pg clear unexpected",
+        ):
+            with self.subTest(form_classes=form_classes):
+                parser = FmkoreaSearchParser(
+                    base_url=SEARCH_BASE,
+                    now=NOW,
+                    min_upvotes=0,
+                    min_comments=0,
+                    requested_page=1,
+                )
+                parser.feed(current_pagination(1, form_classes=form_classes))
+                parser.close()
+
+                self.assertFalse(parser.navigation.is_valid)
+                self.assertEqual(parser.navigation.container_count, 0)
+                self.assertIsNone(parser.navigation.current_page)
+
+    def test_current_pagination_rejects_ambiguous_current_markers(self) -> None:
+        parser = FmkoreaSearchParser(
+            base_url=SEARCH_BASE,
+            now=NOW,
+            min_upvotes=0,
+            min_comments=0,
+            requested_page=1,
+        )
+        parser.feed(
+            current_pagination(1).replace(
+                f'<a href="{SEARCH_HREF}&amp;page=2">2</a>',
+                f'<a class="this" href="{SEARCH_HREF}&amp;page=2">2</a>',
+            )
+        )
+        parser.close()
+
+        self.assertFalse(parser.navigation.is_valid)
+        self.assertIsNone(parser.navigation.current_page)
+
+    def test_current_pagination_rejects_requested_page_mismatch(self) -> None:
+        parser = FmkoreaSearchParser(
+            base_url=SEARCH_BASE,
+            now=NOW,
+            min_upvotes=0,
+            min_comments=0,
+            requested_page=2,
+        )
+        parser.feed(current_pagination(1))
+        parser.close()
+
+        self.assertFalse(parser.navigation.is_valid)
+        self.assertEqual(parser.navigation.current_page, 1)
+
+    def test_current_page_two_requires_page_query_in_its_href(self) -> None:
+        parser = FmkoreaSearchParser(
+            base_url=SEARCH_BASE,
+            now=NOW,
+            min_upvotes=0,
+            min_comments=0,
+            requested_page=2,
+        )
+        parser.feed(
+            '<form class="bd_pg clear"><fieldset>'
+            f'<a href="{SEARCH_HREF}">1</a>'
+            f'<a class="this" href="{SEARCH_HREF}">2</a>'
+            "</fieldset></form>"
+        )
+        parser.close()
+
+        self.assertFalse(parser.navigation.is_valid)
+        self.assertEqual(parser.navigation.current_page, 2)
+        self.assertFalse(parser.navigation.can_prove_last_page)
+        self.assertIn(
+            "invalid_pagination_page",
+            {error.code for error in parser.navigation.errors},
+        )
+
+    def test_numeric_page_two_link_requires_page_query(self) -> None:
+        parser = FmkoreaSearchParser(
+            base_url=SEARCH_BASE,
+            now=NOW,
+            min_upvotes=0,
+            min_comments=0,
+            requested_page=1,
+        )
+        parser.feed(
+            '<form class="bd_pg clear"><fieldset>'
+            f'<a class="this" href="{SEARCH_HREF}">1</a>'
+            f'<a href="{SEARCH_HREF}">2</a>'
+            "</fieldset></form>"
+        )
+        parser.close()
+
+        self.assertFalse(parser.navigation.is_valid)
+        self.assertEqual(parser.navigation.current_page, 1)
+        self.assertFalse(parser.navigation.can_prove_last_page)
+        self.assertIn(
+            "invalid_pagination_page",
+            {error.code for error in parser.navigation.errors},
+        )
+
+    def test_non_numeric_link_without_page_query_remains_ignorable(self) -> None:
+        parser = FmkoreaSearchParser(
+            base_url=SEARCH_BASE,
+            now=NOW,
+            min_upvotes=0,
+            min_comments=0,
+            requested_page=1,
+        )
+        parser.feed(
+            '<form class="bd_pg clear"><fieldset>'
+            f'<a class="this" href="{SEARCH_HREF}">1</a>'
+            f'<a class="direction" href="{SEARCH_HREF}">'
+            '<i class="fa fa-angle-right"></i></a>'
+            "</fieldset></form>"
+        )
+        parser.close()
+
+        self.assertTrue(parser.navigation.is_valid)
+        self.assertEqual(parser.navigation.linked_pages, [1])
+        self.assertTrue(parser.navigation.can_prove_last_page)
+
 
 class FmkoreaBoardParserTests(unittest.TestCase):
     def parse(self, html: str) -> FmkoreaBoardParser:
@@ -339,6 +520,32 @@ class FmkoreaBoardParserTests(unittest.TestCase):
         self.assertEqual(parser.posts[0].external_post_id, "987654")
         self.assertEqual(parser.posts[0].comments, 0)
         self.assertEqual(parser.posts[0].upvotes, 14)
+
+    def test_blank_board_recommendation_cell_means_zero(self) -> None:
+        parser = self.parse(board_row(upvotes=""))
+
+        self.assertTrue(parser.diagnostics.is_collection_safe)
+        self.assertEqual(parser.posts[0].upvotes, 0)
+
+    def test_missing_board_recommendation_cell_fails_closed(self) -> None:
+        parser = self.parse(board_row(vote_cells=0))
+
+        self.assertFalse(parser.diagnostics.is_collection_safe)
+        self.assertEqual(parser.diagnostics.parsed_rows, 0)
+        self.assertIn(
+            "invalid_candidate_metric",
+            {error.code for error in parser.diagnostics.errors},
+        )
+
+    def test_duplicate_board_recommendation_cells_fail_closed(self) -> None:
+        parser = self.parse(board_row(vote_cells=2))
+
+        self.assertFalse(parser.diagnostics.is_collection_safe)
+        self.assertEqual(parser.diagnostics.parsed_rows, 0)
+        self.assertIn(
+            "invalid_candidate_metric",
+            {error.code for error in parser.diagnostics.errors},
+        )
 
     def test_board_weighted_threshold_is_exact(self) -> None:
         parser = self.parse(board_row(upvotes="14", comments="[10]"))

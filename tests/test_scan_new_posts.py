@@ -356,17 +356,18 @@ class BatchedPostUpsertTests(unittest.TestCase):
         self.assertEqual([len(params) for _, params in select_calls], [100, 2])
         self.assertEqual(existing_post_lookup_query_count(len(posts)), 2)
 
-    def test_shared_archive_deduplicates_by_canonical_post_key(self) -> None:
+    def test_three_shared_sources_deduplicate_by_canonical_post_key(self) -> None:
         client = SqliteClient()
-        search_target = get_target("fmkorea-best-munich-search")
+        munich_search = get_target("fmkorea-best-munich-search")
+        bayern_search = get_target("fmkorea-best-bayern-search")
         board_target = get_target("fmkorea-bayern-board")
         checked_at = "2026-07-22T00:00:00+00:00"
-        upsert_source(client, search_target, checked_at)
-        upsert_source(client, board_target, checked_at)
+        for target in (munich_search, bayern_search, board_target):
+            upsert_source(client, target, checked_at)
 
         upsert_posts(
             client,
-            search_target,
+            munich_search,
             [
                 {
                     **sample_post(1234),
@@ -378,6 +379,21 @@ class BatchedPostUpsertTests(unittest.TestCase):
                 }
             ],
             checked_at,
+        )
+        upsert_posts(
+            client,
+            bayern_search,
+            [
+                {
+                    **sample_post(1234),
+                    "post_url": "https://www.fmkorea.com/1234?from=bayern-search",
+                    "subject": "포텐 바이에른 검색",
+                    "title": "second title",
+                    "upvotes": 120,
+                    "comments": 25,
+                }
+            ],
+            "2026-07-22T00:30:00+00:00",
         )
         upsert_posts(
             client,
@@ -403,7 +419,7 @@ class BatchedPostUpsertTests(unittest.TestCase):
             """
         )
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["source_key"], search_target.key)
+        self.assertEqual(rows[0]["source_key"], munich_search.key)
         self.assertEqual(rows[0]["archive_key"], "fmkorea-munich")
         self.assertEqual(rows[0]["canonical_post_key"], "fmkorea:1234")
         self.assertEqual(rows[0]["subject"], "포텐")

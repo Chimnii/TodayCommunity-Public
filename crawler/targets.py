@@ -89,6 +89,7 @@ TARGETS = {
         collector_kind="dcinside-board",
         origin_key="dcinside",
         canonical_namespace="dcinside:thesingularity",
+        hot_lookback_minutes=180.0,
         hot_max_seconds=180.0,
         backfill_max_seconds=600.0,
     ),
@@ -135,12 +136,46 @@ TARGETS = {
             "https://www.fmkorea.com/search.php?mid=best&"
             "search_keyword=%EB%AE%8C%ED%97%A8&search_target=title_content"
         ),
-        hot_lookback_minutes=1440.0,
+        hot_lookback_minutes=180.0,
         hot_max_seconds=180.0,
-        hot_max_pages=20,
+        hot_max_pages=30,
         backfill_max_seconds=360.0,
         backfill_max_pages=40,
-        request_interval_seconds=15.0,
+        request_interval_seconds=10.0,
+    ),
+    "fmkorea-best-bayern-search": TargetBoard(
+        key="fmkorea-best-bayern-search",
+        site_name="fmkorea",
+        board_name="포텐 터짐 '바이에른' 검색",
+        board_url=(
+            "https://www.fmkorea.com/search.php?mid=best&"
+            "search_keyword=%EB%B0%94%EC%9D%B4%EC%97%90%EB%A5%B8&"
+            "search_target=title_content"
+        ),
+        list_url_template=(
+            "https://www.fmkorea.com/index.php?mid=best&"
+            "search_keyword=%EB%B0%94%EC%9D%B4%EC%97%90%EB%A5%B8&"
+            "search_target=title_content&page={page}"
+        ),
+        min_upvotes=0,
+        min_comments=0,
+        archive_key="fmkorea-munich",
+        collector_kind="fmkorea-search",
+        origin_key="fmkorea",
+        policy="collect-all",
+        collect_all=True,
+        canonical_namespace="fmkorea",
+        first_page_url=(
+            "https://www.fmkorea.com/search.php?mid=best&"
+            "search_keyword=%EB%B0%94%EC%9D%B4%EC%97%90%EB%A5%B8&"
+            "search_target=title_content"
+        ),
+        hot_lookback_minutes=180.0,
+        hot_max_seconds=180.0,
+        hot_max_pages=30,
+        backfill_max_seconds=360.0,
+        backfill_max_pages=40,
+        request_interval_seconds=10.0,
     ),
     "fmkorea-bayern-board": TargetBoard(
         key="fmkorea-bayern-board",
@@ -160,12 +195,12 @@ TARGETS = {
         collector_kind="fmkorea-board",
         origin_key="fmkorea",
         canonical_namespace="fmkorea",
-        hot_lookback_minutes=720.0,
+        hot_lookback_minutes=180.0,
         hot_max_seconds=180.0,
-        hot_max_pages=20,
+        hot_max_pages=30,
         backfill_max_seconds=360.0,
         backfill_max_pages=40,
-        request_interval_seconds=15.0,
+        request_interval_seconds=10.0,
     ),
 }
 

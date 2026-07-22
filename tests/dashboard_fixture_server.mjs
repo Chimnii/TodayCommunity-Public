@@ -69,6 +69,15 @@ const sourcesByArchive = {
       min_comments: 0,
     },
     {
+      source_key: "fmkorea-best-bayern-search",
+      archive_key: "fmkorea-munich",
+      site_name: "fmkorea",
+      board_name: "포텐 터짐 '바이에른' 검색",
+      board_url: "https://www.fmkorea.com/search.php?mid=best&search_keyword=%EB%B0%94%EC%9D%B4%EC%97%90%EB%A5%B8&search_target=title_content",
+      min_upvotes: 0,
+      min_comments: 0,
+    },
+    {
       source_key: "fmkorea-bayern-board",
       archive_key: "fmkorea-munich",
       site_name: "fmkorea",

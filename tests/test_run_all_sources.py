@@ -23,6 +23,7 @@ class RunAllSourcesTests(unittest.TestCase):
                 "dcinside-singularity",
                 "dcinside-agent-stack",
                 "fmkorea-best-munich-search",
+                "fmkorea-best-bayern-search",
                 "fmkorea-bayern-board",
             ],
         )
@@ -70,6 +71,7 @@ class RunAllSourcesTests(unittest.TestCase):
             [
                 "dcinside-singularity",
                 "fmkorea-best-munich-search",
+                "fmkorea-best-bayern-search",
                 "fmkorea-bayern-board",
             ],
         )
@@ -100,7 +102,7 @@ class RunAllSourcesTests(unittest.TestCase):
         )
         self.assertEqual(
             [item["status"] for item in result["results"]],
-            ["cooldown", "cooldown", "cooldown", "cooldown"],
+            ["cooldown", "cooldown", "cooldown", "cooldown", "cooldown"],
         )
         self.assertEqual(result["status"], "completed")
 
