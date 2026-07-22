@@ -39,6 +39,17 @@ class FakePlaywrightTimeout(FakePlaywrightError):
     pass
 
 
+class FakePartialPlaywrightManager:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.exit_calls: list[tuple[object, object, object]] = []
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.exit_calls.append((exc_type, exc, traceback))
+        if self.error is not None:
+            raise self.error
+
+
 class FakeResponse:
     def __init__(
         self,
@@ -325,6 +336,39 @@ class ChromeLifecycleTests(unittest.TestCase):
         self.assertIn(("playwright_stop", None), events)
         self.assertIn(("poll", None), events)
         self.assertEqual(session.cleanup_warnings, [])
+
+    def test_close_cleans_a_partially_started_playwright_manager(self) -> None:
+        manager = FakePartialPlaywrightManager()
+        session = FmkoreaChromeSession(
+            FmkoreaBrowserConfig(
+                profile_dir=Path("synthetic-profile"),
+                chrome_executable_path=Path("synthetic-chrome.exe"),
+            )
+        )
+        session._playwright_manager = manager
+
+        session.close()
+
+        self.assertEqual(manager.exit_calls, [(None, None, None)])
+        self.assertEqual(session.cleanup_warnings, [])
+
+    def test_partial_playwright_cleanup_failure_is_reported(self) -> None:
+        manager = FakePartialPlaywrightManager(RuntimeError("synthetic cleanup"))
+        session = FmkoreaChromeSession(
+            FmkoreaBrowserConfig(
+                profile_dir=Path("synthetic-profile"),
+                chrome_executable_path=Path("synthetic-chrome.exe"),
+            )
+        )
+        session._playwright_manager = manager
+
+        session.close()
+
+        self.assertEqual(manager.exit_calls, [(None, None, None)])
+        self.assertRegex(
+            session.cleanup_warnings[0],
+            "partially-started Playwright.*synthetic cleanup",
+        )
 
     def test_host_lock_rejects_a_second_session_until_release(self) -> None:
         first = HostSessionLock()

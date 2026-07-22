@@ -539,6 +539,7 @@ class FmkoreaChromeSession:
     def close(self) -> None:
         browser = self._browser
         playwright = self._playwright
+        playwright_manager = self._playwright_manager
         process = self._process
         host_lock = self._host_lock
         self._page = None
@@ -566,6 +567,19 @@ class FmkoreaChromeSession:
             except Exception as exc:
                 self.cleanup_warnings.append(
                     f"Could not stop Playwright: {type(exc).__name__}: {exc}"
+                )
+        elif playwright_manager is not None:
+            # ``sync_playwright().start()`` normally returns an object whose
+            # ``stop`` method owns manager cleanup. If startup fails after the
+            # manager created its transport but before returning that object,
+            # give the context manager a best-effort chance to close the
+            # partial driver and event loop as well.
+            try:
+                playwright_manager.__exit__(None, None, None)
+            except Exception as exc:
+                self.cleanup_warnings.append(
+                    "Could not clean up partially-started Playwright: "
+                    f"{type(exc).__name__}: {exc}"
                 )
         if process is not None:
             self._stop_owned_process_tree(process)
