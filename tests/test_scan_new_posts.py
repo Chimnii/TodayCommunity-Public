@@ -80,6 +80,32 @@ class BlockDetectionTests(unittest.TestCase):
 
 
 class FetchHtmlTests(unittest.TestCase):
+    def test_supports_a_caller_owned_transport(self) -> None:
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self) -> bytes:
+                return b"<html>ok</html>"
+
+        calls = []
+
+        def open_url(http_request, *, timeout):
+            calls.append((http_request.full_url, timeout))
+            return Response()
+
+        result = fetch_html(
+            "https://example.com/list",
+            5,
+            open_url=open_url,
+        )
+
+        self.assertEqual(result, "<html>ok</html>")
+        self.assertEqual(calls, [("https://example.com/list", 5)])
+
     def test_direct_transport_timeout_uses_timeout_subclass(self) -> None:
         with patch(
             "crawler.jobs.scan_new_posts.request.urlopen",

@@ -17,6 +17,14 @@ GROUPED_COUNT = re.compile(r"^[0-9]{1,3}(?:,[0-9]{3})+$")
 SIGNED_PLAIN_COUNT = re.compile(r"^-?[0-9]+$")
 SIGNED_GROUPED_COUNT = re.compile(r"^-?[0-9]{1,3}(?:,[0-9]{3})+$")
 BRACKETED_COUNT = re.compile(r"^\[\s*([^\[\]]+)\s*\]$")
+CURRENT_SEARCH_ROW_CLASSES = frozenset(
+    {
+        "li",
+        "li_best2_pop0",
+        "li_best2_hotdeal0",
+        "li_best2_politics0",
+    }
+)
 FULL_DATETIME = re.compile(
     r"^(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})\s+"
     r"(\d{1,2}):(\d{2})(?::(\d{2}))?$"
@@ -129,6 +137,16 @@ class FmkoreaNavigationDiagnostics:
 
 def _class_tokens(attrs: Dict[str, str]) -> set[str]:
     return {token.casefold() for token in attrs.get("class", "").split()}
+
+
+def _classify_search_result_row(tokens: set[str]) -> str:
+    if "li_best2" in tokens:
+        return "legacy"
+    if tokens == CURRENT_SEARCH_ROW_CLASSES:
+        return "current"
+    if any(token.startswith("li_best2_") for token in tokens):
+        return "invalid"
+    return ""
 
 
 def _clean_text(parts: List[str]) -> str:
@@ -841,12 +859,21 @@ class FmkoreaSearchParser(_FmkoreaParserBase):
             return
         tokens = _class_tokens(attrs)
         if self.current_row is None:
-            if tag != "li" or "li_best2" not in tokens:
+            if tag != "li":
+                return
+            row_kind = _classify_search_result_row(tokens)
+            if not row_kind:
                 return
             self.current_row = self._new_row(attrs, candidate=True)
             self._row_depth = 1
             self.diagnostics.row_container_seen = True
             self.diagnostics.candidate_rows += 1
+            if row_kind == "invalid":
+                self._error(
+                    self.current_row,
+                    "invalid_search_row_signature",
+                    "Search result row has an incomplete or unknown class signature.",
+                )
             return
 
         row = self.current_row

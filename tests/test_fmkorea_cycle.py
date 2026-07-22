@@ -5,17 +5,22 @@ import sqlite3
 import unittest
 from dataclasses import replace
 from datetime import datetime, timezone
+from email.message import Message
+from io import BytesIO
 from pathlib import Path
-from urllib import error
+from unittest.mock import patch
+from urllib import error, request
 from urllib.parse import parse_qs, urlparse
+from urllib.response import addinfourl
 
 from crawler.jobs.run_fmkorea_cycle import (
     CYCLE_MODE_BACKFILL,
     CYCLE_MODE_HOT,
     FmkoreaCycle,
+    FmkoreaHttpSession,
     run_fmkorea_target,
 )
-from crawler.jobs.scan_new_posts import upsert_source
+from crawler.jobs.scan_new_posts import CrawlTransientError, upsert_source
 from crawler.runtime import CycleRuntime
 from crawler.state import get_source_state, save_source_state
 from crawler.targets import TargetBoard, get_target
@@ -32,7 +37,7 @@ def search_row(
     comments: int = 0,
 ) -> str:
     return (
-        f'<li class="li_best2" data-document-srl="{document_id}">'
+        '<li class="li li_best2_pop0 li_best2_hotdeal0 li_best2_politics0">'
         '<span class="category">축구</span>'
         '<h3 class="title">'
         f'<a href="/{document_id}"><span class="ellipsis-target">'
@@ -185,6 +190,94 @@ def seed_hint(client: SqliteClient, target: TargetBoard, page: int) -> None:
 
 
 class FmkoreaHotCycleTests(unittest.TestCase):
+    def test_default_transport_keeps_server_cookie_within_one_cycle(self) -> None:
+        observed_cookies = []
+        processors = []
+
+        class ResponseHandler(request.BaseHandler):
+            def default_open(self, http_request):
+                observed_cookies.append(http_request.get_header("Cookie"))
+                headers = Message()
+                headers.add_header(
+                    "Set-Cookie",
+                    "fm_session=synthetic; Path=/; HttpOnly",
+                )
+                response = addinfourl(
+                    BytesIO(b"<html>ok</html>"),
+                    headers,
+                    http_request.full_url,
+                    200,
+                )
+                response.msg = "OK"
+                return response
+
+        real_build_opener = request.build_opener
+
+        def build_opener(*handlers):
+            processors.append(handlers[0])
+            return real_build_opener(*handlers, ResponseHandler())
+
+        with patch(
+            "crawler.jobs.run_fmkorea_cycle.request.build_opener",
+            side_effect=build_opener,
+        ):
+            first_session = FmkoreaHttpSession()
+            self.assertEqual(
+                first_session("https://www.fmkorea.com/1", 5),
+                "<html>ok</html>",
+            )
+            self.assertEqual(
+                first_session("https://www.fmkorea.com/2", 7),
+                "<html>ok</html>",
+            )
+            second_session = FmkoreaHttpSession()
+            self.assertEqual(
+                second_session("https://www.fmkorea.com/3", 9),
+                "<html>ok</html>",
+            )
+
+        self.assertEqual(
+            [type(processor).__name__ for processor in processors],
+            ["HTTPCookieProcessor", "HTTPCookieProcessor"],
+        )
+        self.assertIsNot(processors[0].cookiejar, processors[1].cookiejar)
+        self.assertIsNone(observed_cookies[0])
+        self.assertIn("fm_session=synthetic", observed_cookies[1])
+        self.assertIsNone(observed_cookies[2])
+
+    def test_transient_retry_still_waits_the_full_source_interval(self) -> None:
+        target = replace(
+            get_target("fmkorea-best-munich-search"),
+            hot_max_pages=1,
+        )
+        clock = FakeClock()
+        runtime = CycleRuntime(
+            min_request_interval_seconds=15,
+            total_seconds=60,
+            hot_seconds=60,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
+        attempts = []
+
+        def transient_then_success(url: str, timeout_seconds: float) -> str:
+            attempts.append(clock.monotonic())
+            if len(attempts) == 1:
+                clock.advance(2.5)
+                raise CrawlTransientError("synthetic transport failure")
+            return search_page(target, 1, 1, search_row(99))
+
+        result = FmkoreaCycle(
+            target=target,
+            mode=CYCLE_MODE_HOT,
+            fetcher=transient_then_success,
+            now=NOW,
+            runtime=runtime,
+        ).run()
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(attempts, [0.0, 17.5])
+
     def test_search_uses_special_first_url_then_index_pages_and_collects_all(self) -> None:
         target = target_with_limits(
             "fmkorea-best-munich-search",
@@ -397,29 +490,38 @@ class FmkoreaBackfillCycleTests(unittest.TestCase):
         self.assertEqual(result["status"], "failed")
         self.assertEqual(state.backfill_page_hint, 2)
 
-    def test_http_430_is_blocked_and_sets_cooldown(self) -> None:
-        target = target_with_limits("fmkorea-bayern-board", backfill_pages=1)
-        client = SqliteClient()
+    def test_http_block_statuses_stop_once_and_set_cooldown(self) -> None:
+        for status in (403, 429, 430):
+            with self.subTest(status=status):
+                target = target_with_limits(
+                    "fmkorea-bayern-board",
+                    backfill_pages=1,
+                )
+                client = SqliteClient()
+                calls = 0
 
-        def blocked(url: str, timeout_seconds: float) -> str:
-            raise error.HTTPError(url, 430, "blocked", {}, None)
+                def blocked(url: str, timeout_seconds: float) -> str:
+                    nonlocal calls
+                    calls += 1
+                    raise error.HTTPError(url, status, "blocked", {}, None)
 
-        result = run_fmkorea_target(
-            target,
-            CYCLE_MODE_BACKFILL,
-            client=client,
-            fetcher=blocked,
-            now=NOW,
-        )
+                result = run_fmkorea_target(
+                    target,
+                    CYCLE_MODE_BACKFILL,
+                    client=client,
+                    fetcher=blocked,
+                    now=NOW,
+                )
 
-        state = get_source_state(client, target.key)
-        assert state is not None
-        self.assertEqual(result["status"], "blocked")
-        self.assertIn("HTTP 430", state.last_block_reason)
-        self.assertGreater(
-            datetime.fromisoformat(state.blocked_until),
-            NOW,
-        )
+                state = get_source_state(client, target.key)
+                assert state is not None
+                self.assertEqual(result["status"], "blocked")
+                self.assertEqual(calls, 1)
+                self.assertIn(f"HTTP {status}", state.last_block_reason)
+                self.assertGreater(
+                    datetime.fromisoformat(state.blocked_until),
+                    NOW,
+                )
 
 
 if __name__ == "__main__":

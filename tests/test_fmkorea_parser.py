@@ -21,6 +21,10 @@ BASE = "https://www.fmkorea.com/index.php?mid=best"
 def search_row(
     document_id: int = 123456,
     *,
+    row_classes: str = (
+        "li li_best2_pop0 li_best2_hotdeal0 li_best2_politics0"
+    ),
+    include_row_id: bool = False,
     href: str = "",
     auxiliary_id: int | None = None,
     vote_href: str | None = None,
@@ -43,17 +47,22 @@ def search_row(
         else ""
     )
     ending = "</li>" if close else ""
+    row_id = f' data-document-srl="{document_id}"' if include_row_id else ""
     return (
-        f'<li class="li_best2 clear" data-document-srl="{document_id}">'
-        f'<span class="category"><a>{category}</a></span>'
-        '<h3 class="title">'
-        f'<a href="{post_href}"><span class="ellipsis-target">{title}</span></a>'
-        "</h3>"
-        f'<a class="pc_voted_count" href="{resolved_vote_href}">'
+        f'<li class="{row_classes}"{row_id}>'
+        '<div class="li">'
+        '<a class="pc_voted_count pc_voted_count_plus pc_voted_count_short" '
+        f'href="{resolved_vote_href}"><span class="label">추천</span>'
         f'<span class="count">{upvotes}</span></a>'
-        f"{comment_html}"
-        f'<span class="regdate">{date}<!--{date_comment}--></span>'
-        f"{ending}"
+        '<a class="thumb" href="/thumbnail"><img alt=""></a>'
+        '<h3 class="title data-title-ellipsis">'
+        f'<a class="hotdeal_var8" href="{post_href}">'
+        f'<span class="ellipsis-target">{title}</span>{comment_html}</a></h3>'
+        '<div class="meta"><span class="category">'
+        f'<a>{category}</a></span></div>'
+        '<div class="meta"><span class="regdate">'
+        f'{date}<!--{date_comment}--></span><span class="author">작성자</span></div>'
+        f"</div>{ending}"
     )
 
 
@@ -112,6 +121,64 @@ class FmkoreaSearchParserTests(unittest.TestCase):
         self.assertEqual(post.comments, 263)
         self.assertEqual(post.created_at, "2026-07-21T20:39:00+09:00")
         self.assertEqual(post.qualifies_by, "keyword")
+
+    def test_keeps_support_for_legacy_search_row_marker(self) -> None:
+        parser = self.parse(
+            search_row(
+                row_classes="li_best2 clear",
+                include_row_id=True,
+            )
+        )
+
+        self.assertTrue(parser.diagnostics.is_collection_safe)
+        self.assertEqual(parser.posts[0].external_post_id, "123456")
+
+    def test_incomplete_current_row_signature_fails_closed(self) -> None:
+        parser = self.parse(
+            search_row(
+                row_classes="li li_best2_pop0 li_best2_hotdeal0",
+            )
+        )
+
+        self.assertFalse(parser.diagnostics.is_collection_safe)
+        self.assertTrue(parser.diagnostics.row_container_seen)
+        self.assertEqual(parser.diagnostics.candidate_rows, 1)
+        self.assertIn(
+            "invalid_search_row_signature",
+            [error.code for error in parser.diagnostics.errors],
+        )
+
+    def test_mixed_valid_and_partial_signatures_fail_the_whole_page(self) -> None:
+        parser = self.parse(
+            search_row(document_id=123456)
+            + search_row(
+                document_id=123457,
+                row_classes="li li_best2_pop0 li_best2_hotdeal0",
+            )
+        )
+
+        self.assertFalse(parser.diagnostics.is_collection_safe)
+        self.assertEqual(parser.diagnostics.candidate_rows, 2)
+        self.assertIn(
+            "invalid_search_row_signature",
+            [error.code for error in parser.diagnostics.errors],
+        )
+
+    def test_current_signature_rejects_unknown_extra_classes(self) -> None:
+        parser = self.parse(
+            search_row(
+                row_classes=(
+                    "li li_best2_pop0 li_best2_hotdeal0 "
+                    "li_best2_politics0 unexpected"
+                ),
+            )
+        )
+
+        self.assertFalse(parser.diagnostics.is_collection_safe)
+        self.assertIn(
+            "invalid_search_row_signature",
+            [error.code for error in parser.diagnostics.errors],
+        )
 
     def test_collects_zero_comment_row_and_grouped_count(self) -> None:
         parser = self.parse(search_row(upvotes="1,234", comments=None))
@@ -255,6 +322,23 @@ class FmkoreaBoardParserTests(unittest.TestCase):
         self.assertEqual(post.comments, 10)
         self.assertEqual(post.created_at, "2026-07-22T00:37:00+09:00")
         self.assertEqual(post.qualifies_by, "upvotes+comments")
+
+    def test_parses_current_anonymous_board_shape_without_row_id(self) -> None:
+        parser = self.parse(
+            '<tr><td class="cate"><span><a>바이에른</a></span></td>'
+            '<td class="title hotdeal_var8">'
+            '<a class="hx" href="/index.php?mid=football_world&amp;category=853073246&amp;document_srl=987654">'
+            '현재 게시물</a></td>'
+            '<td class="author"><span>작성자</span></td>'
+            '<td class="time">00:37</td>'
+            '<td class="m_no">9,999</td>'
+            '<td class="m_no m_no_voted">14</td></tr>'
+        )
+
+        self.assertTrue(parser.diagnostics.is_collection_safe)
+        self.assertEqual(parser.posts[0].external_post_id, "987654")
+        self.assertEqual(parser.posts[0].comments, 0)
+        self.assertEqual(parser.posts[0].upvotes, 14)
 
     def test_board_weighted_threshold_is_exact(self) -> None:
         parser = self.parse(board_row(upvotes="14", comments="[10]"))

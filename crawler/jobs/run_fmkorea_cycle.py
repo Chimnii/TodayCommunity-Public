@@ -4,8 +4,9 @@ import argparse
 import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
+from http.cookiejar import CookieJar
 from typing import Callable, Dict, List, Optional
-from urllib import error
+from urllib import error, request
 
 from crawler.config import get_env, get_required_env, is_truthy
 from crawler.d1 import D1Client
@@ -72,11 +73,16 @@ class FmkoreaPage:
         return max(parse_datetime(post.created_at) for post in self.posts)
 
 
-def fetch_fmkorea_html(url: str, timeout_seconds: float = 30.0) -> str:
+def fetch_fmkorea_html(
+    url: str,
+    timeout_seconds: float = 30.0,
+    *,
+    open_url: Optional[Callable[..., object]] = None,
+) -> str:
     """Use the shared transport while treating FMKorea's HTTP 430 as a block."""
 
     try:
-        return fetch_html(url, timeout_seconds)
+        return fetch_html(url, timeout_seconds, open_url=open_url)
     except error.HTTPError as exc:
         if exc.code == 430:
             raise CrawlBlockedError(
@@ -89,6 +95,23 @@ def fetch_fmkorea_html(url: str, timeout_seconds: float = 30.0) -> str:
                 f"Blocked by FMKorea with HTTP 430 while requesting {url}."
             ) from exc
         raise
+
+
+class FmkoreaHttpSession:
+    """Keep server-issued cookies only for the lifetime of one crawl cycle."""
+
+    def __init__(self) -> None:
+        self._cookie_jar = CookieJar()
+        self._opener = request.build_opener(
+            request.HTTPCookieProcessor(self._cookie_jar)
+        )
+
+    def __call__(self, url: str, timeout_seconds: float) -> str:
+        return fetch_fmkorea_html(
+            url,
+            timeout_seconds,
+            open_url=self._opener.open,
+        )
 
 
 class FmkoreaCycle:
@@ -126,7 +149,7 @@ class FmkoreaCycle:
         self.target = target
         self.mode = mode
         self.client = client
-        self.fetcher = fetcher or fetch_fmkorea_html
+        self.fetcher = fetcher or FmkoreaHttpSession()
         self.cycle_started_at = ensure_aware(now or datetime.now(timezone.utc)).replace(
             microsecond=0
         )
@@ -376,19 +399,15 @@ class FmkoreaCycle:
                 html = self.fetcher(self.target.page_url(page), timeout_seconds)
                 break
             except error.HTTPError as exc:
-                if exc.code == 430:
+                if exc.code in {403, 429, 430}:
                     self.runtime.block(
-                        f"Blocked by FMKorea with HTTP 430 on page {page}."
+                        f"Blocked by FMKorea with HTTP {exc.code} on page {page}."
                     )
                 raise CrawlSourceError(
                     f"FMKorea returned HTTP {exc.code} on page {page}."
                 ) from exc
             except CrawlBlockedError as exc:
                 self.runtime.block(str(exc))
-            except CrawlSourceError as exc:
-                if "HTTP 430" in str(exc):
-                    self.runtime.block(str(exc))
-                raise
             except CrawlTimeoutError as exc:
                 last_timeout = exc
                 if attempt >= self.transient_fetch_attempts:
@@ -396,6 +415,10 @@ class FmkoreaCycle:
             except CrawlTransientError:
                 if attempt >= self.transient_fetch_attempts:
                     raise
+            except CrawlSourceError as exc:
+                if "HTTP 430" in str(exc):
+                    self.runtime.block(str(exc))
+                raise
             finally:
                 self.runtime.complete_request()
         else:

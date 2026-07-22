@@ -73,7 +73,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def fetch_html(url: str, timeout_seconds: float = 30.0) -> str:
+def fetch_html(
+    url: str,
+    timeout_seconds: float = 30.0,
+    *,
+    open_url: Optional[Callable[..., object]] = None,
+) -> str:
     http_request = request.Request(
         url,
         headers={
@@ -81,8 +86,9 @@ def fetch_html(url: str, timeout_seconds: float = 30.0) -> str:
             "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
         },
     )
+    transport = open_url or request.urlopen
     try:
-        with request.urlopen(http_request, timeout=max(1.0, timeout_seconds)) as response:
+        with transport(http_request, timeout=max(1.0, timeout_seconds)) as response:
             html = response.read().decode("utf-8", errors="replace")
     except error.HTTPError as exc:
         if exc.code in {403, 429, 430}:
