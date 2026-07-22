@@ -8,21 +8,15 @@ from crawler.jobs.run_all_sources import (
     CYCLE_MODE_BACKFILL,
     CYCLE_MODE_HOT,
     dc_cycle_config,
+    iter_github_scheduled_targets,
     run_all_targets,
 )
 from crawler.targets import get_target, iter_targets
 
 
 class RunAllSourcesTests(unittest.TestCase):
-    def test_registry_sweeps_four_targets_in_declared_order(self) -> None:
-        calls = []
-
-        def runner(target, mode, client):
-            calls.append((target.key, mode, client))
-            return {"target": target.key, "status": "completed"}
-
-        result = run_all_targets(mode=CYCLE_MODE_HOT, runner=runner)
-
+    def test_github_scheduled_sweeps_run_only_dc_targets(self) -> None:
+        scheduled_keys = [target.key for target in iter_github_scheduled_targets()]
         self.assertEqual(
             [target.key for target in iter_targets()],
             [
@@ -32,10 +26,29 @@ class RunAllSourcesTests(unittest.TestCase):
                 "fmkorea-bayern-board",
             ],
         )
-        self.assertEqual([key for key, _, _ in calls], [target.key for target in iter_targets()])
-        self.assertEqual(result["target_count"], 4)
-        self.assertEqual(result["failure_count"], 0)
-        self.assertEqual(result["status"], "completed")
+        self.assertEqual(
+            scheduled_keys,
+            ["dcinside-singularity", "dcinside-agent-stack"],
+        )
+
+        for mode in (CYCLE_MODE_HOT, CYCLE_MODE_BACKFILL):
+            with self.subTest(mode=mode):
+                calls = []
+
+                def runner(target, selected_mode, client):
+                    calls.append((target.key, selected_mode, client))
+                    return {"target": target.key, "status": "completed"}
+
+                result = run_all_targets(mode=mode, runner=runner)
+
+                self.assertEqual([key for key, _, _ in calls], scheduled_keys)
+                self.assertEqual(
+                    [selected_mode for _, selected_mode, _ in calls],
+                    [mode, mode],
+                )
+                self.assertEqual(result["target_count"], 2)
+                self.assertEqual(result["failure_count"], 0)
+                self.assertEqual(result["status"], "completed")
 
     def test_one_failure_does_not_stop_an_independent_origin(self) -> None:
         calls = []
@@ -46,7 +59,11 @@ class RunAllSourcesTests(unittest.TestCase):
                 return {"target": target.key, "status": "blocked"}
             return {"target": target.key, "status": "completed"}
 
-        result = run_all_targets(mode=CYCLE_MODE_BACKFILL, runner=runner)
+        result = run_all_targets(
+            mode=CYCLE_MODE_BACKFILL,
+            targets=iter_targets(),
+            runner=runner,
+        )
 
         self.assertEqual(
             calls,
@@ -71,7 +88,11 @@ class RunAllSourcesTests(unittest.TestCase):
                 return {"target": target.key, "status": "cooldown"}
             raise AssertionError("a same-origin feed should not be requested")
 
-        result = run_all_targets(mode=CYCLE_MODE_HOT, runner=runner)
+        result = run_all_targets(
+            mode=CYCLE_MODE_HOT,
+            targets=iter_targets(),
+            runner=runner,
+        )
 
         self.assertEqual(
             calls,

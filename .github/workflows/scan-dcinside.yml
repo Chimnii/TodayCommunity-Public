@@ -1,4 +1,4 @@
-name: Run all-source Hot crawl
+name: Run DC Hot crawl
 
 on:
   workflow_dispatch:
@@ -76,7 +76,7 @@ jobs:
           TC_CF_API_TOKEN: ${{ secrets.TC_CF_API_TOKEN }}
         run: python -m crawler.jobs.check_schema
 
-      - name: Run all-source Hot crawl
+      - name: Run scheduled DC Hot crawl
         env:
           TC_CF_ACCOUNT_ID: ${{ secrets.TC_CF_ACCOUNT_ID }}
           TC_CF_DATABASE_ID: ${{ secrets.TC_CF_DATABASE_ID }}

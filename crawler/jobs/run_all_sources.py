@@ -16,16 +16,26 @@ from crawler.jobs.run_cycle import (
 from crawler.jobs.scan_new_posts import record_run, upsert_source, utc_now
 from crawler.runtime import CycleRuntime
 from crawler.state import SourceState, get_source_state, save_source_state
-from crawler.targets import TargetBoard, iter_targets
+from crawler.targets import TargetBoard, get_target
 
 
 VALID_MODES = (CYCLE_MODE_HOT, CYCLE_MODE_BACKFILL)
 FAILURE_STATUSES = {"blocked", "failed"}
+GITHUB_SCHEDULED_TARGET_KEYS = (
+    "dcinside-singularity",
+    "dcinside-agent-stack",
+)
+
+
+def iter_github_scheduled_targets() -> tuple[TargetBoard, ...]:
+    """Return only sources allowed on GitHub-hosted scheduled runners."""
+
+    return tuple(get_target(target_key) for target_key in GITHUB_SCHEDULED_TARGET_KEYS)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run one serial TodayCommunity sweep across every source."
+        description="Run one serial GitHub-scheduled sweep across DC sources."
     )
     parser.add_argument("--mode", choices=VALID_MODES, required=True)
     parser.add_argument(
@@ -205,7 +215,9 @@ def run_all_targets(
         raise ValueError(f"unsupported sweep mode: {mode!r}")
 
     started_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-    target_list = tuple(targets or iter_targets())
+    target_list = tuple(
+        iter_github_scheduled_targets() if targets is None else targets
+    )
     blocked_origins: Dict[str, Dict[str, str]] = {}
     results: List[Dict[str, object]] = []
 
