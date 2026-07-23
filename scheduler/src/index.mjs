@@ -121,20 +121,23 @@ export function decideDispatch({
   return { action: "dispatch" };
 }
 
-function isFmkoreaDispatchEnabled(env) {
+function fmkoreaDispatchConfig(env) {
   const value = env?.FM_DISPATCH_ENABLED;
   if (value === undefined || value === null || String(value).trim() === "") {
-    return false;
+    return { enabled: false };
   }
 
   const normalized = String(value).trim();
   if (normalized === "0") {
-    return false;
+    return { enabled: false };
   }
   if (normalized === "1") {
-    return true;
+    return { enabled: true };
   }
-  throw new Error("FM_DISPATCH_ENABLED must be either 0 or 1");
+  return {
+    enabled: true,
+    error: new Error("FM_DISPATCH_ENABLED must be either 0 or 1"),
+  };
 }
 
 function githubHeaders(token, includeJsonBody = false) {
@@ -176,7 +179,12 @@ async function dispatchDestination({
   nowMs,
   recentWindowMs,
   inputs,
+  configurationError,
 }) {
+  if (configurationError) {
+    throw configurationError;
+  }
+
   const token = requireEnv(env, "GITHUB_DISPATCH_TOKEN");
   const owner = requireEnv(env, "GITHUB_OWNER");
   const repository = requireEnv(env, repositoryBinding);
@@ -273,18 +281,22 @@ export async function dispatchScheduledWorkflow({
       managedWorkflows: MANAGED_WORKFLOWS,
     },
   ];
-  if (schedule.kind === "hot" && isFmkoreaDispatchEnabled(env)) {
-    destinations.push({
-      destination: FMKOREA_DESTINATION,
-      repositoryBinding: "FM_GITHUB_REPOSITORY",
-      schedule: { kind: "hot", workflow: FMKOREA_WORKFLOW },
-      managedWorkflows: FMKOREA_MANAGED_WORKFLOWS,
-      inputs: {
-        dispatched_at: new Date(nowMs).toISOString(),
-        persist: "true",
-        max_pages_per_target: "0",
-      },
-    });
+  if (schedule.kind === "hot") {
+    const fmkoreaConfig = fmkoreaDispatchConfig(env);
+    if (fmkoreaConfig.enabled) {
+      destinations.push({
+        destination: FMKOREA_DESTINATION,
+        repositoryBinding: "FM_GITHUB_REPOSITORY",
+        schedule: { kind: "hot", workflow: FMKOREA_WORKFLOW },
+        managedWorkflows: FMKOREA_MANAGED_WORKFLOWS,
+        inputs: {
+          dispatched_at: new Date(nowMs).toISOString(),
+          persist: "true",
+          max_pages_per_target: "0",
+        },
+        configurationError: fmkoreaConfig.error,
+      });
+    }
   }
 
   const settled = await Promise.allSettled(

@@ -36,9 +36,13 @@ class CrawlWorkflowContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.fmkorea = None
+        self.runner_setup = None
         if IS_PRIVATE_SOURCE:
             self.fmkorea = (
                 ACTIVE_PRIVATE_WORKFLOWS / "scan-fmkorea.yml"
+            ).read_text(encoding="utf-8")
+            self.runner_setup = (
+                ROOT / "scripts" / "setup_fmkorea_runner.ps1"
             ).read_text(encoding="utf-8")
 
     def test_workflows_share_one_non_cancelling_concurrency_group(self) -> None:
@@ -259,6 +263,14 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertRegex(workflow, r"(?m)^\s+group: scan-fmkorea\s*$")
         self.assertRegex(workflow, r"(?m)^\s+cancel-in-progress: false\s*$")
         self.assertRegex(workflow, r"(?m)^\s{4}timeout-minutes: 20\s*$")
+        self.assertIn(
+            r"TC_FMKOREA_PYTHON: C:\ProgramData\TodayCommunity\fmkorea-venv\Scripts\python.exe",
+            workflow,
+        )
+        self.assertIn(
+            r"TC_FMKOREA_PROFILE_DIR: C:\ProgramData\TodayCommunity\fmkorea-chrome-profile",
+            workflow,
+        )
         self.assertIn('TC_FMKOREA_HEADLESS: "1"', workflow)
         self.assertIn('TC_FMKOREA_REQUEST_INTERVAL_SECONDS: "10"', workflow)
         self.assertIn("crawler/requirements-fmkorea-browser.txt", workflow)
@@ -284,6 +296,10 @@ class CrawlWorkflowContractTests(unittest.TestCase):
             "Persisting dispatches require dispatched_at for stale-job protection.",
             workflow,
         )
+        self.assertIn(
+            "Untimestamped manual dispatches require an explicit page limit.",
+            workflow,
+        )
         self.assertIn('"should_run=$($shouldRun.ToString()', workflow)
         self.assertIn(
             "Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append",
@@ -305,6 +321,40 @@ class CrawlWorkflowContractTests(unittest.TestCase):
             "TC_CF_API_TOKEN",
         ):
             self.assertIn(f"secrets.{secret_name}", workflow)
+
+    def test_private_runner_setup_uses_verified_service_install(self) -> None:
+        if self.runner_setup is None:
+            self.skipTest("running in the public mirror")
+
+        script = self.runner_setup
+        self.assertIn('"C:\\actions-runner\\todaycommunity-fm"', script)
+        self.assertIn('"C:\\ProgramData\\TodayCommunity"', script)
+        self.assertIn('"Chimnii/TodayCommunity"', script)
+        self.assertIn('$RunnerLabel = "todaycommunity-fm"', script)
+        self.assertIn('sha256_checksum', script)
+        self.assertIn('Get-FileHash -LiteralPath $archive -Algorithm SHA256', script)
+        self.assertIn('--runasservice', script)
+        self.assertIn('"NT AUTHORITY\\NETWORK SERVICE"', script)
+        self.assertIn('"S-1-5-20"', script)
+        self.assertIn('"S-1-5-18"', script)
+        self.assertIn('"S-1-5-32-544"', script)
+        self.assertIn('$acl.SetAccessRuleProtection($true, $false)', script)
+        self.assertIn('$acl.SetOwner($administrators)', script)
+        self.assertIn('function Assert-RestrictedRoot', script)
+        self.assertIn('$acl.GetAccessRules(', script)
+        self.assertIn('Restricted directory contains an unexpected ACL entry', script)
+        self.assertIn('[IO.Directory]::Move($pythonStage, $PythonRoot)', script)
+        self.assertIn('[IO.Directory]::Move($venvStage, $VenvRoot)', script)
+        self.assertIn('[IO.Directory]::Move($runnerStage, $RunnerRoot)', script)
+        self.assertIn('Remove-StagingDirectory', script)
+        self.assertIn('Remove-Item -LiteralPath $archive -Force', script)
+        self.assertNotIn('-m pip install', script)
+        self.assertIn('RunnerRoot must be a child of $allowedRunnerParent.', script)
+        self.assertIn('RuntimeRoot must be exactly $allowedRuntime.', script)
+        self.assertIn('.todaycommunity-runner-package.json', script)
+        self.assertIn('Get-GitHubToken', script)
+        self.assertNotIn('--replace', script)
+        self.assertNotIn('--disableupdate', script)
 
     def test_local_secret_and_cloudflare_state_patterns_are_ignored(self) -> None:
         ignore_lines = {

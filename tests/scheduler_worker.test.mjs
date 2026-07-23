@@ -556,16 +556,60 @@ test("a failing FM destination is reported only after the public dispatch is att
   );
 });
 
-test("invalid FM enable flag fails clearly", async () => {
+test("invalid FM enable flag is isolated after the public DC dispatch is attempted", async () => {
+  const calls = [];
   await assert.rejects(
     dispatchScheduledWorkflow({
       cron: "7,22,37,52 * * * *",
       env: { ...ENV, FM_DISPATCH_ENABLED: "yes" },
-      fetchImpl: async () => {
-        assert.fail("invalid configuration must fail before network access");
+      fetchImpl: async (url, options) => {
+        calls.push({ url, options });
+        return options.method === "GET"
+          ? jsonResponse({ workflow_runs: [] })
+          : noContentResponse();
       },
       now: () => NOW,
     }),
-    /FM_DISPATCH_ENABLED must be either 0 or 1/,
+    (error) => {
+      assert.ok(error instanceof ScheduledDispatchError);
+      assert.deepEqual(
+        error.destinations.map(({ destination, status }) => ({
+          destination,
+          status,
+        })),
+        [
+          { destination: "dcinside", status: "dispatched" },
+          { destination: "fmkorea", status: "failed" },
+        ],
+      );
+      assert.match(
+        error.destinations[1].error,
+        /FM_DISPATCH_ENABLED must be either 0 or 1/,
+      );
+      return true;
+    },
   );
+
+  assert.equal(calls.length, 2);
+  assert.ok(calls.every(({ url }) => url.includes("TodayCommunity-Public")));
+});
+
+test("Backfill ignores an invalid FM enable flag", async () => {
+  const calls = [];
+  const result = await dispatchScheduledWorkflow({
+    cron: "56 */6 * * *",
+    env: { ...ENV, FM_DISPATCH_ENABLED: "invalid" },
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return options.method === "GET"
+        ? jsonResponse({ workflow_runs: [] })
+        : noContentResponse();
+    },
+    now: () => NOW,
+  });
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.destinations.length, 1);
+  assert.equal(result.destinations[0].destination, "dcinside");
+  assert.equal(calls.length, 2);
 });
