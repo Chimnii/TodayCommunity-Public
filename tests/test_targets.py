@@ -52,7 +52,7 @@ class TargetRegistryTests(unittest.TestCase):
                 self.assertTrue(search.collect_all)
                 self.assertEqual(search.policy, "collect-all")
 
-    def test_fmkorea_hot_limits_match_singularity(self) -> None:
+    def test_fmkorea_hot_limits_are_source_specific(self) -> None:
         singularity = get_target("dcinside-singularity")
         expected = (
             singularity.hot_lookback_minutes,
@@ -65,7 +65,6 @@ class TargetRegistryTests(unittest.TestCase):
         for target_key in (
             "fmkorea-best-munich-search",
             "fmkorea-best-bayern-search",
-            "fmkorea-bayern-board",
         ):
             with self.subTest(target=target_key):
                 target = get_target(target_key)
@@ -78,6 +77,17 @@ class TargetRegistryTests(unittest.TestCase):
                     ),
                     expected,
                 )
+
+        bayern_board = get_target("fmkorea-bayern-board")
+        self.assertEqual(
+            (
+                bayern_board.hot_lookback_minutes,
+                bayern_board.hot_max_seconds,
+                bayern_board.hot_max_pages,
+                bayern_board.request_interval_seconds,
+            ),
+            (360.0, 180.0, 30, 10.0),
+        )
 
     def test_site_specific_canonical_keys_share_only_when_intended(self) -> None:
         self.assertEqual(
