@@ -264,6 +264,12 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertRegex(workflow, r"(?m)^\s+cancel-in-progress: false\s*$")
         self.assertRegex(workflow, r"(?m)^\s{4}timeout-minutes: 20\s*$")
         self.assertIn(
+            "shell: powershell -NoLogo -NoProfile -NonInteractive "
+            "-ExecutionPolicy Bypass -File {0}",
+            workflow,
+        )
+        self.assertNotRegex(workflow, r"(?m)^\s+shell: powershell\s*$")
+        self.assertIn(
             r"TC_FMKOREA_PYTHON: C:\ProgramData\TodayCommunity\fmkorea-venv\Scripts\python.exe",
             workflow,
         )
@@ -353,6 +359,15 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertIn('RuntimeRoot must be exactly $allowedRuntime.', script)
         self.assertIn('.todaycommunity-runner-package.json', script)
         self.assertIn('Get-GitHubToken', script)
+        self.assertIn(
+            '$downloads = Invoke-GitHubApi -Method Get -Uri $downloadsUri',
+            script,
+        )
+        self.assertIn('$application = $downloads |', script)
+        self.assertNotIn(
+            '$application = Invoke-GitHubApi -Method Get -Uri $downloadsUri |',
+            script,
+        )
         self.assertNotIn('--replace', script)
         self.assertNotIn('--disableupdate', script)
 

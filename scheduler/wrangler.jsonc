@@ -6,7 +6,7 @@
     "GITHUB_OWNER": "Chimnii",
     "GITHUB_REPOSITORY": "TodayCommunity-Public",
     "GITHUB_REF": "main",
-    "FM_DISPATCH_ENABLED": "0",
+    "FM_DISPATCH_ENABLED": "1",
     "FM_GITHUB_REPOSITORY": "TodayCommunity"
   },
   "triggers": {
