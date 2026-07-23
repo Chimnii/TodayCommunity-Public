@@ -24,8 +24,8 @@ INSERT OR IGNORE INTO archives (
   ),
   (
     'dcinside-agent-stack',
-    '에이전트 스택',
-    '디시인사이드 에이전트 스택 갤러리 인기글',
+    'AI 활용',
+    '디시인사이드 AI 활용 갤러리 인기글',
     20,
     1
   ),

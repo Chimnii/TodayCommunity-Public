@@ -18,8 +18,8 @@ const FALLBACK_ARCHIVES = Object.freeze([
   },
   {
     archive_key: "dcinside-agent-stack",
-    display_name: "에이전트 스택",
-    description: "디시인사이드 에이전트 스택 갤러리 인기글",
+    display_name: "AI 활용",
+    description: "디시인사이드 AI 활용 갤러리 인기글",
     display_order: 20,
   },
   {

@@ -11,7 +11,7 @@ class TargetRegistryTests(unittest.TestCase):
             set(TARGETS),
             {
                 "dcinside-singularity",
-                "dcinside-agent-stack",
+                "dcinside-ai-utilize",
                 "fmkorea-best-munich-search",
                 "fmkorea-best-bayern-search",
                 "fmkorea-bayern-board",
@@ -38,7 +38,7 @@ class TargetRegistryTests(unittest.TestCase):
         )
 
     def test_thresholds_encode_the_requested_weighted_scores(self) -> None:
-        agent_stack = get_target("dcinside-agent-stack")
+        agent_stack = get_target("dcinside-ai-utilize")
         bayern = get_target("fmkorea-bayern-board")
 
         self.assertEqual((agent_stack.min_upvotes, agent_stack.min_comments), (10, 100))
@@ -95,8 +95,8 @@ class TargetRegistryTests(unittest.TestCase):
             "dcinside:thesingularity:123",
         )
         self.assertEqual(
-            canonical_post_key(get_target("dcinside-agent-stack"), "123"),
-            "dcinside:agent_stack:123",
+            canonical_post_key(get_target("dcinside-ai-utilize"), "123"),
+            "dcinside:ai_utilize:123",
         )
         self.assertEqual(
             {
@@ -109,6 +109,18 @@ class TargetRegistryTests(unittest.TestCase):
             },
             {"fmkorea:123"},
         )
+
+    def test_migrated_agent_archive_uses_an_independent_source_identity(self) -> None:
+        migrated = get_target("dcinside-ai-utilize")
+        archive = ARCHIVES["dcinside-agent-stack"]
+
+        self.assertEqual(migrated.archive_key, "dcinside-agent-stack")
+        self.assertEqual(archive.display_name, "AI 활용")
+        self.assertEqual(archive.description, "디시인사이드 AI 활용 갤러리 인기글")
+        self.assertEqual(migrated.board_name, "AI 활용 마이너 갤러리")
+        self.assertIn("id=ai_utilize", migrated.page_url(1))
+        self.assertIn("id=ai_utilize", migrated.page_url(2))
+        self.assertNotIn("dcinside-agent-stack", TARGETS)
 
     def test_search_uses_its_special_first_page_url(self) -> None:
         for target_key in (

@@ -938,6 +938,114 @@ class CrawlCycleTests(unittest.TestCase):
         self.assertEqual(summary.stop_reason, "lookback_reached")
         self.assertEqual(summary.matched_posts, 1)
 
+    def test_hot_stops_when_a_young_board_clamps_after_its_last_page(self) -> None:
+        pages = {
+            1: page_html(
+                row(110, "2026-07-16 20:59:00", upvotes=4),
+                row(109, "2026-07-16 20:58:00"),
+            ),
+            2: page_html(
+                row(108, "2026-07-16 20:30:00", upvotes=4),
+                row(107, "2026-07-16 20:29:00"),
+            ),
+        }
+        fetcher = MappingFetcher(
+            pages,
+            rendered_pages={3: 2},
+        )
+        settings = config()
+        cycle = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=runtime(settings),
+            fetcher=fetcher,
+            cycle_started_at=FIXED_NOW,
+            mode=CYCLE_MODE_HOT,
+        )
+
+        result = cycle.run()
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(fetcher.requested_pages, [1, 2, 3])
+        self.assertEqual(result["phases"][0]["scanned_pages"], 2)
+        self.assertEqual(result["phases"][0]["scanned_posts"], 4)
+        self.assertEqual(result["phases"][0]["matched_posts"], 2)
+        self.assertTrue(result["phases"][0]["target_complete"])
+        self.assertEqual(result["phases"][0]["stop_reason"], "feed_exhausted")
+
+    def test_young_board_backfill_defers_until_posts_can_be_finalized(self) -> None:
+        pages = {
+            1: page_html(row(110, "2026-07-16 20:59:00")),
+            2: page_html(row(100, "2026-07-16 20:50:00")),
+            4: page_html(row(80, "2026-07-16 20:40:00")),
+            8: page_html(row(40, "2026-07-16 20:30:00")),
+            11: page_html(row(1, "2026-07-16 20:20:00")),
+        }
+        fetcher = MappingFetcher(
+            pages,
+            rendered_pages={16: 11},
+        )
+        settings = config()
+        cycle = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=runtime(settings),
+            fetcher=fetcher,
+            cycle_started_at=FIXED_NOW,
+            mode=CYCLE_MODE_BACKFILL,
+        )
+
+        result = cycle.run()
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(fetcher.requested_pages, [1, 2, 4, 8, 16])
+        self.assertEqual(
+            [phase["stop_reason"] for phase in result["phases"]],
+            ["no_finalizable_posts", "deferred_no_finalizable_posts"],
+        )
+        self.assertTrue(result["phases"][0]["target_complete"])
+        self.assertFalse(result["phases"][1]["target_complete"])
+        self.assertEqual(cycle.coverage, [])
+        self.assertEqual(cycle.coverage_absences, [])
+        self.assertFalse(cycle.source_state.backfill_anchor_post_id)
+        self.assertEqual(
+            cycle.source_state.state_metadata["finalize_page_hint"],
+            11,
+        )
+
+    def test_clamped_backfill_with_eligible_rows_still_fails_closed(self) -> None:
+        pages = {
+            1: page_html(row(110, "2026-07-16 20:59:00")),
+            2: page_html(row(100, "2026-07-16 20:50:00")),
+            4: page_html(row(80, "2026-07-16 20:40:00")),
+            8: page_html(row(40, "2026-07-16 20:30:00")),
+            11: page_html(row(1, "2026-07-15 20:00:00", upvotes=4)),
+        }
+        fetcher = MappingFetcher(
+            pages,
+            rendered_pages={16: 11},
+        )
+        settings = config()
+        cycle = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=runtime(settings),
+            fetcher=fetcher,
+            cycle_started_at=FIXED_NOW,
+            mode=CYCLE_MODE_BACKFILL,
+        )
+
+        result = cycle.run()
+
+        self.assertEqual(result["status"], "failed")
+        self.assertIn(
+            "Backfill pagination could not be safely verified",
+            result["error"],
+        )
+        self.assertEqual(cycle.coverage, [])
+        self.assertEqual(cycle.coverage_absences, [])
+        self.assertFalse(cycle.source_state.backfill_anchor_post_id)
+
     def test_unordered_all_new_cutoff_probe_is_never_committed(self) -> None:
         pages = {
             1: page_html(

@@ -4,6 +4,7 @@ import http.client
 import sqlite3
 import socket
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 from urllib import error
@@ -282,11 +283,11 @@ class BatchedPostUpsertTests(unittest.TestCase):
 
     def test_blank_title_is_persisted_with_canonical_identity(self) -> None:
         client = SqliteClient()
-        target = get_target("dcinside-agent-stack")
+        target = get_target("dcinside-ai-utilize")
         checked_at = "2026-07-22T09:08:48+00:00"
         post_url = (
             "https://gall.dcinside.com/mgallery/board/view/"
-            "?id=agent_stack&no=7905&page=3"
+            "?id=ai_utilize&no=7905&page=3"
         )
         upsert_source(client, target, checked_at)
 
@@ -312,10 +313,184 @@ class BatchedPostUpsertTests(unittest.TestCase):
             ),
             [
                 {
-                    "canonical_post_key": "dcinside:agent_stack:7905",
+                    "canonical_post_key": "dcinside:ai_utilize:7905",
                     "external_post_id": "7905",
                     "post_url": post_url,
                     "title": "",
+                }
+            ],
+        )
+
+    def test_migrated_board_preserves_same_numbered_legacy_post(self) -> None:
+        client = SqliteClient()
+        migrated = get_target("dcinside-ai-utilize")
+        legacy = replace(
+            migrated,
+            key="dcinside-agent-stack",
+            board_name="에이전트 스택(Agent Stack) 마이너 갤러리",
+            board_url=(
+                "https://gall.dcinside.com/mgallery/board/lists/?id=agent_stack"
+            ),
+            list_url_template=(
+                "https://gall.dcinside.com/mgallery/board/lists/"
+                "?id=agent_stack&page={page}"
+            ),
+            canonical_namespace="dcinside:agent_stack",
+        )
+        checked_at = "2026-07-23T04:00:00+00:00"
+        upsert_source(client, legacy, checked_at)
+        client.query(
+            """
+            UPDATE source_state
+            SET backfill_anchor_post_id = ?,
+                state_metadata = ?,
+                updated_at = ?
+            WHERE source_key = ?
+            """,
+            [
+                "523",
+                '{"history_page_hint":168}',
+                checked_at,
+                legacy.key,
+            ],
+        )
+        client.query(
+            """
+            INSERT INTO coverage_intervals (
+              source_key, oldest_post_id, newest_post_id, checked_at,
+              created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [legacy.key, 523, 625, checked_at, checked_at, checked_at],
+        )
+        client.query(
+            """
+            INSERT INTO crawl_runs (
+              source_key, run_type, status, scanned_pages, scanned_posts,
+              matched_posts, started_at, finished_at, error_message
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                legacy.key,
+                "backfill_history",
+                "completed",
+                10,
+                500,
+                20,
+                checked_at,
+                checked_at,
+                "",
+            ],
+        )
+        upsert_posts(
+            client,
+            legacy,
+            [
+                {
+                    **sample_post(533),
+                    "post_url": (
+                        "https://gall.dcinside.com/mgallery/board/view/"
+                        "?id=agent_stack&no=533"
+                    ),
+                    "title": "legacy post",
+                }
+            ],
+            checked_at,
+        )
+
+        upsert_source(client, migrated, "2026-07-23T05:00:00+00:00")
+        upsert_posts(
+            client,
+            migrated,
+            [
+                {
+                    **sample_post(533),
+                    "post_url": (
+                        "https://gall.dcinside.com/mgallery/board/view/"
+                        "?id=ai_utilize&no=533"
+                    ),
+                    "title": "migrated post",
+                }
+            ],
+            "2026-07-23T05:00:00+00:00",
+        )
+
+        self.assertEqual(
+            client.query(
+                """
+                SELECT source_key, archive_key, canonical_post_key,
+                       external_post_id, title
+                FROM posts
+                ORDER BY source_key
+                """
+            ),
+            [
+                {
+                    "source_key": "dcinside-agent-stack",
+                    "archive_key": "dcinside-agent-stack",
+                    "canonical_post_key": "dcinside:agent_stack:533",
+                    "external_post_id": "533",
+                    "title": "legacy post",
+                },
+                {
+                    "source_key": "dcinside-ai-utilize",
+                    "archive_key": "dcinside-agent-stack",
+                    "canonical_post_key": "dcinside:ai_utilize:533",
+                    "external_post_id": "533",
+                    "title": "migrated post",
+                },
+            ],
+        )
+        self.assertEqual(
+            client.query(
+                """
+                SELECT source_key, backfill_anchor_post_id, state_metadata
+                FROM source_state
+                WHERE source_key IN (?, ?)
+                ORDER BY source_key
+                """,
+                [legacy.key, migrated.key],
+            ),
+            [
+                {
+                    "source_key": "dcinside-agent-stack",
+                    "backfill_anchor_post_id": "523",
+                    "state_metadata": '{"history_page_hint":168}',
+                },
+                {
+                    "source_key": "dcinside-ai-utilize",
+                    "backfill_anchor_post_id": None,
+                    "state_metadata": "{}",
+                },
+            ],
+        )
+        self.assertEqual(
+            client.query(
+                """
+                SELECT source_key, oldest_post_id, newest_post_id
+                FROM coverage_intervals
+                """
+            ),
+            [
+                {
+                    "source_key": "dcinside-agent-stack",
+                    "oldest_post_id": 523,
+                    "newest_post_id": 625,
+                }
+            ],
+        )
+        self.assertEqual(
+            client.query(
+                """
+                SELECT source_key, run_type, status
+                FROM crawl_runs
+                """
+            ),
+            [
+                {
+                    "source_key": "dcinside-agent-stack",
+                    "run_type": "backfill_history",
+                    "status": "completed",
                 }
             ],
         )

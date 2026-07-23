@@ -65,6 +65,10 @@ test("ships three accessible archive tabs and replaces them from the API catalog
   assert.match(app, /"dcinside-singularity": "특이점이 온다 갤"/);
   assert.match(app, /"dcinside-agent-stack": "AI 활용 갤"/);
   assert.match(app, /"fmkorea-munich": "뮌헨 소식 \(펨코\)"/);
+  assert.match(
+    app,
+    /archive_key: "dcinside-agent-stack",[\s\S]*display_name: "AI 활용",[\s\S]*description: "디시인사이드 AI 활용 갤러리 인기글"/
+  );
   assert.match(app, /ARCHIVE_TAB_LABELS\[key\] \|\| String\(archive\.display_name \|\| key\)/);
   assert.match(css, /\.archive-tab\[aria-selected="true"\]/);
 });

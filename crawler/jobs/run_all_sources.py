@@ -23,7 +23,7 @@ VALID_MODES = (CYCLE_MODE_HOT, CYCLE_MODE_BACKFILL)
 FAILURE_STATUSES = {"blocked", "failed"}
 GITHUB_SCHEDULED_TARGET_KEYS = (
     "dcinside-singularity",
-    "dcinside-agent-stack",
+    "dcinside-ai-utilize",
 )
 
 

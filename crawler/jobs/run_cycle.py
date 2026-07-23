@@ -32,7 +32,13 @@ from crawler.jobs.scan_new_posts import (
     upsert_source,
     utc_now,
 )
-from crawler.parsers.dcinside import DcinsideListParser, DcinsidePost, is_qualifying_post
+from crawler.parsers.dcinside import (
+    DcinsideListParser,
+    DcinsideNavigationDiagnostics,
+    DcinsidePost,
+    is_qualifying_post,
+    navigation_page_relationships_are_valid,
+)
 from crawler.runtime import (
     BACKFILL_PHASE,
     HOT_PHASE,
@@ -114,6 +120,7 @@ class PageSnapshot:
     current_page: Optional[int] = None
     last_page: Optional[int] = None
     can_prove_last_page: bool = False
+    pagination_clamped: bool = False
 
     @property
     def newest_created_at(self) -> datetime:
@@ -172,6 +179,30 @@ class CoverageOrderUnsafe(RuntimeError):
             f"Page {snapshot.page} is complete but not coverage ordered."
         )
         self.snapshot = snapshot
+
+
+class BackfillPageClamped(CrawlSourceError):
+    """Carry collection-safe last-page evidence without allowing coverage."""
+
+    def __init__(
+        self,
+        *,
+        requested_page: int,
+        rendered_page: int,
+        board_id: str,
+        posts: Sequence[DcinsidePost],
+        coverage_ordered: bool,
+    ) -> None:
+        super().__init__(
+            "Backfill pagination could not be safely verified "
+            f"(requested_page={requested_page}, rendered_page={rendered_page}, "
+            f"board_id={board_id!r}): requested_page_mismatch: source rendered "
+            "an earlier page"
+        )
+        self.requested_page = requested_page
+        self.rendered_page = rendered_page
+        self.posts = list(posts)
+        self.coverage_ordered = bool(coverage_ordered)
 
 
 class CrawlCycle:
@@ -306,6 +337,15 @@ class CrawlCycle:
                 summary.stop_reason = exc.reason
                 break
 
+            if snapshot.pagination_clamped:
+                # DCInside renders its physical final page when a sequential
+                # request goes past the end. The real final page was already
+                # collected on the preceding request, so do not double-count
+                # or persist this duplicate response.
+                summary.target_complete = True
+                summary.stop_reason = "feed_exhausted"
+                break
+
             self._update_summary(summary, snapshot)
             for post in snapshot.posts:
                 if is_qualifying_post(
@@ -376,7 +416,15 @@ class CrawlCycle:
         # history. History then uses whatever time remains before the cycle
         # deadline. Request counts are telemetry, not an execution budget.
         recent = self._run_recent_finalization()
-        historical = self._run_historical_backfill()
+        if recent.stop_reason == "no_finalizable_posts":
+            historical = PhaseSummary(
+                run_type="backfill_history",
+                target_complete=False,
+                stop_reason="deferred_no_finalizable_posts",
+            )
+            self.summaries.append(historical)
+        else:
+            historical = self._run_historical_backfill()
 
         if self.client:
             self._record_summary(recent)
@@ -413,6 +461,8 @@ class CrawlCycle:
             summary.stop_reason = exc.reason
             return summary
         if snapshot is None:
+            if summary.target_complete:
+                return summary
             summary.status = "partial"
             summary.stop_reason = summary.stop_reason or "cutoff_not_located"
             return summary
@@ -798,12 +848,29 @@ class CrawlCycle:
                 summary.stop_reason = "cutoff_search_stalled"
                 self.source_state.state_metadata["finalize_page_hint"] = page
                 return None
-            snapshot = self._fetch_backfill_page(
-                page,
-                summary,
-                reserve_seconds=self.config.deep_reserved_seconds,
-                allow_unordered=True,
-            )
+            try:
+                snapshot = self._fetch_backfill_page(
+                    page,
+                    summary,
+                    reserve_seconds=self.config.deep_reserved_seconds,
+                    allow_unordered=True,
+                )
+            except BackfillPageClamped as exc:
+                # A board younger than the finalization window has no cutoff
+                # page yet. Use the clamped response only as non-authoritative
+                # proof that the physical final page is still too new. It must
+                # never flow into a coverage commit.
+                self.source_state.state_metadata["finalize_page_hint"] = (
+                    exc.rendered_page
+                )
+                if (
+                    exc.coverage_ordered
+                    and not self._eligible_posts(exc.posts)
+                ):
+                    summary.target_complete = True
+                    summary.stop_reason = "no_finalizable_posts"
+                    return None
+                raise
             visited[page] = snapshot
             eligible_count = len(self._eligible_posts(snapshot.posts))
 
@@ -1176,7 +1243,20 @@ class CrawlCycle:
                 f"coverage_ordered={parser.diagnostics.ids_coverage_ordered}): {details}"
             )
         navigation = parser.navigation_diagnostics
+        pagination_clamped = navigation_is_clamped_to_earlier_page(
+            navigation,
+            requested_page=page,
+        )
         if phase == BACKFILL_PHASE and not navigation.is_valid:
+            if pagination_clamped:
+                assert navigation.current_page is not None
+                raise BackfillPageClamped(
+                    requested_page=page,
+                    rendered_page=navigation.current_page,
+                    board_id=navigation.expected_board_id or self.target_board_id,
+                    posts=parser.posts,
+                    coverage_ordered=parser.diagnostics.is_coverage_safe,
+                )
             details = "; ".join(
                 f"{error.code}: {error.message}"
                 for error in navigation.errors[:3]
@@ -1209,6 +1289,7 @@ class CrawlCycle:
             current_page=navigation.current_page,
             last_page=navigation.last_page,
             can_prove_last_page=navigation.can_prove_last_page,
+            pagination_clamped=pagination_clamped,
         )
 
     def _invalidate_observed_absences(
@@ -1765,6 +1846,31 @@ def finalization_eligibility_is_id_suffix(
         elif eligible_seen:
             return False
     return True
+
+
+def navigation_is_clamped_to_earlier_page(
+    navigation: DcinsideNavigationDiagnostics,
+    *,
+    requested_page: int,
+) -> bool:
+    """Recognize DCInside's exact beyond-the-end page clamp."""
+
+    current_page = navigation.current_page
+    return (
+        requested_page > 1
+        and navigation.requested_page == requested_page
+        and current_page is not None
+        and 0 < current_page < requested_page
+        and navigation.paging_container_seen
+        and navigation.paging_container_count >= 1
+        and (
+            navigation.paging_container_closed_count
+            == navigation.paging_container_count
+        )
+        and [error.code for error in navigation.errors]
+        == ["requested_page_mismatch"]
+        and navigation_page_relationships_are_valid(navigation)
+    )
 
 
 def board_id_from_url(board_url: str) -> str:

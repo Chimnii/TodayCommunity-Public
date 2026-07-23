@@ -60,8 +60,8 @@ ARCHIVES = {
     ),
     "dcinside-agent-stack": ArchiveDefinition(
         key="dcinside-agent-stack",
-        display_name="에이전트 스택",
-        description="디시인사이드 에이전트 스택 갤러리 인기글",
+        display_name="AI 활용",
+        description="디시인사이드 AI 활용 갤러리 인기글",
         display_order=20,
     ),
     "fmkorea-munich": ArchiveDefinition(
@@ -93,21 +93,23 @@ TARGETS = {
         hot_max_seconds=180.0,
         backfill_max_seconds=600.0,
     ),
-    "dcinside-agent-stack": TargetBoard(
-        key="dcinside-agent-stack",
+    "dcinside-ai-utilize": TargetBoard(
+        key="dcinside-ai-utilize",
         site_name="dcinside",
-        board_name="에이전트 스택(Agent Stack) 마이너 갤러리",
-        board_url="https://gall.dcinside.com/mgallery/board/lists/?id=agent_stack",
+        board_name="AI 활용 마이너 갤러리",
+        board_url="https://gall.dcinside.com/mgallery/board/lists/?id=ai_utilize",
         list_url_template=(
             "https://gall.dcinside.com/mgallery/board/lists/"
-            "?id=agent_stack&page={page}"
+            "?id=ai_utilize&page={page}"
         ),
         min_upvotes=10,
         min_comments=100,
+        # Keep the stable public archive key so legacy and migrated posts
+        # remain one user-facing collection without rewriting stored rows.
         archive_key="dcinside-agent-stack",
         collector_kind="dcinside-board",
         origin_key="dcinside",
-        canonical_namespace="dcinside:agent_stack",
+        canonical_namespace="dcinside:ai_utilize",
         hot_max_seconds=240.0,
         backfill_max_seconds=480.0,
     ),

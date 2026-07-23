@@ -21,7 +21,7 @@ class RunAllSourcesTests(unittest.TestCase):
             [target.key for target in iter_targets()],
             [
                 "dcinside-singularity",
-                "dcinside-agent-stack",
+                "dcinside-ai-utilize",
                 "fmkorea-best-munich-search",
                 "fmkorea-best-bayern-search",
                 "fmkorea-bayern-board",
@@ -29,7 +29,7 @@ class RunAllSourcesTests(unittest.TestCase):
         )
         self.assertEqual(
             scheduled_keys,
-            ["dcinside-singularity", "dcinside-agent-stack"],
+            ["dcinside-singularity", "dcinside-ai-utilize"],
         )
 
         for mode in (CYCLE_MODE_HOT, CYCLE_MODE_BACKFILL):
@@ -117,7 +117,7 @@ class RunAllSourcesTests(unittest.TestCase):
                 get_target("dcinside-singularity"), CYCLE_MODE_HOT
             )
             agent = dc_cycle_config(
-                get_target("dcinside-agent-stack"), CYCLE_MODE_HOT
+                get_target("dcinside-ai-utilize"), CYCLE_MODE_HOT
             )
 
         self.assertEqual(singularity.hot_lookback_minutes, 600)
@@ -126,7 +126,7 @@ class RunAllSourcesTests(unittest.TestCase):
         self.assertEqual(agent.hot_max_seconds, 240)
 
     def test_backfill_config_reserves_positive_history_window(self) -> None:
-        for target_key in ("dcinside-singularity", "dcinside-agent-stack"):
+        for target_key in ("dcinside-singularity", "dcinside-ai-utilize"):
             with self.subTest(target=target_key):
                 with patch.dict(os.environ, {}, clear=True):
                     config = dc_cycle_config(

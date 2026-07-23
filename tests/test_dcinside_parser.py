@@ -175,14 +175,18 @@ class DcinsideDatetimeTests(unittest.TestCase):
 
 
 class DcinsideListParserTests(unittest.TestCase):
-    def test_agent_stack_uses_the_same_board_parameterized_parser(self) -> None:
-        agent_url = (
-            "https://gall.dcinside.com/mgallery/board/lists/?id=agent_stack"
+    def test_ai_utilize_uses_the_same_board_parameterized_parser(self) -> None:
+        ai_utilize_url = (
+            "https://gall.dcinside.com/mgallery/board/lists/?id=ai_utilize"
         )
-        parser = DcinsideListParser(agent_url, now=FIXED_NOW, requested_page=1)
+        parser = DcinsideListParser(
+            ai_utilize_url,
+            now=FIXED_NOW,
+            requested_page=1,
+        )
         parser.feed(
-            regular_row("105").replace("thesingularity", "agent_stack")
-            + pagination(board_id="agent_stack")
+            regular_row("105").replace("thesingularity", "ai_utilize")
+            + pagination(board_id="ai_utilize")
         )
         parser.close()
 
