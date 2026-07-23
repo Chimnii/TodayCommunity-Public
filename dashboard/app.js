@@ -4,6 +4,11 @@ const SOURCE_DESCRIPTION =
   "추천수 또는 댓글수가 일정 조건을 만족하는 글을 모읍니다. 본문 내용은 수집하지 않고 제목과 원문 링크 등 목록 정보만 수집합니다.";
 const LIST_ONLY_DESCRIPTION =
   "본문 내용은 수집하지 않고 제목과 원문 링크 등 목록 정보만 수집합니다.";
+const ARCHIVE_TAB_LABELS = Object.freeze({
+  "dcinside-singularity": "특이점이 온다 갤",
+  "dcinside-agent-stack": "AI 활용 갤",
+  "fmkorea-munich": "뮌헨 소식 (펨코)",
+});
 const FALLBACK_ARCHIVES = Object.freeze([
   {
     archive_key: "dcinside-singularity",
@@ -35,7 +40,8 @@ const DEFAULT_STATE = Object.freeze({
 });
 const VALID_SORTS = new Set(["created_at", "upvotes", "comments"]);
 const VALID_PAGE_SIZES = new Set([20, 30, 50, 100]);
-const SUBJECT_PREVIEW_LENGTH = 3;
+const DESKTOP_SUBJECT_PREVIEW_LENGTH = 5;
+const MOBILE_SUBJECT_PREVIEW_LENGTH = 3;
 const PAGE_WINDOW_RADIUS = 3;
 const subjectSegmenter = typeof Intl.Segmenter === "function"
   ? new Intl.Segmenter("ko", { granularity: "grapheme" })
@@ -69,6 +75,9 @@ const elements = {
   rangeSummary: document.querySelector("#range-summary"),
   pagination: document.querySelector("#pagination"),
   dataNotice: document.querySelector("#data-notice"),
+  filterShell: document.querySelector("#filter-shell"),
+  filterToggle: document.querySelector("#filter-toggle"),
+  filterToggleState: document.querySelector(".filter-toggle-state"),
   searchInput: document.querySelector("#search-input"),
   subjectSelect: document.querySelector("#subject-select"),
   upvotesInput: document.querySelector("#upvotes-input"),
@@ -90,6 +99,7 @@ const dateTimeFormatter = new Intl.DateTimeFormat("ko-KR", {
 function initialize() {
   hydrateStateFromUrl();
   writeStateToControls();
+  setMobileFiltersExpanded(hasActiveFilterState());
   bindEvents();
   loadArchive();
 }
@@ -250,7 +260,7 @@ function renderArchiveTabs() {
     tab.className = "archive-tab";
     tab.setAttribute("role", "tab");
     tab.href = buildArchiveHref(key);
-    tab.textContent = String(archive.display_name || key);
+    tab.textContent = ARCHIVE_TAB_LABELS[key] || String(archive.display_name || key);
     tab.setAttribute("aria-controls", "archive-board");
     tab.setAttribute("aria-selected", String(key === state.target));
     tab.tabIndex = key === state.target ? 0 : -1;
@@ -614,9 +624,8 @@ function renderPosts(posts) {
       createCell(post.external_post_id || "-", "cell-number numeric-cell"),
       createSubjectCell(post.subject),
       createTitleCell(post),
-      createCell(formatPostDate(post.created_at), "cell-date numeric-cell"),
       createCell(numberFormatter.format(normalizeSignedInteger(post.upvotes, 0)), "cell-upvotes numeric-cell"),
-      createCell(numberFormatter.format(normalizeNonNegativeNumber(post.comments, 0)), "cell-comments numeric-cell")
+      createCell(formatPostDate(post.created_at), "cell-date numeric-cell")
     );
 
     elements.posts.append(row);
@@ -633,31 +642,44 @@ function createCell(value, className) {
 
 function createSubjectCell(subject) {
   const value = String(subject || "").trim();
-  const preview = createSubjectPreview(value);
-  const cell = createCell(preview, "cell-subject");
+  const cell = createCell("", "cell-subject");
 
-  if (preview !== value) {
+  if (!value) {
+    return cell;
+  }
+
+  const desktopPreview = createSubjectPreview(value, DESKTOP_SUBJECT_PREVIEW_LENGTH);
+  const mobilePreview = createSubjectPreview(value, MOBILE_SUBJECT_PREVIEW_LENGTH);
+  const desktopContent = document.createElement("span");
+  const mobileContent = document.createElement("span");
+  desktopContent.className = "subject-preview-desktop";
+  mobileContent.className = "subject-preview-mobile";
+  desktopContent.textContent = desktopPreview;
+  mobileContent.textContent = mobilePreview;
+  cell.append(desktopContent, mobileContent);
+
+  if (desktopPreview !== value || mobilePreview !== value) {
     cell.setAttribute("aria-label", value);
   }
 
   return cell;
 }
 
-function createSubjectPreview(value) {
+function createSubjectPreview(value, previewLength) {
   const characters = subjectSegmenter
     ? Array.from(subjectSegmenter.segment(value), ({ segment }) => segment)
-    : Array.from(value);
+    : splitSubjectGraphemes(value);
   const preview = [];
   let visibleLength = 0;
 
   for (const character of characters) {
     if (/\s/u.test(character)) {
-      if (preview.length && visibleLength < SUBJECT_PREVIEW_LENGTH) {
+      if (preview.length && visibleLength < previewLength) {
         preview.push(character);
       }
       continue;
     }
-    if (visibleLength >= SUBJECT_PREVIEW_LENGTH) {
+    if (visibleLength >= previewLength) {
       break;
     }
     preview.push(character);
@@ -667,12 +689,65 @@ function createSubjectPreview(value) {
   return preview.join("").trimEnd();
 }
 
+function splitSubjectGraphemes(value) {
+  const graphemes = [];
+  let joinNext = false;
+
+  for (const character of Array.from(value)) {
+    const previous = graphemes[graphemes.length - 1];
+    if (!previous) {
+      graphemes.push(character);
+      joinNext = character === "\u200d";
+      continue;
+    }
+
+    if (joinNext || isGraphemeExtension(character)) {
+      graphemes[graphemes.length - 1] += character;
+      joinNext = character === "\u200d";
+      continue;
+    }
+
+    if (isRegionalIndicator(character) && isUnpairedRegionalIndicator(previous)) {
+      graphemes[graphemes.length - 1] += character;
+      continue;
+    }
+
+    graphemes.push(character);
+    joinNext = character === "\u200d";
+  }
+
+  return graphemes;
+}
+
+function isGraphemeExtension(character) {
+  const codePoint = character.codePointAt(0);
+  return (
+    character === "\u200d" ||
+    /\p{Mark}/u.test(character) ||
+    (codePoint >= 0xfe00 && codePoint <= 0xfe0f) ||
+    (codePoint >= 0x1f3fb && codePoint <= 0x1f3ff) ||
+    (codePoint >= 0xe0020 && codePoint <= 0xe007f) ||
+    (codePoint >= 0xe0100 && codePoint <= 0xe01ef)
+  );
+}
+
+function isRegionalIndicator(character) {
+  const codePoint = character.codePointAt(0);
+  return codePoint >= 0x1f1e6 && codePoint <= 0x1f1ff;
+}
+
+function isUnpairedRegionalIndicator(grapheme) {
+  const characters = Array.from(grapheme);
+  return characters.length % 2 === 1 && characters.every(isRegionalIndicator);
+}
+
 function createTitleCell(post) {
   const cell = document.createElement("span");
   cell.className = "board-cell cell-title";
   cell.setAttribute("role", "cell");
 
   const title = String(post.title || "제목 없음");
+  const comments = normalizeNonNegativeNumber(post.comments, 0);
   const safeUrl = getSafeHttpUrl(post.post_url);
   const content = safeUrl
     ? document.createElement("a")
@@ -684,13 +759,24 @@ function createTitleCell(post) {
     content.target = "_blank";
     content.rel = "noreferrer noopener";
     content.title = title;
-    content.setAttribute("aria-label", `${title} 원문 열기`);
+    content.setAttribute("aria-label", `${title}, 댓글 ${comments}개, 원문 열기`);
   }
 
   const titleText = document.createElement("span");
   titleText.className = "post-title-text";
   titleText.textContent = title;
-  content.append(titleText);
+  const commentCount = document.createElement("span");
+  commentCount.className = "post-comment-count";
+  commentCount.setAttribute("aria-hidden", "true");
+  commentCount.textContent = `[${numberFormatter.format(comments)}]`;
+  content.append(titleText, commentCount);
+
+  if (!safeUrl) {
+    const commentDescription = document.createElement("span");
+    commentDescription.className = "visually-hidden";
+    commentDescription.textContent = `댓글 ${comments}개`;
+    content.append(commentDescription);
+  }
 
   cell.append(content);
   return cell;
@@ -968,6 +1054,10 @@ function bindEvents() {
   elements.filterForm.addEventListener("reset", () => {
     window.requestAnimationFrame(resetFilters);
   });
+  elements.filterToggle.addEventListener("click", () => {
+    const expanded = elements.filterToggle.getAttribute("aria-expanded") === "true";
+    setMobileFiltersExpanded(!expanded);
+  });
 
   elements.runsOpen.addEventListener("click", openRunsDrawer);
   elements.runsClose.addEventListener("click", () => elements.runsDrawer.close());
@@ -992,8 +1082,26 @@ function bindEvents() {
     state.focusPageContentAfterLoad = false;
     state.focusArchiveTabAfterLoad = false;
     writeStateToControls();
+    setMobileFiltersExpanded(hasActiveFilterState());
     loadArchive();
   });
+}
+
+function hasActiveFilterState() {
+  return Boolean(
+    state.search ||
+    state.subject ||
+    state.minUpvotes !== DEFAULT_STATE.minUpvotes ||
+    state.minComments !== DEFAULT_STATE.minComments ||
+    state.sortBy !== DEFAULT_STATE.sortBy ||
+    state.pageSize !== DEFAULT_STATE.pageSize
+  );
+}
+
+function setMobileFiltersExpanded(expanded) {
+  elements.filterShell.classList.toggle("is-filter-expanded", expanded);
+  elements.filterToggle.setAttribute("aria-expanded", String(expanded));
+  elements.filterToggleState.textContent = expanded ? "접기" : "펼치기";
 }
 
 function scheduleFilterUpdate() {

@@ -22,12 +22,18 @@ const context = {
 };
 
 vm.runInNewContext(
-  `${appWithoutInitialization}\nglobalThis.__dashboardPaginationFunctions = {\n  getPageSequence: typeof getPageSequence === "function" ? getPageSequence : undefined,\n  parsePageJump: typeof parsePageJump === "function" ? parsePageJump : undefined,\n  normalizeSignedInteger: typeof normalizeSignedInteger === "function" ? normalizeSignedInteger : undefined,\n};`,
+  `${appWithoutInitialization}\nglobalThis.__dashboardPaginationFunctions = {\n  getPageSequence: typeof getPageSequence === "function" ? getPageSequence : undefined,\n  parsePageJump: typeof parsePageJump === "function" ? parsePageJump : undefined,\n  normalizeSignedInteger: typeof normalizeSignedInteger === "function" ? normalizeSignedInteger : undefined,\n  createSubjectPreview: typeof createSubjectPreview === "function" ? createSubjectPreview : undefined,\n  splitSubjectGraphemes: typeof splitSubjectGraphemes === "function" ? splitSubjectGraphemes : undefined,\n};`,
   context,
   { filename: appUrl.pathname }
 );
 
-const { getPageSequence, parsePageJump, normalizeSignedInteger } =
+const {
+  getPageSequence,
+  parsePageJump,
+  normalizeSignedInteger,
+  createSubjectPreview,
+  splitSubjectGraphemes,
+} =
   context.__dashboardPaginationFunctions;
 
 function pageSequence(currentPage, totalPages) {
@@ -46,6 +52,23 @@ test("normalizeSignedInteger preserves valid negative recommendation counts", ()
   assert.equal(normalizeSignedInteger("1,200", 0), 0);
   assert.equal(normalizeSignedInteger("3.5", 0), 0);
   assert.equal(normalizeSignedInteger("not-a-number", 0), 0);
+});
+
+test("createSubjectPreview counts combined emoji as one grapheme at each breakpoint", () => {
+  assert.equal(createSubjectPreview("☕작업잡담", 5), "☕작업잡담");
+  assert.equal(createSubjectPreview("☕작업잡담", 3), "☕작업");
+  assert.equal(createSubjectPreview("👨‍👩‍👧‍👦AI잡담", 5), "👨‍👩‍👧‍👦AI잡담");
+  assert.equal(createSubjectPreview("👨‍👩‍👧‍👦AI잡담", 3), "👨‍👩‍👧‍👦AI");
+  assert.equal(createSubjectPreview("양자 컴퓨팅", 3), "양자 컴");
+});
+
+test("splitSubjectGraphemes preserves combined emoji without Intl.Segmenter", () => {
+  assert.deepEqual(
+    Array.from(splitSubjectGraphemes("👨‍👩‍👧‍👦AI잡담")),
+    ["👨‍👩‍👧‍👦", "A", "I", "잡", "담"]
+  );
+  assert.deepEqual(Array.from(splitSubjectGraphemes("👍🏽소식")), ["👍🏽", "소", "식"]);
+  assert.deepEqual(Array.from(splitSubjectGraphemes("🇰🇷AI")), ["🇰🇷", "A", "I"]);
 });
 
 test("getPageSequence exposes a seven-page window around middle pages", () => {

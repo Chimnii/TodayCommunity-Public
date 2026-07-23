@@ -50,7 +50,7 @@
             aria-selected="true"
             aria-controls="archive-board"
             href="/?target=dcinside-singularity"
-          >특이점이 온다</a>
+          >특이점이 온다 갤</a>
           <a
             class="archive-tab"
             role="tab"
@@ -58,7 +58,7 @@
             aria-controls="archive-board"
             tabindex="-1"
             href="/?target=dcinside-agent-stack"
-          >에이전트 스택</a>
+          >AI 활용 갤</a>
           <a
             class="archive-tab"
             role="tab"
@@ -66,7 +66,7 @@
             aria-controls="archive-board"
             tabindex="-1"
             href="/?target=fmkorea-munich"
-          >뮌헨</a>
+          >뮌헨 소식 (펨코)</a>
         </div>
       </nav>
 
@@ -78,7 +78,18 @@
           </div>
         </div>
 
-        <div class="filter-shell">
+        <div class="filter-shell" id="filter-shell">
+          <button
+            class="filter-toggle"
+            id="filter-toggle"
+            type="button"
+            aria-controls="filter-form"
+            aria-expanded="false"
+          >
+            <span>검색·필터</span>
+            <span class="filter-toggle-state">펼치기</span>
+          </button>
+
           <form class="filter-form" id="filter-form">
             <label class="filter-control filter-search">
               <span>제목 검색</span>
@@ -149,9 +160,8 @@
                 <span class="board-cell cell-number" role="columnheader">번호</span>
                 <span class="board-cell cell-subject" role="columnheader">말머리</span>
                 <span class="board-cell cell-title" role="columnheader">제목</span>
-                <span class="board-cell cell-date" role="columnheader">작성일</span>
                 <span class="board-cell cell-upvotes" role="columnheader">추천</span>
-                <span class="board-cell cell-comments" role="columnheader">댓글</span>
+                <span class="board-cell cell-date" role="columnheader">작성일</span>
               </div>
             </div>
 

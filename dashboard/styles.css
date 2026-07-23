@@ -116,6 +116,18 @@ a {
   transform: translateY(0);
 }
 
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  margin: -1px;
+  border: 0;
+  white-space: nowrap;
+}
+
 .page-shell {
   width: min(100%, var(--layout-max));
   margin: 0 auto;
@@ -318,6 +330,10 @@ a {
   background: var(--color-surface);
 }
 
+.filter-toggle {
+  display: none;
+}
+
 .filter-form {
   display: grid;
   grid-template-columns: minmax(220px, 1.7fr) repeat(5, minmax(116px, 0.7fr)) auto;
@@ -392,7 +408,7 @@ a {
 
 .board-row {
   display: grid;
-  grid-template-columns: 88px 72px minmax(0, 1fr) 104px 64px 64px;
+  grid-template-columns: 88px 72px minmax(0, 1fr) 64px 104px;
   min-width: 0;
   align-items: center;
 }
@@ -443,22 +459,25 @@ a {
 .cell-number,
 .cell-subject,
 .cell-date,
-.cell-upvotes,
-.cell-comments {
+.cell-upvotes {
   text-align: center;
 }
 
 .cell-subject {
   overflow: hidden;
-  padding: 0 var(--space-2);
+  padding: 0 6px;
   color: var(--color-ink);
-  font-size: var(--text-xs);
+  font-size: 0.6875rem;
   text-overflow: clip;
   white-space: nowrap;
 }
 
 .post-row .cell-subject:empty::before {
   content: "\00a0";
+}
+
+.subject-preview-mobile {
+  display: none;
 }
 
 .cell-title {
@@ -468,7 +487,8 @@ a {
 }
 
 .cell-title .post-title-content {
-  display: flex;
+  display: inline-flex;
+  max-width: 100%;
   min-width: 0;
   align-items: center;
   overflow: hidden;
@@ -478,7 +498,7 @@ a {
   white-space: nowrap;
 }
 
-.cell-title a.post-title-content:hover {
+.cell-title a.post-title-content:hover .post-title-text {
   color: var(--color-primary-hover);
   text-decoration: underline;
   text-underline-offset: var(--space-1);
@@ -487,8 +507,17 @@ a {
 .post-title-text {
   min-width: 0;
   overflow: hidden;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.post-comment-count {
+  flex: 0 0 auto;
+  margin-left: var(--space-1);
+  color: var(--color-primary);
+  font-size: 0.6875rem;
+  font-weight: 700;
   white-space: nowrap;
 }
 
@@ -499,8 +528,7 @@ a {
   font-variant-numeric: tabular-nums;
 }
 
-.cell-upvotes,
-.cell-comments {
+.cell-upvotes {
   color: var(--color-ink);
 }
 
@@ -864,7 +892,7 @@ a {
   }
 
   .board-row {
-    grid-template-columns: 72px minmax(0, 1fr) 104px 64px 64px;
+    grid-template-columns: 72px minmax(0, 1fr) 64px 104px;
   }
 
   .cell-number {
@@ -907,12 +935,42 @@ a {
     align-items: flex-start;
   }
 
+  .filter-toggle {
+    display: flex;
+    width: 100%;
+    min-height: var(--control-height);
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 var(--space-3);
+    border: 0;
+    background: var(--color-surface-subtle);
+    color: var(--color-ink);
+    font-size: var(--text-sm);
+    font-weight: 700;
+  }
+
+  .filter-toggle:hover {
+    background: var(--color-surface-hover);
+  }
+
+  .filter-toggle-state {
+    color: var(--color-ink-muted);
+    font-size: var(--text-xs);
+    font-weight: 400;
+  }
+
   .filter-form {
+    display: none;
     gap: var(--space-2);
+    border-top: 1px solid var(--color-border);
+  }
+
+  .filter-shell.is-filter-expanded .filter-form {
+    display: grid;
   }
 
   .board-row {
-    grid-template-columns: 64px minmax(0, 1fr) 48px 48px;
+    grid-template-columns: 64px minmax(0, 1fr) 48px;
   }
 
   .cell-date {
@@ -920,11 +978,22 @@ a {
   }
 
   .board-cell {
-    padding: 0 var(--space-2);
+    padding: 0 6px;
   }
 
-  .board-head .cell-upvotes,
-  .board-head .cell-comments {
+  .post-row {
+    font-size: 0.78125rem;
+  }
+
+  .subject-preview-desktop {
+    display: none;
+  }
+
+  .subject-preview-mobile {
+    display: inline;
+  }
+
+  .board-head .cell-upvotes {
     font-size: var(--text-xs);
   }
 

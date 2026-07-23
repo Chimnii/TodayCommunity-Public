@@ -39,6 +39,11 @@ test("ships the compact archive surface and hidden collection dialog", () => {
   );
   assert.match(
     html,
+    /cell-title" role="columnheader">제목<\/span>[\s\S]*cell-upvotes" role="columnheader">추천<\/span>[\s\S]*cell-date" role="columnheader">작성일<\/span>/
+  );
+  assert.doesNotMatch(html, /cell-comments" role="columnheader"/);
+  assert.match(
+    html,
     /<h1><a class="masthead-home" href="\/">오늘의 커뮤니티<\/a><\/h1>/
   );
 });
@@ -48,16 +53,19 @@ test("ships three accessible archive tabs and replaces them from the API catalog
   assert.match(html, /role="tab"[\s\S]*href="\/?\?target=dcinside-singularity"/);
   assert.match(html, /href="\/?\?target=dcinside-agent-stack"/);
   assert.match(html, /href="\/?\?target=fmkorea-munich"/);
-  assert.match(html, />특이점이 온다<\/a>/);
-  assert.match(html, />에이전트 스택<\/a>/);
-  assert.match(html, />뮌헨<\/a>/);
+  assert.match(html, />특이점이 온다 갤<\/a>/);
+  assert.match(html, />AI 활용 갤<\/a>/);
+  assert.match(html, />뮌헨 소식 \(펨코\)<\/a>/);
 
   assert.match(app, /Array\.isArray\(state\.archive\?\.archives\)/);
   assert.match(app, /getAvailableArchives\(\)\.map/);
   assert.match(app, /tab\.setAttribute\("role", "tab"\)/);
   assert.match(app, /tab\.setAttribute\("aria-selected", String\(key === state\.target\)\)/);
   assert.match(app, /\["ArrowLeft", "ArrowRight", "Home", "End"\]/);
-  assert.match(app, /archive\.display_name/);
+  assert.match(app, /"dcinside-singularity": "특이점이 온다 갤"/);
+  assert.match(app, /"dcinside-agent-stack": "AI 활용 갤"/);
+  assert.match(app, /"fmkorea-munich": "뮌헨 소식 \(펨코\)"/);
+  assert.match(app, /ARCHIVE_TAB_LABELS\[key\] \|\| String\(archive\.display_name \|\| key\)/);
   assert.match(css, /\.archive-tab\[aria-selected="true"\]/);
 });
 
@@ -164,9 +172,12 @@ test("renders untrusted archive data without HTML injection", () => {
   assert.match(app, /\["http:", "https:"\]/);
   assert.match(app, /String\(subject \|\| ""\)\.trim\(\)/);
   assert.match(app, /createSubjectCell\(post\.subject\)/);
-  assert.match(app, /SUBJECT_PREVIEW_LENGTH = 3/);
+  assert.match(app, /DESKTOP_SUBJECT_PREVIEW_LENGTH = 5/);
+  assert.match(app, /MOBILE_SUBJECT_PREVIEW_LENGTH = 3/);
   assert.match(app, /new Intl\.Segmenter\("ko", \{ granularity: "grapheme" \}\)/);
-  assert.match(app, /createCell\(preview, "cell-subject"\)/);
+  assert.match(app, /createCell\("", "cell-subject"\)/);
+  assert.match(app, /subject-preview-desktop/);
+  assert.match(app, /subject-preview-mobile/);
   assert.match(app, /cell\.setAttribute\("aria-label", value\)/);
   assert.doesNotMatch(app, /cell\.title = value/);
   assert.doesNotMatch(app, /subject-text/);
@@ -241,15 +252,38 @@ test("locks desktop rows and responsive column reduction", () => {
   assert.match(css, /\.cell-date\s*{\s*display:\s*none/);
   assert.match(css, /overflow-x:\s*hidden/);
   assert.match(css, /text-overflow:\s*ellipsis/);
-  assert.match(css, /grid-template-columns:\s*88px 72px minmax\(0, 1fr\) 104px 64px 64px/);
+  assert.match(css, /grid-template-columns:\s*88px 72px minmax\(0, 1fr\) 64px 104px/);
   assert.match(css, /\.cell-subject\s*{[^}]*text-overflow:\s*clip[^}]*white-space:\s*nowrap/);
   assert.doesNotMatch(css, /\.cell-subject\s*{[^}]*text-overflow:\s*ellipsis/);
   assert.match(css, /\.post-row \.cell-subject:empty::before\s*{\s*content:\s*"\\00a0"/);
-  assert.match(css, /@media \(max-width:\s*520px\)[\s\S]*grid-template-columns:\s*64px minmax\(0, 1fr\) 48px 48px/);
+  assert.match(css, /@media \(max-width:\s*520px\)[\s\S]*grid-template-columns:\s*64px minmax\(0, 1fr\) 48px/);
   assert.doesNotMatch(css, /\.board-cell\s*{[^}]*display:\s*flex/);
   assert.doesNotMatch(css, /\.board-cell\s*{[^}]*height:\s*100%/);
   assert.match(css, /\.board-cell \+ \.board-cell\s*{[\s\S]*border-left:\s*1px solid/);
   assert.doesNotMatch(css, /\.post-subject/);
+});
+
+test("moves comment counts beside ellipsized titles", () => {
+  assert.doesNotMatch(app, /"cell-comments numeric-cell"/);
+  assert.match(app, /commentCount\.className = "post-comment-count"/);
+  assert.match(app, /commentCount\.textContent = `\[\$\{numberFormatter\.format\(comments\)\}\]`/);
+  assert.match(app, /content\.append\(titleText, commentCount\)/);
+  assert.match(app, /commentDescription\.className = "visually-hidden"/);
+  assert.match(app, /commentDescription\.textContent = `댓글 \$\{comments\}개`/);
+  assert.match(css, /\.visually-hidden\s*{[^}]*position:\s*absolute[^}]*clip:\s*rect\(0 0 0 0\)/s);
+  assert.match(css, /\.post-title-text\s*{[^}]*flex:\s*0 1 auto[^}]*text-overflow:\s*ellipsis/s);
+  assert.match(css, /\.post-comment-count\s*{[^}]*flex:\s*0 0 auto[^}]*color:\s*var\(--color-primary\)/s);
+});
+
+test("collapses filters only on compact mobile screens", () => {
+  assert.match(html, /id="filter-toggle"[\s\S]*aria-controls="filter-form"[\s\S]*aria-expanded="false"/);
+  assert.match(app, /setMobileFiltersExpanded\(hasActiveFilterState\(\)\)/);
+  assert.match(app, /filterToggle\.addEventListener\("click"/);
+  assert.match(css, /\.filter-toggle\s*{\s*display:\s*none/);
+  assert.match(
+    css,
+    /@media \(max-width:\s*520px\)[\s\S]*\.filter-toggle\s*{[^}]*display:\s*flex[\s\S]*\.filter-form\s*{[^}]*display:\s*none[\s\S]*\.filter-shell\.is-filter-expanded \.filter-form\s*{[^}]*display:\s*grid/
+  );
 });
 
 test("wraps the expanded filter bar only when a single row no longer fits", () => {
