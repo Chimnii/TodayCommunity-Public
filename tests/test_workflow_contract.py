@@ -35,6 +35,11 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.deploy_scheduler = (WORKFLOWS / "deploy-scheduler.yml").read_text(
             encoding="utf-8"
         )
+        self.fmkorea = None
+        if IS_PRIVATE_SOURCE:
+            self.fmkorea = (
+                ACTIVE_PRIVATE_WORKFLOWS / "scan-fmkorea.yml"
+            ).read_text(encoding="utf-8")
 
     def test_workflows_share_one_non_cancelling_concurrency_group(self) -> None:
         for workflow in (self.hot, self.backfill):
@@ -42,9 +47,11 @@ class CrawlWorkflowContractTests(unittest.TestCase):
             self.assertRegex(workflow, r"(?m)^\s*cancel-in-progress: false\s*$")
 
     def test_workflows_pin_actions_and_do_not_persist_checkout_credentials(self) -> None:
-        for workflow in (self.hot, self.backfill):
+        workflows = [self.hot, self.backfill]
+        if self.fmkorea is not None:
+            workflows.append(self.fmkorea)
+        for workflow in workflows:
             self.assertIn(CHECKOUT_PIN, workflow)
-            self.assertIn(SETUP_PYTHON_PIN, workflow)
             self.assertRegex(
                 workflow,
                 r"(?m)^\s*persist-credentials: false\s*$",
@@ -55,6 +62,8 @@ class CrawlWorkflowContractTests(unittest.TestCase):
                     r"^[^@]+@[0-9a-f]{40}$",
                     msg=f"workflow action is not pinned to a full commit: {action}",
                 )
+        for workflow in (self.hot, self.backfill):
+            self.assertIn(SETUP_PYTHON_PIN, workflow)
 
     def test_public_workflows_keep_minimal_permissions_and_safe_triggers(self) -> None:
         for workflow in (
@@ -74,6 +83,14 @@ class CrawlWorkflowContractTests(unittest.TestCase):
             self.assertRegex(workflow, r"(?m)^\s+environment: collection\s*$")
         for workflow in (self.deploy_pages, self.deploy_scheduler):
             self.assertRegex(workflow, r"(?m)^\s+environment: production\s*$")
+
+        if self.fmkorea is not None:
+            self.assertRegex(
+                self.fmkorea,
+                r"(?m)^permissions:\s*\n\s+contents: read\s*$",
+            )
+            self.assertNotIn("pull_request", self.fmkorea)
+            self.assertNotIn("environment:", self.fmkorea)
 
     def test_deployment_workflows_use_locked_wrangler_and_split_tokens(self) -> None:
         for workflow in (self.deploy_pages, self.deploy_scheduler):
@@ -176,13 +193,19 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertIn("$dispatchBody.inputs", script)
         self.assertIn('ConvertTo-Json -Depth 4 -Compress', script)
         self.assertIn(
-            '[ValidateSet("scan-dcinside.yml", "scan-dcinside-backfill.yml")]',
+            '"scan-dcinside-backfill.yml", "scan-fmkorea.yml")]',
             script,
         )
         self.assertIn(
             "An active Hot or Backfill run already exists",
             script,
         )
+
+        self.assertIn('$Repository = "Chimnii/TodayCommunity"', script)
+        self.assertIn("[switch]$FmkoreaPersist", script)
+        self.assertIn("[ValidateRange(0, 30)]", script)
+        self.assertIn("dispatched_at = [DateTimeOffset]::UtcNow", script)
+        self.assertIn("max_pages_per_target = [string]$FmkoreaMaxPages", script)
     def test_scheduler_deploys_only_relevant_main_changes_after_verification(self) -> None:
         self.assertIn("workflow_dispatch:", self.deploy_scheduler)
         self.assertRegex(self.deploy_scheduler, r"(?m)^  push:\s*$")
@@ -212,16 +235,76 @@ class CrawlWorkflowContractTests(unittest.TestCase):
                     msg=f"{path.name} still schedules the combined crawl mode",
                 )
 
-    def test_private_source_has_no_active_crawl_workflows_after_cutover(self) -> None:
+    def test_private_source_has_exactly_one_fmkorea_crawl_workflow(self) -> None:
         if not IS_PRIVATE_SOURCE:
             self.skipTest("running in the public mirror")
 
-        private_hot_path = ACTIVE_PRIVATE_WORKFLOWS / "scan-dcinside.yml"
-        private_backfill_path = (
-            ACTIVE_PRIVATE_WORKFLOWS / "scan-dcinside-backfill.yml"
+        workflow_names = {
+            path.name for path in ACTIVE_PRIVATE_WORKFLOWS.glob("*.yml")
+        }
+        self.assertEqual(workflow_names, {"scan-fmkorea.yml"})
+
+    def test_private_fmkorea_workflow_is_hot_only_and_self_hosted(self) -> None:
+        if self.fmkorea is None:
+            self.skipTest("running in the public mirror")
+
+        workflow = self.fmkorea
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertNotRegex(workflow, r"(?m)^\s*schedule:\s*$")
+        self.assertIn("if: github.ref == 'refs/heads/main'", workflow)
+        self.assertIn(
+            "runs-on: [self-hosted, Windows, X64, todaycommunity-fm]",
+            workflow,
         )
-        self.assertFalse(private_hot_path.exists())
-        self.assertFalse(private_backfill_path.exists())
+        self.assertRegex(workflow, r"(?m)^\s+group: scan-fmkorea\s*$")
+        self.assertRegex(workflow, r"(?m)^\s+cancel-in-progress: false\s*$")
+        self.assertRegex(workflow, r"(?m)^\s{4}timeout-minutes: 20\s*$")
+        self.assertIn('TC_FMKOREA_HEADLESS: "1"', workflow)
+        self.assertIn('TC_FMKOREA_REQUEST_INTERVAL_SECONDS: "10"', workflow)
+        self.assertIn("crawler/requirements-fmkorea-browser.txt", workflow)
+        self.assertIn("--mode", workflow)
+        self.assertIn('"hot"', workflow)
+        self.assertNotIn('"backfill"', workflow)
+        self.assertIn('"--persist"', workflow)
+        self.assertNotIn("playwright install", workflow)
+
+    def test_private_fmkorea_workflow_fails_safe_before_checkout(self) -> None:
+        if self.fmkorea is None:
+            self.skipTest("running in the public mirror")
+
+        workflow = self.fmkorea
+        freshness_index = workflow.index("Validate freshness and inputs before checkout")
+        checkout_index = workflow.index("Checkout approved main revision")
+        self.assertLess(freshness_index, checkout_index)
+        self.assertIn("$maximumAgeMinutes = 45", workflow)
+        self.assertIn("$maximumFutureSkewMinutes = 5", workflow)
+        self.assertIn("$shouldRun = $false", workflow)
+        self.assertIn("PERSIST_REQUESTED: ${{ inputs.persist }}", workflow)
+        self.assertIn(
+            "Persisting dispatches require dispatched_at for stale-job protection.",
+            workflow,
+        )
+        self.assertIn('"should_run=$($shouldRun.ToString()', workflow)
+        self.assertIn(
+            "Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append",
+            workflow,
+        )
+        self.assertNotIn(">> $env:GITHUB_OUTPUT", workflow)
+        self.assertIn("max_pages_per_target", workflow)
+        self.assertIn("default: false", workflow)
+        self.assertIn("default: 1", workflow)
+        self.assertGreaterEqual(
+            workflow.count("if: steps.freshness.outputs.should_run == 'true'"),
+            6,
+        )
+        self.assertIn("inputs.persist == true", workflow)
+        self.assertIn("inputs.persist != true", workflow)
+        for secret_name in (
+            "TC_CF_ACCOUNT_ID",
+            "TC_CF_DATABASE_ID",
+            "TC_CF_API_TOKEN",
+        ):
+            self.assertIn(f"secrets.{secret_name}", workflow)
 
     def test_local_secret_and_cloudflare_state_patterns_are_ignored(self) -> None:
         ignore_lines = {
