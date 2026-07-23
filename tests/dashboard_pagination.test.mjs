@@ -54,7 +54,7 @@ test("normalizeSignedInteger preserves valid negative recommendation counts", ()
   assert.equal(normalizeSignedInteger("not-a-number", 0), 0);
 });
 
-test("createSubjectPreview counts combined emoji as one grapheme at each breakpoint", () => {
+test("createSubjectPreview counts combined emoji as one grapheme for any preview limit", () => {
   assert.equal(createSubjectPreview("☕작업잡담", 5), "☕작업잡담");
   assert.equal(createSubjectPreview("☕작업잡담", 3), "☕작업");
   assert.equal(createSubjectPreview("👨‍👩‍👧‍👦AI잡담", 5), "👨‍👩‍👧‍👦AI잡담");

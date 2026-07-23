@@ -173,7 +173,7 @@ test("renders untrusted archive data without HTML injection", () => {
   assert.match(app, /String\(subject \|\| ""\)\.trim\(\)/);
   assert.match(app, /createSubjectCell\(post\.subject\)/);
   assert.match(app, /DESKTOP_SUBJECT_PREVIEW_LENGTH = 5/);
-  assert.match(app, /MOBILE_SUBJECT_PREVIEW_LENGTH = 3/);
+  assert.match(app, /MOBILE_SUBJECT_PREVIEW_LENGTH = 5/);
   assert.match(app, /new Intl\.Segmenter\("ko", \{ granularity: "grapheme" \}\)/);
   assert.match(app, /createCell\("", "cell-subject"\)/);
   assert.match(app, /subject-preview-desktop/);
@@ -256,7 +256,9 @@ test("locks desktop rows and responsive column reduction", () => {
   assert.match(css, /\.cell-subject\s*{[^}]*text-overflow:\s*clip[^}]*white-space:\s*nowrap/);
   assert.doesNotMatch(css, /\.cell-subject\s*{[^}]*text-overflow:\s*ellipsis/);
   assert.match(css, /\.post-row \.cell-subject:empty::before\s*{\s*content:\s*"\\00a0"/);
-  assert.match(css, /@media \(max-width:\s*520px\)[\s\S]*grid-template-columns:\s*64px minmax\(0, 1fr\) 48px/);
+  assert.match(css, /@media \(max-width:\s*520px\)[\s\S]*grid-template-columns:\s*72px minmax\(0, 1fr\) 48px/);
+  assert.match(css, /@media \(max-width:\s*520px\)[\s\S]*html\s*{[^}]*font-size:\s*96\.875%/);
+  assert.match(css, /@media \(max-width:\s*520px\)[\s\S]*\.board-cell\s*{[^}]*padding:\s*0 5px/);
   assert.doesNotMatch(css, /\.board-cell\s*{[^}]*display:\s*flex/);
   assert.doesNotMatch(css, /\.board-cell\s*{[^}]*height:\s*100%/);
   assert.match(css, /\.board-cell \+ \.board-cell\s*{[\s\S]*border-left:\s*1px solid/);

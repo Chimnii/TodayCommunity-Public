@@ -911,6 +911,10 @@ a {
 }
 
 @media (max-width: 520px) {
+  html {
+    font-size: 96.875%;
+  }
+
   .page-shell {
     padding: var(--space-5) var(--space-3) var(--space-10);
   }
@@ -970,7 +974,7 @@ a {
   }
 
   .board-row {
-    grid-template-columns: 64px minmax(0, 1fr) 48px;
+    grid-template-columns: 72px minmax(0, 1fr) 48px;
   }
 
   .cell-date {
@@ -978,7 +982,7 @@ a {
   }
 
   .board-cell {
-    padding: 0 6px;
+    padding: 0 5px;
   }
 
   .post-row {

@@ -41,7 +41,7 @@ const DEFAULT_STATE = Object.freeze({
 const VALID_SORTS = new Set(["created_at", "upvotes", "comments"]);
 const VALID_PAGE_SIZES = new Set([20, 30, 50, 100]);
 const DESKTOP_SUBJECT_PREVIEW_LENGTH = 5;
-const MOBILE_SUBJECT_PREVIEW_LENGTH = 3;
+const MOBILE_SUBJECT_PREVIEW_LENGTH = 5;
 const PAGE_WINDOW_RADIUS = 3;
 const subjectSegmenter = typeof Intl.Segmenter === "function"
   ? new Intl.Segmenter("ko", { granularity: "grapheme" })
