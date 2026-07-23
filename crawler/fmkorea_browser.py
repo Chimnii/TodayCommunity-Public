@@ -24,7 +24,7 @@ from crawler.jobs.scan_new_posts import (
 
 
 FMKOREA_ALLOWED_HOSTS = frozenset({"fmkorea.com", "www.fmkorea.com"})
-DEFAULT_CDP_PORT = 39224
+DEFAULT_CDP_PORT = 39225
 PROFILE_MARKER_NAME = ".todaycommunity-fmkorea-profile"
 PROFILE_MARKER_CONTENT = "TodayCommunity FMKorea dedicated Chrome profile\n"
 HOST_SESSION_MUTEX_NAME = r"Global\TodayCommunity.FMKorea.Chrome"

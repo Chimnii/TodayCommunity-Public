@@ -143,6 +143,7 @@ class FmkoreaBrowserConfigTests(unittest.TestCase):
                 config = FmkoreaBrowserConfig.from_env(headless=True)
 
         self.assertEqual(config.min_navigation_interval_seconds, 10.0)
+        self.assertEqual(config.cdp_port, 39225)
         self.assertIn(Path("/usr/bin/google-chrome"), CHROME_EXECUTABLE_CANDIDATES)
 
     def test_env_config_uses_explicit_dedicated_paths_and_bounds(self) -> None:
@@ -269,7 +270,7 @@ class DedicatedProfileTests(unittest.TestCase):
             side_effect=[True, True, False],
         ):
             stopped = wait_for_cdp_listener_to_stop(
-                39224,
+                39225,
                 timeout_seconds=1.0,
                 monotonic=clock.monotonic,
                 sleep=clock.sleep,
@@ -296,18 +297,18 @@ class CdpReadinessTests(unittest.TestCase):
     def test_requires_loopback_browser_websocket_on_the_same_port(self) -> None:
         valid = self.Response(
             b'{"webSocketDebuggerUrl": '
-            b'"ws://localhost:39224/devtools/browser/synthetic"}'
+            b'"ws://localhost:39225/devtools/browser/synthetic"}'
         )
         self.assertTrue(
             is_cdp_endpoint_ready(
-                "http://127.0.0.1:39224",
+                "http://127.0.0.1:39225",
                 open_url=lambda *args, **kwargs: valid,
             )
         )
 
         for body in (
             b"[]",
-            b'{"webSocketDebuggerUrl":"ws://example.com:39224/devtools/browser/x"}',
+            b'{"webSocketDebuggerUrl":"ws://example.com:39225/devtools/browser/x"}',
             b'{"webSocketDebuggerUrl":"ws://localhost:40000/devtools/browser/x"}',
             b"not-json",
         ):
@@ -315,7 +316,7 @@ class CdpReadinessTests(unittest.TestCase):
                 response = self.Response(body)
                 self.assertFalse(
                     is_cdp_endpoint_ready(
-                        "http://127.0.0.1:39224",
+                        "http://127.0.0.1:39225",
                         open_url=lambda *args, **kwargs: response,
                     )
                 )

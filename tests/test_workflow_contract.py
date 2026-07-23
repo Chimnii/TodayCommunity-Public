@@ -277,6 +277,7 @@ class CrawlWorkflowContractTests(unittest.TestCase):
             r"TC_FMKOREA_PROFILE_DIR: C:\ProgramData\TodayCommunity\fmkorea-chrome-profile",
             workflow,
         )
+        self.assertIn('TC_FMKOREA_CDP_PORT: "39225"', workflow)
         self.assertIn('TC_FMKOREA_HEADLESS: "1"', workflow)
         self.assertIn('TC_FMKOREA_REQUEST_INTERVAL_SECONDS: "10"', workflow)
         self.assertIn("crawler/requirements-fmkorea-browser.txt", workflow)
@@ -370,6 +371,15 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         )
         self.assertNotIn('--replace', script)
         self.assertNotIn('--disableupdate', script)
+
+    def test_public_mirror_keeps_agent_instructions_private(self) -> None:
+        if not IS_PRIVATE_SOURCE:
+            self.skipTest("running in the public mirror")
+
+        script = (ROOT / "scripts" / "sync_public_mirror.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"AGENTS.md"', script)
 
     def test_local_secret_and_cloudflare_state_patterns_are_ignored(self) -> None:
         ignore_lines = {
