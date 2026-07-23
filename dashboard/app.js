@@ -7,7 +7,12 @@ const LIST_ONLY_DESCRIPTION =
 const ARCHIVE_TAB_LABELS = Object.freeze({
   "dcinside-singularity": "특이점이 온다 갤",
   "dcinside-agent-stack": "AI 활용 갤",
-  "fmkorea-munich": "뮌헨 소식 (펨코)",
+  "fmkorea-munich": "Bayern Munich",
+});
+const ARCHIVE_MASTHEAD_DESCRIPTIONS = Object.freeze({
+  "dcinside-singularity": "디시인사이드 특이점이 온다 갤러리 인기글.",
+  "dcinside-agent-stack": "디시인사이드 AI 활용 갤러리 인기글.",
+  "fmkorea-munich": "에펨코리아 바이에른 뮌헨 관련 인기글.",
 });
 const FALLBACK_ARCHIVES = Object.freeze([
   {
@@ -488,9 +493,13 @@ function renderSummary(view) {
   const summary = state.archive?.summary || {};
 
   if (archive) {
-    const isFilteredArchive = String(archive.archive_key || "").startsWith("dcinside-");
-    const collectionDescription = isFilteredArchive ? SOURCE_DESCRIPTION : LIST_ONLY_DESCRIPTION;
-    elements.sourceDescription.textContent = `${archive.description}. ${collectionDescription}`;
+    const descriptionLead =
+      ARCHIVE_MASTHEAD_DESCRIPTIONS[archive.archive_key] || `${archive.description}.`;
+    elements.sourceDescription.replaceChildren(
+      descriptionLead,
+      document.createElement("br"),
+      LIST_ONLY_DESCRIPTION
+    );
     elements.archiveTitle.textContent = `${archive.display_name} 아카이브`;
     elements.board.setAttribute("aria-label", `${archive.display_name} 저장 글`);
     document.title = `${archive.display_name} | 오늘의 커뮤니티`;

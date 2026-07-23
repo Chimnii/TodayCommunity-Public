@@ -55,7 +55,7 @@ test("ships three accessible archive tabs and replaces them from the API catalog
   assert.match(html, /href="\/?\?target=fmkorea-munich"/);
   assert.match(html, />특이점이 온다 갤<\/a>/);
   assert.match(html, />AI 활용 갤<\/a>/);
-  assert.match(html, />뮌헨 소식 \(펨코\)<\/a>/);
+  assert.match(html, />Bayern Munich<\/a>/);
 
   assert.match(app, /Array\.isArray\(state\.archive\?\.archives\)/);
   assert.match(app, /getAvailableArchives\(\)\.map/);
@@ -64,7 +64,7 @@ test("ships three accessible archive tabs and replaces them from the API catalog
   assert.match(app, /\["ArrowLeft", "ArrowRight", "Home", "End"\]/);
   assert.match(app, /"dcinside-singularity": "특이점이 온다 갤"/);
   assert.match(app, /"dcinside-agent-stack": "AI 활용 갤"/);
-  assert.match(app, /"fmkorea-munich": "뮌헨 소식 \(펨코\)"/);
+  assert.match(app, /"fmkorea-munich": "Bayern Munich"/);
   assert.match(
     app,
     /archive_key: "dcinside-agent-stack",[\s\S]*display_name: "AI 활용",[\s\S]*description: "디시인사이드 AI 활용 갤러리 인기글"/
@@ -160,8 +160,15 @@ test("filters by exact subjects from the complete saved set", () => {
   assert.match(fixtureServer, /subject_options: subjectOptions/);
 });
 
-test("shows a stable collection summary without volatile numeric thresholds", () => {
-  assert.match(app, /추천수 또는 댓글수가 일정 조건을 만족하는 글/);
+test("shows an archive-specific two-line collection summary", () => {
+  assert.match(html, /디시인사이드 특이점이 온다 갤러리 인기글\.<br \/>/);
+  assert.match(app, /"dcinside-singularity": "디시인사이드 특이점이 온다 갤러리 인기글\."/);
+  assert.match(app, /"dcinside-agent-stack": "디시인사이드 AI 활용 갤러리 인기글\."/);
+  assert.match(app, /"fmkorea-munich": "에펨코리아 바이에른 뮌헨 관련 인기글\."/);
+  assert.match(
+    app,
+    /elements\.sourceDescription\.replaceChildren\([\s\S]*document\.createElement\("br"\)[\s\S]*LIST_ONLY_DESCRIPTION/
+  );
   assert.match(app, /본문 내용은 수집하지 않고 제목과 원문 링크 등 목록 정보만 수집합니다/);
   assert.doesNotMatch(app, /수집 기준:|추천수 \+ 댓글수\/|≥/);
 });
@@ -236,6 +243,14 @@ test("supports compact direct page jumps and a seven-page window", () => {
   assert.match(
     css,
     /@media \(max-width:\s*1010px\)[\s\S]*\.pagination\s*{[^}]*flex-wrap:\s*nowrap[^}]*align-items:\s*flex-start[\s\S]*\.pagination-pages\s*{[^}]*overflow-x:\s*auto[\s\S]*\.pagination-jump\s*{[^}]*margin-top:\s*var\(--space-1\)/
+  );
+  assert.match(
+    css,
+    /@media \(max-width:\s*520px\)[\s\S]*\.board-footer\s*{[^}]*position:\s*relative[^}]*display:\s*block[\s\S]*\.pagination\s*{[^}]*--pagination-control-size:\s*28px[^}]*display:\s*block[\s\S]*\.pagination-jump\s*{[^}]*position:\s*absolute[^}]*top:\s*var\(--space-3\)[^}]*right:\s*var\(--space-3\)[^}]*margin:\s*0/
+  );
+  assert.match(
+    css,
+    /@media \(max-width:\s*520px\)[\s\S]*\.pagination-button\s*{[^}]*padding:\s*0 var\(--space-1\)[^}]*font-size:\s*var\(--text-xs\)[\s\S]*\.pagination-jump-input\s*{[^}]*width:\s*var\(--space-12\)[^}]*font-size:\s*var\(--text-xs\)/
   );
   assert.doesNotMatch(css, /\.pagination-page:not\(\[aria-current="page"\]\)[^{]*{[^}]*display:\s*none/);
 });

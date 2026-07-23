@@ -1002,8 +1002,53 @@ a {
   }
 
   .board-footer {
-    align-items: flex-start;
-    flex-direction: column;
+    position: relative;
+    display: block;
+  }
+
+  .board-footer p {
+    display: flex;
+    width: 100%;
+    min-height: 28px;
+    align-items: center;
+    padding-right: 96px;
+  }
+
+  .pagination {
+    --pagination-control-size: 28px;
+
+    display: block;
+    margin-top: var(--space-1);
+  }
+
+  .pagination-pages {
+    width: 100%;
+    gap: 2px;
+    padding: var(--space-1) 0 0;
+  }
+
+  .pagination-button {
+    padding: 0 var(--space-1);
+    font-size: var(--text-xs);
+  }
+
+  .pagination-ellipsis {
+    min-width: var(--space-4);
+    font-size: var(--text-xs);
+  }
+
+  .pagination-jump {
+    position: absolute;
+    top: var(--space-3);
+    right: var(--space-3);
+    gap: 2px;
+    margin: 0;
+  }
+
+  .pagination-jump-input {
+    width: var(--space-12);
+    padding: 0 var(--space-1);
+    font-size: var(--text-xs);
   }
 
   .drawer-header,
