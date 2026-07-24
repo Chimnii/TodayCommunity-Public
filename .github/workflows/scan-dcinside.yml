@@ -15,6 +15,7 @@ on:
         type: number
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -23,6 +24,8 @@ concurrency:
 
 jobs:
   hot:
+    name: DC Hot crawl attempt
+    continue-on-error: true
     runs-on: ubuntu-latest
     environment: collection
     timeout-minutes: 30
@@ -88,3 +91,26 @@ jobs:
           TC_BLOCK_COOLDOWN_HOURS: "6"
           TC_TRANSIENT_FETCH_ATTEMPTS: "2"
         run: python -m crawler.jobs.run_all_sources --mode hot --persist
+
+      - name: "Failure streak: counted success"
+        run: echo "DC Hot crawl attempt completed successfully."
+
+  failure-streak-gate:
+    name: DC Hot failure streak gate
+    if: always()
+    needs: hot
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout failure streak helper
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Enforce DC Hot failure streak
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TC_FAILURE_STREAK_ATTEMPT_JOB: DC Hot crawl attempt
+          TC_FAILURE_STREAK_GATE_JOB: DC Hot failure streak gate
+          TC_FAILURE_STREAK_LANE: DC Hot
+        run: python3 -m crawler.jobs.enforce_failure_streak

@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -12,6 +13,8 @@ concurrency:
 
 jobs:
   backfill:
+    name: DC Backfill crawl attempt
+    continue-on-error: true
     runs-on: ubuntu-latest
     environment: collection
     timeout-minutes: 45
@@ -48,3 +51,26 @@ jobs:
           TC_BLOCK_COOLDOWN_HOURS: "6"
           TC_TRANSIENT_FETCH_ATTEMPTS: "2"
         run: python -m crawler.jobs.run_all_sources --mode backfill --persist
+
+      - name: "Failure streak: counted success"
+        run: echo "DC Backfill crawl attempt completed successfully."
+
+  failure-streak-gate:
+    name: DC Backfill failure streak gate
+    if: always()
+    needs: backfill
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout failure streak helper
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Enforce DC Backfill failure streak
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TC_FAILURE_STREAK_ATTEMPT_JOB: DC Backfill crawl attempt
+          TC_FAILURE_STREAK_GATE_JOB: DC Backfill failure streak gate
+          TC_FAILURE_STREAK_LANE: DC Backfill
+        run: python3 -m crawler.jobs.enforce_failure_streak

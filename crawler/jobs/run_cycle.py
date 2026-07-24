@@ -58,8 +58,6 @@ DEFAULT_MIN_REQUEST_INTERVAL_SECONDS = 10.0
 DEFAULT_DEEP_RESERVED_SECONDS = 5 * 60.0
 DEFAULT_BLOCK_COOLDOWN_HOURS = 6.0
 DEFAULT_TRANSIENT_FETCH_ATTEMPTS = 2
-TIMEOUT_STREAK_METADATA_KEY = "consecutive_timeout_cycles"
-TIMEOUT_FAILURE_THRESHOLD = 3
 
 CYCLE_MODE_FULL = "full"
 CYCLE_MODE_HOT = "hot"
@@ -291,8 +289,6 @@ class CrawlCycle:
                 self._mark_active_phase("blocked", blocked.reason)
                 self._record_block(blocked.reason, self.summaries)
                 return self._result("blocked", self.summaries, str(blocked))
-        except CrawlTimeoutError as exc:
-            return self._handle_exhausted_timeout(exc)
         except (CrawlSourceError, RuntimeError) as exc:
             self._mark_active_phase("failed", str(exc))
             self._record_failure(str(exc), self.summaries)
@@ -302,19 +298,10 @@ class CrawlCycle:
             self._record_failure(str(exc), self.summaries)
             return self._result("failed", self.summaries, str(exc))
 
-        timeout_streak = self._timeout_streak()
-        if timeout_streak > 0:
-            self.source_state.state_metadata[TIMEOUT_STREAK_METADATA_KEY] = 0
-
         if self.client:
             try:
                 save_source_state(self.client, self.source_state)
             except Exception as exc:
-                if timeout_streak > 0:
-                    reason = f"Could not reset consecutive timeout state: {exc}"
-                    self._mark_active_phase("failed", reason)
-                    self._record_failure(reason, self.summaries)
-                    return self._result("failed", self.summaries, reason)
                 self.persistence_warnings.append(
                     f"Could not save non-authoritative source hints: {exc}"
                 )
@@ -1596,88 +1583,6 @@ class CrawlCycle:
         active = self.summaries[-1]
         active.status = status
         active.stop_reason = reason[:500]
-
-    def _timeout_streak(self) -> int:
-        return positive_int(
-            self.source_state.state_metadata.get(TIMEOUT_STREAK_METADATA_KEY),
-            default=0,
-        )
-
-    def _persist_timeout_streak(self, streak: int) -> None:
-        """Persist only the shared counter after an aborted source action.
-
-        A timed-out Backfill may have changed page-hint metadata in memory before
-        the failing request. Saving the complete SourceState here would make
-        those unfinished hints authoritative, so the failure path updates only
-        the counter inside the existing JSON metadata column.
-        """
-
-        self.source_state.state_metadata[TIMEOUT_STREAK_METADATA_KEY] = streak
-        if not self.client:
-            return
-        self.client.query(
-            """
-            UPDATE source_state
-            SET state_metadata = json_set(
-                  CASE
-                    WHEN json_valid(state_metadata) THEN state_metadata
-                    ELSE '{}'
-                  END,
-                  '$.consecutive_timeout_cycles',
-                  ?
-                ),
-                updated_at = ?
-            WHERE source_key = ?
-            """,
-            [streak, utc_now(), self.target.key],
-        )
-
-    def _handle_exhausted_timeout(
-        self,
-        exc: CrawlTimeoutError,
-    ) -> Dict[str, object]:
-        streak = self._timeout_streak() + 1
-        timeout_reason = f"Consecutive timeout cycle {streak}: {exc}"
-        try:
-            self._persist_timeout_streak(streak)
-        except Exception as save_exc:
-            reason = f"Could not persist consecutive timeout state: {save_exc}"
-            self._mark_active_phase("failed", reason)
-            self._record_failure(reason, self.summaries)
-            return self._result("failed", self.summaries, reason)
-
-        if streak >= TIMEOUT_FAILURE_THRESHOLD:
-            self._mark_active_phase("failed", timeout_reason)
-            self._record_failure(timeout_reason, self.summaries)
-            return self._result("failed", self.summaries, timeout_reason)
-
-        self._mark_active_phase("partial", timeout_reason)
-        self._record_timeout_warning(timeout_reason, self.summaries)
-        return self._result("partial", self.summaries, timeout_reason)
-
-    def _record_timeout_warning(
-        self,
-        reason: str,
-        summaries: Sequence[PhaseSummary],
-    ) -> None:
-        if self.client:
-            try:
-                record_run(
-                    self.client,
-                    target=self.target,
-                    status="partial",
-                    scanned_pages=sum(item.scanned_pages for item in summaries),
-                    scanned_posts=sum(item.scanned_posts for item in summaries),
-                    matched_posts=sum(item.matched_posts for item in summaries),
-                    run_started_at=self.run_started_at,
-                    error_message=reason,
-                    ensure_source=False,
-                    run_type="crawl_cycle",
-                )
-            except Exception as record_exc:
-                self.persistence_warnings.append(
-                    f"Could not record timeout warning: {record_exc}"
-                )
 
     def _record_block(self, reason: str, summaries: Sequence[PhaseSummary]) -> None:
         timestamp = utc_now()

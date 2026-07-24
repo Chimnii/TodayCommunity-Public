@@ -21,6 +21,11 @@ CHECKOUT_PIN = (
 SETUP_PYTHON_PIN = (
     "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0"
 )
+GITHUB_SCRIPT_PIN = (
+    "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0"
+)
+FAILURE_STREAK_SUCCESS_MARKER = "Failure streak: counted success"
+FAILURE_STREAK_IGNORED_MARKER = "Failure streak: ignored run"
 
 
 class CrawlWorkflowContractTests(unittest.TestCase):
@@ -70,12 +75,17 @@ class CrawlWorkflowContractTests(unittest.TestCase):
             self.assertIn(SETUP_PYTHON_PIN, workflow)
 
     def test_public_workflows_keep_minimal_permissions_and_safe_triggers(self) -> None:
-        for workflow in (
-            self.hot,
-            self.backfill,
-            self.deploy_pages,
-            self.deploy_scheduler,
-        ):
+        for workflow in (self.hot, self.backfill):
+            self.assertRegex(
+                workflow,
+                r"(?m)^permissions:\s*\n"
+                r"\s+actions: read\s*\n"
+                r"\s+contents: read\s*$",
+            )
+            self.assertNotIn("pull_request_target:", workflow)
+            self.assertNotRegex(workflow, r"(?m)^\s*[A-Za-z_-]+:\s*write\s*$")
+
+        for workflow in (self.deploy_pages, self.deploy_scheduler):
             self.assertRegex(
                 workflow,
                 r"(?m)^permissions:\s*\n\s+contents: read\s*$",
@@ -91,10 +101,85 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         if self.fmkorea is not None:
             self.assertRegex(
                 self.fmkorea,
-                r"(?m)^permissions:\s*\n\s+contents: read\s*$",
+                r"(?m)^permissions:\s*\n"
+                r"\s+actions: read\s*\n"
+                r"\s+contents: read\s*$",
             )
             self.assertNotIn("pull_request", self.fmkorea)
             self.assertNotIn("environment:", self.fmkorea)
+            self.assertNotRegex(
+                self.fmkorea,
+                r"(?m)^\s*[A-Za-z_-]+:\s*write\s*$",
+            )
+
+    def test_collection_workflows_use_independent_three_failure_gates(self) -> None:
+        expected = (
+            (
+                self.hot,
+                "hot",
+                "DC Hot crawl attempt",
+                "DC Hot failure streak gate",
+                "DC Hot",
+            ),
+            (
+                self.backfill,
+                "backfill",
+                "DC Backfill crawl attempt",
+                "DC Backfill failure streak gate",
+                "DC Backfill",
+            ),
+        )
+        for workflow, attempt_id, attempt_name, gate_name, lane_name in expected:
+            self.assertRegex(
+                workflow,
+                rf"(?m)^\s{{2}}{attempt_id}:\s*$",
+            )
+            self.assertRegex(
+                workflow,
+                rf"(?m)^\s{{4}}name: {re.escape(attempt_name)}\s*$",
+            )
+            self.assertRegex(
+                workflow,
+                r"(?m)^\s{4}continue-on-error: true\s*$",
+            )
+            self.assertEqual(
+                workflow.count(f'- name: "{FAILURE_STREAK_SUCCESS_MARKER}"'),
+                1,
+            )
+            self.assertRegex(
+                workflow,
+                r"(?m)^\s{2}failure-streak-gate:\s*$",
+            )
+            self.assertRegex(
+                workflow,
+                rf"(?m)^\s{{4}}name: {re.escape(gate_name)}\s*$",
+            )
+            self.assertRegex(workflow, r"(?m)^\s{4}if: always\(\)\s*$")
+            self.assertRegex(
+                workflow,
+                rf"(?m)^\s{{4}}needs: {attempt_id}\s*$",
+            )
+            self.assertIn(
+                f"TC_FAILURE_STREAK_ATTEMPT_JOB: {attempt_name}",
+                workflow,
+            )
+            self.assertIn(
+                f"TC_FAILURE_STREAK_GATE_JOB: {gate_name}",
+                workflow,
+            )
+            self.assertIn(
+                f"TC_FAILURE_STREAK_LANE: {lane_name}",
+                workflow,
+            )
+            self.assertIn(
+                "python3 -m crawler.jobs.enforce_failure_streak",
+                workflow,
+            )
+            gate = workflow.split("  failure-streak-gate:", maxsplit=1)[1]
+            self.assertIn("runs-on: ubuntu-latest", gate)
+            self.assertIn(CHECKOUT_PIN, gate)
+            self.assertNotIn("actions/setup-python", gate)
+            self.assertNotIn("TC_CF_API_TOKEN", gate)
 
     def test_deployment_workflows_use_locked_wrangler_and_split_tokens(self) -> None:
         for workflow in (self.deploy_pages, self.deploy_scheduler):
@@ -286,6 +371,80 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertNotIn('"backfill"', workflow)
         self.assertIn('"--persist"', workflow)
         self.assertNotIn("playwright install", workflow)
+
+    def test_private_fmkorea_failure_gate_uses_the_same_free_runner(self) -> None:
+        if self.fmkorea is None:
+            self.skipTest("running in the public mirror")
+
+        workflow = self.fmkorea
+        self.assertRegex(
+            workflow,
+            r"(?m)^\s{4}name: FM Hot crawl attempt\s*$",
+        )
+        self.assertRegex(
+            workflow,
+            r"(?m)^\s{4}continue-on-error: true\s*$",
+        )
+        self.assertEqual(
+            workflow.count(
+                "runs-on: [self-hosted, Windows, X64, todaycommunity-fm]"
+            ),
+            2,
+        )
+        self.assertEqual(
+            workflow.count(f'- name: "{FAILURE_STREAK_SUCCESS_MARKER}"'),
+            1,
+        )
+        self.assertEqual(
+            workflow.count(f'- name: "{FAILURE_STREAK_IGNORED_MARKER}"'),
+            1,
+        )
+        self.assertIn(
+            "steps.freshness.outcome == 'success' &&",
+            workflow,
+        )
+        self.assertIn(
+            "steps.freshness.outputs.should_run != 'true'",
+            workflow,
+        )
+        self.assertRegex(
+            workflow,
+            r"(?m)^\s{2}failure-streak-gate:\s*$",
+        )
+        gate = workflow.split("  failure-streak-gate:", maxsplit=1)[1]
+        self.assertIn("name: FM Hot failure streak gate", gate)
+        self.assertIn("if: always()", gate)
+        self.assertIn("needs: hot", gate)
+        self.assertIn(GITHUB_SCRIPT_PIN, gate)
+        self.assertEqual(
+            re.findall(r"(?m)^\s{6}- name:", gate),
+            ["      - name:"],
+        )
+        self.assertEqual(
+            re.findall(r"(?m)^\s+uses:\s*([^\s]+)", gate),
+            [GITHUB_SCRIPT_PIN.split(" ", maxsplit=1)[0]],
+        )
+        self.assertIn("github-token: ${{ github.token }}", gate)
+        self.assertIn("retries: 3", gate)
+        self.assertIn("listJobsForWorkflowRunAttempt", gate)
+        self.assertIn("listWorkflowRuns", gate)
+        self.assertIn("GITHUB_RUN_ATTEMPT", gate)
+        self.assertIn("currentIsOutOfOrderRerun", gate)
+        self.assertIn("Ignoring out-of-order rerun", gate)
+        self.assertIn("attemptNumber > 1 &&", gate)
+        self.assertIn('attempts[0].status !== "completed"', gate)
+        self.assertNotIn('status: "completed"', gate)
+        self.assertIn("started_at", gate)
+        self.assertIn("created_at", gate)
+        self.assertIn('const attemptJobName = "FM Hot crawl attempt";', gate)
+        self.assertIn('const gateJobName = "FM Hot failure streak gate";', gate)
+        self.assertNotIn("actions/checkout", gate)
+        self.assertNotIn("actions/setup-python", gate)
+        self.assertNotIn("TC_FMKOREA_PYTHON", gate)
+        self.assertNotIn("crawler.jobs.enforce_failure_streak", gate)
+        self.assertNotIn("TC_CF_ACCOUNT_ID", gate)
+        self.assertNotIn("TC_CF_DATABASE_ID", gate)
+        self.assertNotIn("TC_CF_API_TOKEN", gate)
 
     def test_private_fmkorea_workflow_fails_safe_before_checkout(self) -> None:
         if self.fmkorea is None:
