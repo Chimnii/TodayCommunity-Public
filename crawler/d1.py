@@ -11,7 +11,7 @@ class D1Client:
         account_id: str,
         database_id: str,
         api_token: str,
-        timeout_seconds: float = 15.0,
+        timeout_seconds: float = 30.0,
     ) -> None:
         self.account_id = account_id
         self.database_id = database_id

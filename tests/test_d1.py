@@ -46,6 +46,28 @@ class D1ClientResponseTests(unittest.TestCase):
 
         self.assertEqual(rows, [{"value": 1}])
 
+    def test_default_timeout_is_forwarded_to_urlopen(self) -> None:
+        payload = {
+            "success": True,
+            "errors": [],
+            "result": [
+                {
+                    "success": True,
+                    "results": [{"value": 1}],
+                    "meta": {},
+                }
+            ],
+        }
+
+        with patch(
+            "crawler.d1.request.urlopen",
+            return_value=FakeResponse(payload),
+        ) as urlopen:
+            self.client.query("SELECT 1 AS value")
+
+        self.assertEqual(self.client.timeout_seconds, 30.0)
+        self.assertEqual(urlopen.call_args.kwargs["timeout"], 30.0)
+
     def test_nested_query_failure_is_not_treated_as_success(self) -> None:
         payload = {
             "success": True,
