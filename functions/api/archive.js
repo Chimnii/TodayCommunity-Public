@@ -17,7 +17,7 @@ function jsonResponse(body, status = 200) {
   const cacheControl =
     status >= 400
       ? "no-store"
-      : "public, max-age=15, s-maxage=60, stale-while-revalidate=120";
+      : "public, max-age=15, s-maxage=300";
   return new Response(JSON.stringify(body, null, 2), {
     status,
     headers: {
@@ -177,6 +177,10 @@ function publicArchive(row) {
   };
 }
 
+function firstResult(result) {
+  return result?.results?.[0] ?? null;
+}
+
 export async function onRequestGet(context) {
   try {
     const url = new URL(context.request.url);
@@ -242,110 +246,133 @@ export async function onRequestGet(context) {
       return jsonResponse({ error: "Unknown archive target." }, 400);
     }
 
-    const archiveResult = await db
-      .prepare(
+    const batchStatements = [
+      db.prepare(
         `
         SELECT archive_key, display_name, description, display_order, updated_at
         FROM archives
         WHERE is_public = 1
         ORDER BY display_order ASC, archive_key ASC
         `
-      )
-      .all();
+      ),
+      db
+        .prepare(
+          `
+          SELECT source_key, archive_key, site_name, board_name, board_url,
+                 min_upvotes, min_comments, updated_at
+          FROM sources
+          WHERE archive_key = ?
+          ORDER BY source_key ASC
+          `
+        )
+        .bind(target),
+      db
+        .prepare(
+          `
+          SELECT
+            COUNT(*) AS total_posts,
+            COALESCE(MAX(last_seen_at), '') AS latest_seen_at,
+            (
+              SELECT COALESCE(json_group_array(subject), '[]')
+              FROM (
+                SELECT DISTINCT TRIM(subject) AS subject
+                FROM posts
+                WHERE archive_key = ?
+                  AND TRIM(subject) <> ''
+                  AND length(TRIM(subject)) <= ${MAX_SUBJECT_LENGTH}
+                ORDER BY subject COLLATE NOCASE, subject
+                LIMIT ${MAX_SUBJECT_OPTIONS}
+              )
+            ) AS subject_options_json
+          FROM posts
+          WHERE archive_key = ?
+          `
+        )
+        .bind(target, target),
+      db
+        .prepare(
+          `
+          SELECT COUNT(*) AS filtered_posts
+          FROM posts
+          WHERE ${filter.sql}
+          `
+        )
+        .bind(...filter.bindings),
+      db
+        .prepare(
+          `
+          SELECT runs.source_key, sources.site_name, sources.board_name,
+                 runs.run_type, runs.status, runs.scanned_pages, runs.scanned_posts,
+                 runs.matched_posts, runs.started_at, runs.finished_at,
+                 CASE
+                   WHEN runs.status IN ('failed', 'blocked')
+                    AND runs.error_message IS NOT NULL
+                    AND TRIM(runs.error_message) <> ''
+                   THEN 1
+                   ELSE 0
+                 END AS had_error
+          FROM crawl_runs AS runs
+          INNER JOIN sources ON sources.source_key = runs.source_key
+          WHERE sources.archive_key = ?
+          ORDER BY runs.id DESC
+          LIMIT 10
+          `
+        )
+        .bind(target),
+    ];
+    if (requestedPage === 1) {
+      batchStatements.push(
+        db
+          .prepare(
+            `
+            SELECT archive_key, source_key, external_post_id, subject, title, post_url,
+                   created_at, created_at_raw, upvotes, comments, qualifies_by,
+                   fetched_at, first_seen_at, last_seen_at, status
+            FROM posts
+            WHERE ${filter.sql}
+            ORDER BY ${buildOrderClause(sort)}
+            LIMIT ? OFFSET ?
+            `
+          )
+          .bind(...filter.bindings, pageSize, 0)
+      );
+    }
+
+    const [
+      archiveResult,
+      sourceResult,
+      summaryResult,
+      filteredSummaryResult,
+      runResult,
+      requestedPostResult,
+    ] = await db.batch(batchStatements);
+
     const archives = (archiveResult.results ?? []).map(publicArchive);
-
-    const sourceResult = await db
-      .prepare(
-        `
-        SELECT source_key, archive_key, site_name, board_name, board_url,
-               min_upvotes, min_comments, updated_at
-        FROM sources
-        WHERE archive_key = ?
-        ORDER BY source_key ASC
-        `
-      )
-      .bind(target)
-      .all();
     const sources = sourceResult.results ?? [];
-
-    const summary = await db
-      .prepare(
-        `
-        SELECT
-          COUNT(*) AS total_posts,
-          COALESCE(MAX(last_seen_at), '') AS latest_seen_at,
-          (
-            SELECT COALESCE(json_group_array(subject), '[]')
-            FROM (
-              SELECT DISTINCT TRIM(subject) AS subject
-              FROM posts
-              WHERE archive_key = ?
-                AND TRIM(subject) <> ''
-                AND length(TRIM(subject)) <= ${MAX_SUBJECT_LENGTH}
-              ORDER BY subject COLLATE NOCASE, subject
-              LIMIT ${MAX_SUBJECT_OPTIONS}
-            )
-          ) AS subject_options_json
-        FROM posts
-        WHERE archive_key = ?
-        `
-      )
-      .bind(target, target)
-      .first();
-
-    const filteredSummary = await db
-      .prepare(
-        `
-        SELECT COUNT(*) AS filtered_posts
-        FROM posts
-        WHERE ${filter.sql}
-        `
-      )
-      .bind(...filter.bindings)
-      .first();
-
+    const summary = firstResult(summaryResult);
+    const filteredSummary = firstResult(filteredSummaryResult);
     const filteredPosts = normalizeCount(filteredSummary?.filtered_posts);
     const totalPages = Math.ceil(filteredPosts / pageSize);
     const page = Math.min(requestedPage, Math.max(totalPages, 1));
     const offset = (page - 1) * pageSize;
 
-    const runResult = await db
-      .prepare(
-        `
-        SELECT runs.source_key, sources.site_name, sources.board_name,
-               runs.run_type, runs.status, runs.scanned_pages, runs.scanned_posts,
-               runs.matched_posts, runs.started_at, runs.finished_at,
-               CASE
-                 WHEN runs.status IN ('failed', 'blocked')
-                  AND runs.error_message IS NOT NULL
-                  AND TRIM(runs.error_message) <> ''
-                 THEN 1
-                 ELSE 0
-               END AS had_error
-        FROM crawl_runs AS runs
-        INNER JOIN sources ON sources.source_key = runs.source_key
-        WHERE sources.archive_key = ?
-        ORDER BY runs.id DESC
-        LIMIT 10
-        `
-      )
-      .bind(target)
-      .all();
-
-    const postResult = await db
-      .prepare(
-        `
-        SELECT archive_key, source_key, external_post_id, subject, title, post_url,
-               created_at, created_at_raw, upvotes, comments, qualifies_by,
-               fetched_at, first_seen_at, last_seen_at, status
-        FROM posts
-        WHERE ${filter.sql}
-        ORDER BY ${buildOrderClause(sort)}
-        LIMIT ? OFFSET ?
-        `
-      )
-      .bind(...filter.bindings, pageSize, offset)
-      .all();
+    let postResult = requestedPostResult;
+    if (!postResult) {
+      postResult = await db
+        .prepare(
+          `
+          SELECT archive_key, source_key, external_post_id, subject, title, post_url,
+                 created_at, created_at_raw, upvotes, comments, qualifies_by,
+                 fetched_at, first_seen_at, last_seen_at, status
+          FROM posts
+          WHERE ${filter.sql}
+          ORDER BY ${buildOrderClause(sort)}
+          LIMIT ? OFFSET ?
+          `
+        )
+        .bind(...filter.bindings, pageSize, offset)
+        .all();
+    }
 
     const runs = (runResult.results ?? []).map(
       ({ had_error: hadError, error_message: _discardedError, ...run }) => ({

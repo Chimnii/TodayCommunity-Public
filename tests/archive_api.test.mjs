@@ -25,29 +25,21 @@ class MockStatement {
     return this;
   }
 
-  async first() {
-    this.database.calls.push({ method: "first", sql: this.sql, values: this.values });
-
+  result() {
     if (this.sql.includes("FROM archives")) {
-      return this.database.archives.find(
-        (archive) => archive.archive_key === this.values[0]
-      ) ?? null;
+      if (this.sql.includes("WHERE archive_key = ?")) {
+        const archive = this.database.archives.find(
+          (candidate) => candidate.archive_key === this.values[0]
+        );
+        return { results: archive ? [archive] : [] };
+      }
+      return { results: this.database.archives };
     }
     if (this.sql.includes("AS total_posts")) {
-      return this.database.summary;
+      return { results: [this.database.summary] };
     }
     if (this.sql.includes("AS filtered_posts")) {
-      return { filtered_posts: this.database.filteredPosts };
-    }
-
-    throw new Error(`Unexpected first() query: ${this.sql}`);
-  }
-
-  async all() {
-    this.database.calls.push({ method: "all", sql: this.sql, values: this.values });
-
-    if (this.sql.includes("FROM archives")) {
-      return { results: this.database.archives };
+      return { results: [{ filtered_posts: this.database.filteredPosts }] };
     }
     if (this.sql.includes("FROM sources") && !this.sql.includes("JOIN sources")) {
       return {
@@ -63,7 +55,22 @@ class MockStatement {
       return { results: this.database.posts };
     }
 
-    throw new Error(`Unexpected all() query: ${this.sql}`);
+    throw new Error(`Unexpected query: ${this.sql}`);
+  }
+
+  async first() {
+    this.database.calls.push({ method: "first", sql: this.sql, values: this.values });
+    return this.result().results[0] ?? null;
+  }
+
+  async all() {
+    this.database.calls.push({ method: "all", sql: this.sql, values: this.values });
+    return this.result();
+  }
+
+  batchResult() {
+    this.database.calls.push({ method: "batch", sql: this.sql, values: this.values });
+    return this.result();
   }
 }
 
@@ -78,6 +85,7 @@ class MockDatabase {
     sources,
   } = {}) {
     this.calls = [];
+    this.batchRequests = [];
     this.archives = archives ?? [
       {
         archive_key: "dcinside-singularity",
@@ -121,6 +129,11 @@ class MockDatabase {
 
   prepare(sql) {
     return new MockStatement(this, sql);
+  }
+
+  async batch(statements) {
+    this.batchRequests.push(statements);
+    return statements.map((statement) => statement.batchResult());
   }
 }
 
@@ -169,7 +182,7 @@ test("defaults to the first 30 globally counted posts and preserves recent runs"
   assert.equal(response.status, 200);
   assert.equal(
     response.headers.get("cache-control"),
-    "public, max-age=15, s-maxage=60, stale-while-revalidate=120"
+    "public, max-age=15, s-maxage=300"
   );
   assert.equal(response.headers.get("x-content-type-options"), "nosniff");
   assert.equal(body.target, "dcinside-singularity");
@@ -205,24 +218,30 @@ test("defaults to the first 30 globally counted posts and preserves recent runs"
   assert.equal(body.posts.length, 30);
   assert.equal(body.runs.length, 10);
 
-  const filteredCountCall = findCall(database, "AS filtered_posts", "first");
+  assert.equal(database.batchRequests.length, 1);
+  assert.equal(database.batchRequests[0].length, 6);
+  assert.equal(database.calls.filter((call) => call.method === "batch").length, 6);
+  assert.equal(database.calls.filter((call) => call.method === "first").length, 1);
+  assert.equal(database.calls.filter((call) => call.method === "all").length, 0);
+
+  const filteredCountCall = findCall(database, "AS filtered_posts", "batch");
   assert.deepEqual(filteredCountCall.values, ["dcinside-singularity"]);
   assert.doesNotMatch(filteredCountCall.sql, /upvotes >= \?|comments >= \?/);
 
-  const summaryCall = findCall(database, "AS total_posts", "first");
+  const summaryCall = findCall(database, "AS total_posts", "batch");
   assert.match(summaryCall.sql, /json_group_array\(subject\)/);
   assert.match(summaryCall.sql, /SELECT DISTINCT TRIM\(subject\) AS subject/);
   assert.match(summaryCall.sql, /length\(TRIM\(subject\)\) <= 100/);
   assert.match(summaryCall.sql, /ORDER BY subject COLLATE NOCASE, subject LIMIT 100/);
   assert.deepEqual(summaryCall.values, ["dcinside-singularity", "dcinside-singularity"]);
 
-  const postCall = findCall(database, "SELECT archive_key, source_key, external_post_id", "all");
+  const postCall = findCall(database, "SELECT archive_key, source_key, external_post_id", "batch");
   assert.match(postCall.sql, /external_post_id, subject, title/);
   assert.match(postCall.sql, /ORDER BY created_at DESC, id DESC LIMIT \? OFFSET \?/);
   assert.deepEqual(postCall.values, ["dcinside-singularity", 30, 0]);
   assert.equal(body.posts[0].subject, "AI 소식");
 
-  const runCall = findCall(database, "FROM crawl_runs", "all");
+  const runCall = findCall(database, "FROM crawl_runs", "batch");
   assert.match(runCall.sql, /INNER JOIN sources ON sources\.source_key = runs\.source_key/);
   assert.match(runCall.sql, /WHERE sources\.archive_key = \?/);
   assert.match(runCall.sql, /ORDER BY runs\.id DESC LIMIT 10/);
@@ -303,10 +322,12 @@ test("applies escaped title and numeric filters before paginating with a stable 
     has_previous: true,
     has_next: true,
   });
+  assert.equal(database.batchRequests.length, 1);
+  assert.equal(database.batchRequests[0].length, 5);
 
   const selectedSubject = "AI 소식' OR 1=1 --";
   const expectedFilterBindings = [target, 4, 15, selectedSubject, "%100\\%\\_\\\\%"];
-  const filteredCountCall = findCall(database, "AS filtered_posts", "first");
+  const filteredCountCall = findCall(database, "AS filtered_posts", "batch");
   assert.match(filteredCountCall.sql, /upvotes >= \? AND comments >= \?/);
   assert.match(filteredCountCall.sql, /subject = \?/);
   assert.ok(filteredCountCall.sql.includes("title LIKE ? ESCAPE '\\'"));
@@ -339,6 +360,7 @@ test("validates well-formed targets against public archives", async () => {
 
   assert.equal(response.status, 400);
   assert.equal(body.error, "Unknown archive target.");
+  assert.equal(database.batchRequests.length, 0);
   assert.equal(database.calls.length, 1);
   assert.equal(database.calls[0].method, "first");
   assert.match(database.calls[0].sql, /FROM archives/);
@@ -392,14 +414,14 @@ test("combines multiple collection sources under one archive", async () => {
   assert.equal(body.runs[0].source_key, "fmkorea-bayern-board");
   assert.equal(body.runs[0].board_name, "해외축구 바이에른 게시판");
 
-  const countCall = findCall(database, "AS filtered_posts", "first");
+  const countCall = findCall(database, "AS filtered_posts", "batch");
   assert.deepEqual(countCall.values, [target]);
   assert.doesNotMatch(countCall.sql, /upvotes >= \?|comments >= \?/);
-  const sourceCall = findCall(database, "FROM sources", "all");
+  const sourceCall = findCall(database, "FROM sources", "batch");
   assert.deepEqual(sourceCall.values, [target]);
 });
 
-test("normalizes cache keys and reuses a short-lived edge response", async () => {
+test("normalizes cache keys and reuses a five-minute edge response", async () => {
   const database = new MockDatabase({ totalPosts: 1, posts: makeRows(1) });
   const stored = new Map();
   const cache = {
@@ -442,6 +464,8 @@ test("clamps an out-of-range page to the last filtered page before querying rows
 
   const { body } = await requestArchive(database, "?page=999&page_size=30");
 
+  assert.equal(database.batchRequests.length, 1);
+  assert.equal(database.batchRequests[0].length, 5);
   assert.equal(body.summary.filtered_posts, 65);
   assert.deepEqual(body.pagination, {
     page: 3,
@@ -479,7 +503,11 @@ test("bounds query controls and allowlists every sort expression", async (t) => 
       });
 
       const { body } = await requestArchive(database, `?${params}`);
-      const postCall = findCall(database, "SELECT archive_key, source_key, external_post_id", "all");
+      const postCall = findCall(
+        database,
+        "SELECT archive_key, source_key, external_post_id",
+        "batch"
+      );
 
       assert.equal(body.pagination.page, 1);
       assert.equal(body.pagination.page_size, 100);
@@ -569,4 +597,32 @@ test("returns a generic non-cacheable response when D1 fails", async () => {
   assert.ok(!Object.hasOwn(body, "details"));
   assert.ok(!JSON.stringify(body).includes("D1 unavailable"));
   assert.match(String(loggedError[1]), /D1 unavailable/);
+});
+
+test("returns a generic non-cacheable response when the D1 read batch fails", async () => {
+  const database = new MockDatabase();
+  database.batch = async () => {
+    throw new Error("D1 batch unavailable");
+  };
+  const originalConsoleError = console.error;
+  let loggedError = [];
+  console.error = (...values) => {
+    loggedError = values;
+  };
+
+  let response;
+  let body;
+  try {
+    ({ response, body } = await requestArchive(database));
+  } finally {
+    console.error = originalConsoleError;
+  }
+
+  assert.equal(response.status, 500);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(body.error, "Failed to load archive data from D1.");
+  assert.ok(!JSON.stringify(body).includes("D1 batch unavailable"));
+  assert.equal(database.calls.length, 1);
+  assert.equal(database.calls[0].method, "first");
+  assert.match(String(loggedError[1]), /D1 batch unavailable/);
 });

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Tuple
 from urllib import request
+
+
+D1Statement = Tuple[str, Optional[Iterable[object]]]
 
 
 class D1Client:
@@ -86,6 +89,26 @@ class D1Client:
                 "params": list(params or []),
             },
         )
+
+    def batch(self, statements: Iterable[D1Statement]) -> List[dict]:
+        batch = [
+            {
+                "sql": sql,
+                "params": list(params or []),
+            }
+            for sql, params in statements
+        ]
+        if not batch:
+            raise ValueError("D1 batch requires at least one statement")
+
+        data = self._request("query", {"batch": batch})
+        results = data["result"]
+        if len(results) != len(batch):
+            raise RuntimeError(
+                "D1 batch returned an unexpected statement result count: "
+                f"expected {len(batch)}, got {len(results)}"
+            )
+        return results
 
     def execute_script(self, sql_script: str) -> None:
         for statement in split_sql_statements(sql_script):

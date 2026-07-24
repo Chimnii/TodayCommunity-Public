@@ -23,9 +23,7 @@ from crawler.jobs.scan_new_posts import (
     CrawlSourceError,
     CrawlTimeoutError,
     CrawlTransientError,
-    existing_post_lookup_query_count,
     fetch_html,
-    post_upsert_query_count,
     record_run,
     update_finalized_posts,
     upsert_posts,
@@ -365,19 +363,9 @@ class CrawlCycle:
         qualifying = [asdict(post) for post in qualifying_posts]
         summary.matched_posts = len(qualifying)
         if self.client:
-            # A full cycle must preserve the historical lane that follows Hot.
-            # A dedicated Hot run has no later source-request lane to protect:
-            # its phase deadline already stopped new fetches, so attempt every
-            # idempotent D1 write for rows that were successfully scanned. The
-            # workflow timeout remains the outer bound and makes real D1 stalls
-            # visible as failures instead of green zero-write partial results.
-            if self.mode == CYCLE_MODE_FULL and not self._persistence_fits(
-                query_count=post_upsert_query_count(len(qualifying)) + 1,
-                reserve_seconds=self.config.deep_reserved_seconds,
-            ):
-                summary.status = "partial"
-                summary.stop_reason = "deep_time_reservation"
-                return summary
+            # Phase deadlines stop new source requests. Once rows have already
+            # been collected, always attempt their idempotent D1 writes; real
+            # D1 stalls remain visible through the workflow's outer timeout.
             on_batch_persisted: Optional[Callable[[int], None]] = None
             if self.mode == CYCLE_MODE_HOT:
                 summary.hot_persisted_posts = 0
@@ -468,19 +456,6 @@ class CrawlCycle:
             self.source_state.state_metadata["finalize_page_hint"] = snapshot.page
             summary.status = "partial"
             summary.stop_reason = "cutoff_page_eligibility_not_id_suffix"
-            return summary
-
-        preview = interval_from_posts(
-            source_key=self.target.key,
-            posts=eligible,
-            checked_at=self.run_started_at,
-        )
-        if (
-            not interval_is_covered(preview, self.coverage)
-            and not self._recent_persistence_fits(eligible)
-        ):
-            summary.status = "partial"
-            summary.stop_reason = "deep_time_reservation"
             return summary
 
         committed = self._commit_finalized_page(snapshot.posts)
@@ -583,17 +558,6 @@ class CrawlCycle:
                     posts=eligible,
                     checked_at=self.run_started_at,
                 )
-                page_needs_commit = not interval_is_covered(
-                    preview,
-                    self.coverage,
-                )
-                if (
-                    page_needs_commit
-                    and not self._finalization_persistence_fits(eligible)
-                ):
-                    self.source_state.state_metadata["history_page_hint"] = page
-                    summary.stop_reason = "cycle_persistence_budget"
-                    break
                 committed = self._commit_finalized_page(snapshot.posts)
                 summary.matched_posts += count_qualifying(eligible, self.target)
                 summary.committed_intervals += 1 if committed else 0
@@ -737,30 +701,6 @@ class CrawlCycle:
                     posts=eligible,
                     checked_at=self.run_started_at,
                 )
-                page_needs_commit = not interval_is_covered(
-                    preview, self.coverage
-                )
-                absence_needs_commit = (
-                    self.pending_absence is not None
-                    and self.pending_absence.older_page == snapshot.page
-                    and not any(
-                        item.post_id == self.pending_absence.post_id
-                        for item in self.coverage_absences
-                    )
-                )
-                if (
-                    (page_needs_commit or absence_needs_commit)
-                    and not self._finalization_persistence_fits(
-                        eligible,
-                        extra_queries=1 if absence_needs_commit else 0,
-                    )
-                ):
-                    # This page is still uncommitted, so keep the hint on it.
-                    # Advancing here would turn a timing estimate into a hole.
-                    self.source_state.state_metadata["history_page_hint"] = page
-                    summary.status = "partial"
-                    summary.stop_reason = "cycle_persistence_budget"
-                    break
                 committed = self._commit_finalized_page(snapshot.posts)
                 absence_recorded = self._record_pending_absence(snapshot)
                 summary.matched_posts += count_qualifying(eligible, self.target)
@@ -862,10 +802,7 @@ class CrawlCycle:
             eligible_count = len(self._eligible_posts(snapshot.posts))
 
             if not snapshot.coverage_ordered and eligible_count > 0:
-                summary.matched_posts += self._persist_collection_safe_eligible(
-                    snapshot.posts,
-                    reserve_seconds=self.config.deep_reserved_seconds,
-                )
+                summary.matched_posts += self._persist_collection_safe_eligible(snapshot.posts)
                 summary.stop_reason = "page_order_not_coverage_safe"
                 self.source_state.state_metadata["finalize_page_hint"] = page
                 return None
@@ -1314,22 +1251,12 @@ class CrawlCycle:
     def _persist_collection_safe_eligible(
         self,
         posts: Sequence[DcinsidePost],
-        *,
-        reserve_seconds: float = 0.0,
     ) -> int:
         """Archive qualifying rows without creating authoritative coverage."""
 
         eligible = self._eligible_posts(posts)
         matched = count_qualifying(eligible, self.target)
         if not self.client or not eligible:
-            return matched
-        if not self._persistence_fits(
-            query_count=(
-                existing_post_lookup_query_count(len(eligible))
-                + post_upsert_query_count(len(eligible))
-            ),
-            reserve_seconds=reserve_seconds,
-        ):
             return matched
         update_finalized_posts(
             self.client,
@@ -1439,84 +1366,6 @@ class CrawlCycle:
             error_message=summary.metadata(),
             ensure_source=False,
             run_type=summary.run_type,
-        )
-
-    def _recent_persistence_fits(
-        self,
-        eligible: Sequence[DcinsidePost],
-    ) -> bool:
-        """Keep the configured historical window available in the worst case.
-
-        D1 writes are intentionally performed before coverage. When the
-        remaining wall-clock budget cannot cover their configured HTTP
-        timeouts, recent finalization is deferred instead of borrowing the
-        historical lane's reserved time.
-        """
-        # Even dry runs keep the same lane boundary so timing behavior remains
-        # representative. With D1 enabled, include the write upper bound too.
-        if self.runtime.remaining_seconds() <= self.config.deep_reserved_seconds:
-            return False
-        return self._persistence_fits(
-            query_count=self._finalization_query_count(eligible),
-            reserve_seconds=self.config.deep_reserved_seconds,
-        )
-
-    def _finalization_persistence_fits(
-        self,
-        eligible: Sequence[DcinsidePost],
-        *,
-        extra_queries: int = 0,
-    ) -> bool:
-        return self._persistence_fits(
-            query_count=(
-                self._finalization_query_count(eligible)
-                + max(0, extra_queries)
-            ),
-        )
-
-    def _finalization_query_count(
-        self,
-        eligible: Sequence[DcinsidePost],
-    ) -> int:
-        if not eligible:
-            return 0
-
-        preview = interval_from_posts(
-            source_key=self.target.key,
-            posts=eligible,
-            checked_at=self.run_started_at,
-        )
-        if interval_is_covered(preview, self.coverage):
-            # _commit_finalized_page returns before issuing any D1 query.
-            return 0
-
-        merge_result = merge_scanned_interval(self.coverage, preview)
-        coverage_query_count = 1 + sum(
-            interval.key != merge_result.merged.key
-            for interval in merge_result.superseded
-        )
-
-        # Existing-ID lookup + worst-case bounded post upserts + the exact
-        # coverage INSERT/DELETE plan. record_scanned receives self.coverage,
-        # so it does not issue a separate coverage SELECT.
-        return (
-            existing_post_lookup_query_count(len(eligible))
-            + post_upsert_query_count(len(eligible))
-            + coverage_query_count
-        )
-
-    def _persistence_fits(
-        self,
-        *,
-        query_count: int,
-        reserve_seconds: float = 0.0,
-    ) -> bool:
-        if not self.client:
-            return True
-        d1_timeout = max(1.0, float(getattr(self.client, "timeout_seconds", 1.0)))
-        persistence_budget = d1_timeout * max(0, query_count)
-        return self.runtime.remaining_seconds() > (
-            max(0.0, reserve_seconds) + persistence_budget
         )
 
     def _mark_history_frontier_exhausted(

@@ -18,7 +18,7 @@ from crawler.parsers.dcinside import (
     is_qualifying_post,
     meets_collection_threshold,
 )
-from crawler.state import ensure_source_state
+from crawler.state import source_state_initialization_statement
 from crawler.targets import TargetBoard, canonical_post_key, get_target
 
 
@@ -158,56 +158,71 @@ def scan_target(target: TargetBoard, pages: int, page_delay_seconds: float) -> D
 
 def upsert_source(client: D1Client, target: TargetBoard, run_started_at: str) -> None:
     archive = target.archive
-    client.query(
-        """
-        INSERT INTO archives (
-          archive_key, display_name, description, display_order, is_public, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(archive_key) DO UPDATE SET
-          display_name = excluded.display_name,
-          description = excluded.description,
-          display_order = excluded.display_order,
-          is_public = excluded.is_public,
-          updated_at = excluded.updated_at
-        """,
-        [
-            archive.key,
-            archive.display_name,
-            archive.description,
-            archive.display_order,
-            int(archive.is_public),
-            run_started_at,
-            run_started_at,
-        ],
+    source_state_statement = source_state_initialization_statement(
+        target.key,
+        run_started_at,
     )
-    client.query(
-        """
-        INSERT INTO sources (
-          source_key, archive_key, site_name, board_name, board_url,
-          min_upvotes, min_comments, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(source_key) DO UPDATE SET
-          archive_key = excluded.archive_key,
-          site_name = excluded.site_name,
-          board_name = excluded.board_name,
-          board_url = excluded.board_url,
-          min_upvotes = excluded.min_upvotes,
-          min_comments = excluded.min_comments,
-          updated_at = excluded.updated_at
-        """,
-        [
-            target.key,
-            archive.key,
-            target.site_name,
-            target.board_name,
-            target.board_url,
-            target.min_upvotes,
-            target.min_comments,
-            run_started_at,
-            run_started_at,
-        ],
-    )
-    ensure_source_state(client, target.key, updated_at=run_started_at)
+    statements = [
+        (
+            """
+            INSERT INTO archives (
+              archive_key, display_name, description, display_order, is_public, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(archive_key) DO UPDATE SET
+              display_name = excluded.display_name,
+              description = excluded.description,
+              display_order = excluded.display_order,
+              is_public = excluded.is_public,
+              updated_at = excluded.updated_at
+            """,
+            [
+                archive.key,
+                archive.display_name,
+                archive.description,
+                archive.display_order,
+                int(archive.is_public),
+                run_started_at,
+                run_started_at,
+            ],
+        ),
+        (
+            """
+            INSERT INTO sources (
+              source_key, archive_key, site_name, board_name, board_url,
+              min_upvotes, min_comments, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_key) DO UPDATE SET
+              archive_key = excluded.archive_key,
+              site_name = excluded.site_name,
+              board_name = excluded.board_name,
+              board_url = excluded.board_url,
+              min_upvotes = excluded.min_upvotes,
+              min_comments = excluded.min_comments,
+              updated_at = excluded.updated_at
+            """,
+            [
+                target.key,
+                archive.key,
+                target.site_name,
+                target.board_name,
+                target.board_url,
+                target.min_upvotes,
+                target.min_comments,
+                run_started_at,
+                run_started_at,
+            ],
+        ),
+        source_state_statement,
+    ]
+
+    # D1 uses one REST request; query-only SQLite/local clients keep the same SQL path.
+    batch = getattr(client, "batch", None)
+    if callable(batch):
+        batch(statements)
+        return
+
+    for sql, params in statements:
+        client.query(sql, params)
 
 
 def record_run(

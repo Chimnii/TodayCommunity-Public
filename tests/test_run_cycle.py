@@ -819,8 +819,12 @@ class CrawlCycleTests(unittest.TestCase):
             [(88, 88)],
         )
 
-    def test_unordered_cutoff_page_with_eligible_rows_stays_open(self) -> None:
+    def test_unordered_cutoff_persists_without_coverage_when_old_budget_would_not_fit(
+        self,
+    ) -> None:
+        clock = FakeClock()
         client = SqliteClient()
+        client.timeout_seconds = 10
         pages = {
             1: page_html(
                 row(110, "2026-07-16 20:59:00"),
@@ -828,14 +832,39 @@ class CrawlCycleTests(unittest.TestCase):
                 row(109, "2026-07-16 20:58:00"),
             )
         }
-        settings = config()
+        settings = CycleConfig(
+            finalization_age_hours=24,
+            hot_lookback_minutes=60,
+            hot_max_seconds=20,
+            cycle_max_seconds=100,
+            min_request_interval_seconds=0.001,
+            deep_reserved_seconds=30,
+        )
+        cycle_runtime = CycleRuntime(
+            min_request_interval_seconds=0.001,
+            total_seconds=100,
+            hot_seconds=20,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
         cycle = CrawlCycle(
             target=get_target("dcinside-singularity"),
             config=settings,
-            runtime=runtime(settings),
+            runtime=cycle_runtime,
             client=client,
             fetcher=MappingFetcher(pages),
             cycle_started_at=FIXED_NOW,
+            mode=CYCLE_MODE_BACKFILL,
+        )
+        clock.advance(55)
+        # The removed guard reserved one lookup and one upsert timeout.
+        old_timeout_query_estimate = client.timeout_seconds * 2
+        time_before_history_reservation = (
+            cycle_runtime.remaining_seconds() - settings.deep_reserved_seconds
+        )
+        self.assertGreater(
+            old_timeout_query_estimate,
+            time_before_history_reservation,
         )
 
         summary = cycle._run_recent_finalization()
@@ -2073,7 +2102,9 @@ class CrawlCycleTests(unittest.TestCase):
         self.assertEqual(summary.stop_reason, "request_timeout_budget")
         self.assertEqual(cycle.source_state.state_metadata["history_page_hint"], 3)
 
-    def test_recent_request_timeout_cannot_consume_reserved_history_time(self) -> None:
+    def test_recent_request_stops_at_history_reservation_but_commits_response(
+        self,
+    ) -> None:
         clock = FakeClock()
         settings = CycleConfig(
             finalization_age_hours=24,
@@ -2106,9 +2137,12 @@ class CrawlCycleTests(unittest.TestCase):
         summary = cycle._run_recent_finalization()
 
         self.assertEqual(fetcher.timeouts, [5.0])
-        self.assertEqual(summary.stop_reason, "deep_time_reservation")
+        self.assertEqual(summary.stop_reason, "cutoff_page_checked")
         self.assertEqual(cycle_runtime.remaining_seconds(), 30.0)
-        self.assertEqual(cycle.coverage, [])
+        self.assertEqual(
+            [(item.oldest_post_id, item.newest_post_id) for item in cycle.coverage],
+            [(1000, 1000)],
+        )
 
     def test_reserved_window_guard_does_not_count_unstarted_request(self) -> None:
         clock = FakeClock()
@@ -2287,7 +2321,9 @@ class CrawlCycleTests(unittest.TestCase):
             cycle.source_state.state_metadata["history_frontier_exhausted"]
         )
 
-    def test_hot_persistence_defers_before_deep_time_reservation(self) -> None:
+    def test_full_hot_persists_collected_rows_when_old_estimate_would_not_fit(
+        self,
+    ) -> None:
         clock = FakeClock()
         client = SqliteClient()
         client.timeout_seconds = 10
@@ -2317,13 +2353,25 @@ class CrawlCycleTests(unittest.TestCase):
             cycle_started_at=FIXED_NOW,
         )
         clock.advance(55)
+        # The removed full-mode guard reserved one upsert and one run write.
+        old_timeout_query_estimate = client.timeout_seconds * 2
+        time_before_history_reservation = (
+            cycle_runtime.remaining_seconds() - settings.deep_reserved_seconds
+        )
+        self.assertGreater(
+            old_timeout_query_estimate,
+            time_before_history_reservation,
+        )
 
         summary = cycle._run_hot_scan()
 
-        self.assertEqual(summary.status, "partial")
-        self.assertEqual(summary.stop_reason, "deep_time_reservation")
-        self.assertEqual(client.query("SELECT * FROM posts"), [])
-        self.assertEqual(client.query("SELECT * FROM crawl_runs"), [])
+        self.assertEqual(summary.status, "completed")
+        self.assertEqual(summary.stop_reason, "lookback_reached")
+        self.assertEqual(
+            client.query("SELECT external_post_id FROM posts"),
+            [{"external_post_id": "1000"}],
+        )
+        self.assertEqual(len(client.query("SELECT id FROM crawl_runs")), 1)
 
     def test_dedicated_hot_persistence_does_not_reserve_backfill_time(self) -> None:
         clock = FakeClock()
@@ -2401,7 +2449,12 @@ class CrawlCycleTests(unittest.TestCase):
             mode=CYCLE_MODE_HOT,
         )
 
-        self.assertFalse(cycle._persistence_fits(query_count=6))
+        # Five post batches plus the crawl-run write could not fit in 20 seconds.
+        old_timeout_query_estimate = client.timeout_seconds * 6
+        self.assertGreater(
+            old_timeout_query_estimate,
+            cycle_runtime.remaining_seconds(),
+        )
 
         summary = cycle._run_hot_scan()
 
@@ -2583,44 +2636,9 @@ class CrawlCycleTests(unittest.TestCase):
             [{"status": "failed", "run_type": "crawl_cycle"}],
         )
 
-    def test_finalization_budget_counts_only_connected_coverage_cleanup(self) -> None:
-        settings = config()
-        cycle = CrawlCycle(
-            target=get_target("dcinside-singularity"),
-            config=settings,
-            runtime=runtime(settings),
-            fetcher=MappingFetcher({}),
-            cycle_started_at=FIXED_NOW,
-        )
-        eligible = [
-            post(post_id, "2026-07-15T10:00:00+00:00")
-            for post_id in range(1000, 950, -1)
-        ]
-        cycle.coverage = [
-            CoverageInterval(
-                "dcinside-singularity",
-                10000 + index * 100,
-                10010 + index * 100,
-            )
-            for index in range(44)
-        ]
-
-        # 1 existing-ID lookup + 8 bounded upserts + 1 coverage INSERT.
-        self.assertEqual(cycle._finalization_query_count(eligible), 10)
-
-        cycle.coverage = [
-            CoverageInterval("dcinside-singularity", 900, 950),
-            CoverageInterval("dcinside-singularity", 1001, 1050),
-        ]
-        # The new range bridges both intervals: one INSERT and two DELETEs.
-        self.assertEqual(cycle._finalization_query_count(eligible), 12)
-
-        cycle.coverage = [
-            CoverageInterval("dcinside-singularity", 900, 1050),
-        ]
-        self.assertEqual(cycle._finalization_query_count(eligible), 0)
-
-    def test_history_persistence_stops_without_coverage_at_cycle_budget(self) -> None:
+    def test_recent_finalization_persists_when_old_budget_would_not_fit(
+        self,
+    ) -> None:
         clock = FakeClock()
         client = SqliteClient()
         client.timeout_seconds = 10
@@ -2645,20 +2663,104 @@ class CrawlCycleTests(unittest.TestCase):
             runtime=cycle_runtime,
             client=client,
             fetcher=MappingFetcher(
-                {2: page_html(row(1000, "2026-07-15 10:00:00", upvotes=4))}
+                {1: page_html(row(1000, "2026-07-15 10:00:00", upvotes=4))}
             ),
             cycle_started_at=FIXED_NOW,
+            mode=CYCLE_MODE_BACKFILL,
         )
+        clock.advance(55)
+        # The removed guard reserved lookup, upsert, and coverage timeouts.
+        old_timeout_query_estimate = client.timeout_seconds * 3
+        time_before_history_reservation = (
+            cycle_runtime.remaining_seconds() - settings.deep_reserved_seconds
+        )
+        self.assertGreater(
+            old_timeout_query_estimate,
+            time_before_history_reservation,
+        )
+
+        summary = cycle._run_recent_finalization()
+
+        self.assertEqual(summary.status, "completed")
+        self.assertEqual(summary.stop_reason, "cutoff_page_checked")
+        self.assertEqual(summary.committed_intervals, 1)
+        self.assertEqual(
+            client.query("SELECT external_post_id FROM posts"),
+            [{"external_post_id": "1000"}],
+        )
+        self.assertEqual(
+            client.query(
+                "SELECT oldest_post_id, newest_post_id FROM coverage_intervals"
+            ),
+            [{"oldest_post_id": 1000, "newest_post_id": 1000}],
+        )
+
+    def test_history_persists_when_old_budget_would_not_fit(
+        self,
+    ) -> None:
+        clock = FakeClock()
+        client = SqliteClient()
+        client.timeout_seconds = 10
+        settings = CycleConfig(
+            finalization_age_hours=24,
+            hot_lookback_minutes=60,
+            hot_max_seconds=20,
+            cycle_max_seconds=100,
+            min_request_interval_seconds=0.001,
+            deep_reserved_seconds=30,
+        )
+        cycle_runtime = CycleRuntime(
+            min_request_interval_seconds=0.001,
+            total_seconds=100,
+            hot_seconds=20,
+            monotonic=clock.monotonic,
+            sleep=clock.sleep,
+        )
+        cycle = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=cycle_runtime,
+            client=client,
+            fetcher=MappingFetcher(
+                {
+                    1: page_html(row(1100, "2026-07-16 20:00:00")),
+                    2: page_html(
+                        row(1000, "2026-07-15 10:00:00", upvotes=4)
+                    ),
+                },
+                last_page=2,
+            ),
+            cycle_started_at=FIXED_NOW,
+            mode=CYCLE_MODE_BACKFILL,
+        )
+        cycle._fetch_page(1, HOT_PHASE)
         clock.advance(75)
+        # The removed guard reserved lookup, upsert, and coverage timeouts.
+        old_timeout_query_estimate = client.timeout_seconds * 3
+        self.assertGreater(
+            old_timeout_query_estimate,
+            cycle_runtime.remaining_seconds(),
+        )
 
         summary = cycle._run_historical_backfill()
 
-        self.assertEqual(summary.status, "partial")
-        self.assertEqual(summary.stop_reason, "cycle_persistence_budget")
+        self.assertEqual(summary.status, "completed")
+        self.assertEqual(summary.stop_reason, "history_frontier_exhausted")
         self.assertEqual(cycle.source_state.state_metadata["history_page_hint"], 2)
-        self.assertEqual(cycle.coverage, [])
-        self.assertEqual(client.query("SELECT * FROM coverage_intervals"), [])
-        self.assertEqual(client.query("SELECT * FROM posts"), [])
+        self.assertEqual(
+            [(item.oldest_post_id, item.newest_post_id) for item in cycle.coverage],
+            [(1000, 1000)],
+        )
+        self.assertEqual(
+            client.query(
+                "SELECT oldest_post_id, newest_post_id FROM coverage_intervals"
+            ),
+            [{"oldest_post_id": 1000, "newest_post_id": 1000}],
+        )
+        self.assertEqual(
+            client.query("SELECT external_post_id FROM posts"),
+            [{"external_post_id": "1000"}],
+        )
 
     def test_block_cooldown_uses_detection_time_and_run_log_fallback(self) -> None:
         client = SqliteClient()

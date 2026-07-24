@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from crawler.d1 import D1Client
 
@@ -29,29 +29,31 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def ensure_source_state(client: D1Client, source_key: str, updated_at: Optional[str] = None) -> None:
-    source_rows = client.query(
-        """
-        SELECT source_key
-        FROM sources
-        WHERE source_key = ?
-        LIMIT 1
-        """,
-        [source_key],
-    )
-    if not source_rows:
-        return
-
+def source_state_initialization_statement(
+    source_key: str,
+    updated_at: Optional[str] = None,
+) -> Tuple[str, List[object]]:
     timestamp = updated_at or utc_now()
-    client.query(
+    return (
         """
         INSERT OR IGNORE INTO source_state (
           source_key,
           updated_at
-        ) VALUES (?, ?)
+        )
+        SELECT ?, ?
+        WHERE EXISTS (
+          SELECT 1
+          FROM sources
+          WHERE source_key = ?
+        )
         """,
-        [source_key, timestamp],
+        [source_key, timestamp, source_key],
     )
+
+
+def ensure_source_state(client: D1Client, source_key: str, updated_at: Optional[str] = None) -> None:
+    sql, params = source_state_initialization_statement(source_key, updated_at)
+    client.query(sql, params)
 
 
 def get_source_state(client: D1Client, source_key: str) -> Optional[SourceState]:

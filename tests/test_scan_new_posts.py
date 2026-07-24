@@ -23,6 +23,7 @@ from crawler.jobs.scan_new_posts import (
     upsert_posts,
     upsert_source,
 )
+from crawler.state import ensure_source_state
 from crawler.targets import get_target
 
 
@@ -33,6 +34,16 @@ class RecordingClient:
     def query(self, sql, params=None):
         self.calls.append((sql, list(params or [])))
         return []
+
+
+class BatchRecordingClient:
+    def __init__(self) -> None:
+        self.batches = []
+
+    def batch(self, statements):
+        batch = [(sql, list(params or [])) for sql, params in statements]
+        self.batches.append(batch)
+        return [{"success": True, "results": []} for _ in batch]
 
 
 class SqliteClient:
@@ -210,6 +221,127 @@ class FetchHtmlTests(unittest.TestCase):
                 ):
                     with self.assertRaises(CrawlBlockedError):
                         fetch_html("https://example.com/list", 5)
+
+
+class SourceBootstrapTests(unittest.TestCase):
+    def test_source_state_guard_uses_one_query_and_keeps_missing_source_as_noop(
+        self,
+    ) -> None:
+        recording_client = RecordingClient()
+        missing_source_key = "missing-source"
+        checked_at = "2026-07-25T00:00:00+00:00"
+
+        ensure_source_state(recording_client, missing_source_key, checked_at)
+
+        self.assertEqual(len(recording_client.calls), 1)
+        sql, params = recording_client.calls[0]
+        self.assertIn("INSERT OR IGNORE INTO source_state", sql)
+        self.assertIn("WHERE EXISTS", sql)
+        self.assertEqual(
+            params,
+            [missing_source_key, checked_at, missing_source_key],
+        )
+
+        sqlite_client = SqliteClient()
+        ensure_source_state(sqlite_client, missing_source_key, checked_at)
+        self.assertEqual(
+            sqlite_client.query("SELECT source_key FROM source_state"),
+            [],
+        )
+
+    def test_d1_capable_client_bootstraps_source_in_one_ordered_batch(self) -> None:
+        client = BatchRecordingClient()
+        target = get_target("dcinside-ai-utilize")
+        checked_at = "2026-07-25T00:00:00+00:00"
+
+        upsert_source(client, target, checked_at)
+
+        self.assertEqual(len(client.batches), 1)
+        statements = client.batches[0]
+        self.assertEqual(len(statements), 3)
+        self.assertIn("INSERT INTO archives", statements[0][0])
+        self.assertIn("INSERT INTO sources", statements[1][0])
+        self.assertIn("INSERT OR IGNORE INTO source_state", statements[2][0])
+        self.assertNotIn("SELECT source_key", "\n".join(sql for sql, _ in statements))
+        self.assertEqual(
+            statements[0][1],
+            [
+                "dcinside-agent-stack",
+                "AI 활용",
+                "디시인사이드 AI 활용 갤러리 인기글",
+                20,
+                1,
+                checked_at,
+                checked_at,
+            ],
+        )
+        self.assertEqual(
+            statements[1][1],
+            [
+                "dcinside-ai-utilize",
+                "dcinside-agent-stack",
+                "dcinside",
+                "AI 활용 마이너 갤러리",
+                "https://gall.dcinside.com/mgallery/board/lists/?id=ai_utilize",
+                10,
+                100,
+                checked_at,
+                checked_at,
+            ],
+        )
+        self.assertEqual(
+            statements[2][1],
+            ["dcinside-ai-utilize", checked_at, "dcinside-ai-utilize"],
+        )
+
+    def test_query_only_sqlite_client_bootstraps_and_preserves_source_state(
+        self,
+    ) -> None:
+        client = SqliteClient()
+        target = get_target("dcinside-ai-utilize")
+        first_checked_at = "2026-07-25T00:00:00+00:00"
+        second_checked_at = "2026-07-25T01:00:00+00:00"
+
+        upsert_source(client, target, first_checked_at)
+        client.query(
+            """
+            UPDATE source_state
+            SET backfill_anchor_post_id = ?,
+                updated_at = ?
+            WHERE source_key = ?
+            """,
+            ["123", "preserved-state-timestamp", target.key],
+        )
+        upsert_source(client, target, second_checked_at)
+
+        self.assertEqual(
+            client.query(
+                """
+                SELECT
+                  archives.archive_key,
+                  archives.updated_at AS archive_updated_at,
+                  sources.source_key,
+                  sources.updated_at AS source_updated_at,
+                  source_state.backfill_anchor_post_id,
+                  source_state.updated_at AS state_updated_at
+                FROM sources
+                JOIN archives ON archives.archive_key = sources.archive_key
+                JOIN source_state ON source_state.source_key = sources.source_key
+                WHERE sources.source_key = ?
+                """,
+                [target.key],
+            ),
+            [
+                {
+                    "archive_key": "dcinside-agent-stack",
+                    "archive_updated_at": second_checked_at,
+                    "source_key": "dcinside-ai-utilize",
+                    "source_updated_at": second_checked_at,
+                    "backfill_anchor_post_id": "123",
+                    "state_updated_at": "preserved-state-timestamp",
+                }
+            ],
+        )
 
 
 class BatchedPostUpsertTests(unittest.TestCase):

@@ -68,6 +68,87 @@ class D1ClientResponseTests(unittest.TestCase):
         self.assertEqual(self.client.timeout_seconds, 30.0)
         self.assertEqual(urlopen.call_args.kwargs["timeout"], 30.0)
 
+    def test_batch_sends_exact_statement_payload_and_returns_ordered_results(self) -> None:
+        payload = {
+            "success": True,
+            "errors": [],
+            "result": [
+                {
+                    "success": True,
+                    "results": [],
+                    "meta": {"changes": 1},
+                },
+                {
+                    "success": True,
+                    "results": [],
+                    "meta": {"changes": 2},
+                },
+            ],
+        }
+
+        with patch(
+            "crawler.d1.request.urlopen",
+            return_value=FakeResponse(payload),
+        ) as urlopen:
+            results = self.client.batch(
+                [
+                    ("INSERT INTO first_table (value) VALUES (?)", ["first"]),
+                    (
+                        "UPDATE second_table SET value = ? WHERE id = ?",
+                        ("second", 2),
+                    ),
+                ]
+            )
+
+        http_request = urlopen.call_args.args[0]
+        self.assertEqual(
+            json.loads(http_request.data.decode("utf-8")),
+            {
+                "batch": [
+                    {
+                        "sql": "INSERT INTO first_table (value) VALUES (?)",
+                        "params": ["first"],
+                    },
+                    {
+                        "sql": "UPDATE second_table SET value = ? WHERE id = ?",
+                        "params": ["second", 2],
+                    },
+                ]
+            },
+        )
+        self.assertEqual(results, payload["result"])
+
+    def test_batch_requires_one_result_for_each_statement(self) -> None:
+        payload = {
+            "success": True,
+            "errors": [],
+            "result": [
+                {
+                    "success": True,
+                    "results": [],
+                    "meta": {},
+                }
+            ],
+        }
+
+        with patch(
+            "crawler.d1.request.urlopen",
+            return_value=FakeResponse(payload),
+        ), self.assertRaisesRegex(RuntimeError, "expected 2, got 1"):
+            self.client.batch(
+                [
+                    ("INSERT INTO first_table DEFAULT VALUES", []),
+                    ("INSERT INTO second_table DEFAULT VALUES", []),
+                ]
+            )
+
+    def test_empty_batch_is_rejected_without_an_http_request(self) -> None:
+        with patch("crawler.d1.request.urlopen") as urlopen:
+            with self.assertRaisesRegex(ValueError, "at least one statement"):
+                self.client.batch([])
+
+        urlopen.assert_not_called()
+
     def test_nested_query_failure_is_not_treated_as_success(self) -> None:
         payload = {
             "success": True,
