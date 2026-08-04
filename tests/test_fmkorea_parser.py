@@ -487,8 +487,8 @@ class FmkoreaBoardParserTests(unittest.TestCase):
                 "category=853073246"
             ),
             now=NOW,
-            min_upvotes=15,
-            min_comments=150,
+            min_upvotes=13,
+            min_comments=130,
         )
         parser.feed(f"<table><tbody>{html}</tbody></table>")
         parser.close()
@@ -502,7 +502,7 @@ class FmkoreaBoardParserTests(unittest.TestCase):
         self.assertEqual(post.upvotes, 14)
         self.assertEqual(post.comments, 10)
         self.assertEqual(post.created_at, "2026-07-22T00:37:00+09:00")
-        self.assertEqual(post.qualifies_by, "upvotes+comments")
+        self.assertEqual(post.qualifies_by, "upvotes")
 
     def test_parses_current_anonymous_board_shape_without_row_id(self) -> None:
         parser = self.parse(
@@ -548,15 +548,15 @@ class FmkoreaBoardParserTests(unittest.TestCase):
         )
 
     def test_board_weighted_threshold_is_exact(self) -> None:
-        parser = self.parse(board_row(upvotes="14", comments="[10]"))
+        parser = self.parse(board_row(upvotes="12", comments="[10]"))
         post = parser.posts[0]
 
         self.assertTrue(
             is_fmkorea_qualifying_post(
                 post,
                 collect_all=False,
-                min_upvotes=15,
-                min_comments=150,
+                min_upvotes=13,
+                min_comments=130,
             )
         )
         below = FmkoreaPost(
@@ -570,8 +570,8 @@ class FmkoreaBoardParserTests(unittest.TestCase):
             is_fmkorea_qualifying_post(
                 below,
                 collect_all=False,
-                min_upvotes=15,
-                min_comments=150,
+                min_upvotes=13,
+                min_comments=130,
             )
         )
 

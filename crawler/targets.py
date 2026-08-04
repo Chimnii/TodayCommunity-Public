@@ -102,8 +102,8 @@ TARGETS = {
             "https://gall.dcinside.com/mgallery/board/lists/"
             "?id=ai_utilize&page={page}"
         ),
-        min_upvotes=10,
-        min_comments=100,
+        min_upvotes=4,
+        min_comments=40,
         # Keep the stable public archive key so legacy and migrated posts
         # remain one user-facing collection without rewriting stored rows.
         archive_key="dcinside-agent-stack",
@@ -191,8 +191,8 @@ TARGETS = {
             "https://www.fmkorea.com/index.php?mid=football_world&"
             "category=853073246&page={page}"
         ),
-        min_upvotes=15,
-        min_comments=150,
+        min_upvotes=13,
+        min_comments=130,
         archive_key="fmkorea-munich",
         collector_kind="fmkorea-board",
         origin_key="fmkorea",

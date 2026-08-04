@@ -83,8 +83,8 @@ const sourcesByArchive = {
       site_name: "fmkorea",
       board_name: "해외축구 바이에른 게시판",
       board_url: "https://www.fmkorea.com/index.php?mid=football_world&category=853073246",
-      min_upvotes: 15,
-      min_comments: 150,
+      min_upvotes: 13,
+      min_comments: 130,
     },
   ],
 };

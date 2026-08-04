@@ -316,8 +316,8 @@ class FmkoreaHotCycleTests(unittest.TestCase):
                     target,
                     1,
                     1,
-                    board_row(201, upvotes=14, comments=10),
-                    board_row(200, upvotes=14, comments=9),
+                    board_row(201, upvotes=12, comments=10),
+                    board_row(200, upvotes=12, comments=9),
                 )
             }
         )

@@ -41,8 +41,8 @@ class TargetRegistryTests(unittest.TestCase):
         agent_stack = get_target("dcinside-ai-utilize")
         bayern = get_target("fmkorea-bayern-board")
 
-        self.assertEqual((agent_stack.min_upvotes, agent_stack.min_comments), (10, 100))
-        self.assertEqual((bayern.min_upvotes, bayern.min_comments), (15, 150))
+        self.assertEqual((agent_stack.min_upvotes, agent_stack.min_comments), (4, 40))
+        self.assertEqual((bayern.min_upvotes, bayern.min_comments), (13, 130))
         for target_key in (
             "fmkorea-best-munich-search",
             "fmkorea-best-bayern-search",
