@@ -61,7 +61,7 @@ test("deployed Cron triggers exactly match the supported schedules", () => {
     [...WRANGLER_CONFIG.triggers.crons].sort(),
     Object.keys(SCHEDULES).sort()
   );
-  assert.equal(WRANGLER_CONFIG.vars.GAME_NEWS_DISPATCH_ENABLED, "0");
+  assert.equal(WRANGLER_CONFIG.vars.GAME_NEWS_DISPATCH_ENABLED, "1");
   assert.equal(
     WRANGLER_CONFIG.vars.GAME_NEWS_GITHUB_REPOSITORY,
     "TodayCommunity",
@@ -283,7 +283,7 @@ test("Backfill remains public-only even when FM dispatch is enabled", async () =
   assert.ok(calls.every(({ url }) => url.includes("TodayCommunity-Public")));
 });
 
-test("game-news cron is private-only and disabled by default", async () => {
+test("game-news cron is disabled when its flag is absent", async () => {
   const calls = [];
   const result = await dispatchScheduledWorkflow({
     cron: "17 0,12 * * *",
