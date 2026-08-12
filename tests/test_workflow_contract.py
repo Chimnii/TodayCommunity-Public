@@ -685,46 +685,29 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertNotIn('--replace', script)
         self.assertNotIn('--disableupdate', script)
 
-    def test_private_runner_accepts_only_game_news_parent_traversal_ace(self) -> None:
+    def test_private_runner_rejects_duplicate_required_acl_entries(self) -> None:
         if self.runner_setup is None:
             self.skipTest("running in the public mirror")
 
         script = self.runner_setup
         validator = script.split("function Assert-RestrictedRoot", 1)[1].split(
-            "function Get-GameNewsRunnerUserSid", 1
+            "function Assert-InstallInputs", 1
         )[0]
-        acl_writer = script.split("function Set-RestrictedTreeAcl", 1)[1].split(
-            "function Assert-RestrictedRoot", 1
-        )[0]
-
-        self.assertIn(
-            "$OptionalNonInheritedListDirectoryIdentity = $null",
-            validator,
-        )
-        self.assertIn("-Rights ListDirectory -IsDirectory $false", validator)
-        self.assertIn("$expectedOptionalRule.FileSystemRights", validator)
-        self.assertIn("$expectedOptionalRule.InheritanceFlags", validator)
-        self.assertIn("$expectedOptionalRule.PropagationFlags", validator)
-        self.assertIn("$optionalRuleSeen", validator)
         self.assertIn("$seenRequiredSids", validator)
+        self.assertIn("$seenRequiredSids.ContainsKey($sid)", validator)
+        self.assertIn("$seenRequiredSids.Count -ne $expected.Count", validator)
         self.assertNotIn("AddAccessRule", validator)
-        self.assertIn('"CHIMNII-MAIN\\user"', script)
-        self.assertIn("IdentityNotMappedException", script)
-        self.assertEqual(
-            script.count(
-                "-OptionalNonInheritedListDirectoryIdentity $gameNewsRunnerSid"
-            ),
-            2,
-        )
-        self.assertNotIn("OptionalNonInheritedListDirectoryIdentity", acl_writer)
-        self.assertNotIn("CHIMNII-MAIN\\user", acl_writer)
+        self.assertNotIn("OptionalNonInheritedListDirectoryIdentity", script)
 
     def test_game_news_runner_setup_uses_windowless_per_user_task(self) -> None:
         if self.game_news_runner_setup is None:
             self.skipTest("running in the public mirror")
 
         script = self.game_news_runner_setup
-        self.assertIn(r'"C:\actions-runner\todaycommunity-game-news"', script)
+        self.assertIn(
+            '"$env:LOCALAPPDATA\\TodayCommunity\\game-news-runner"',
+            script,
+        )
         self.assertIn('$RunnerLabel = "todaycommunity-game-news"', script)
         self.assertIn('$ExpectedRepository = "Chimnii/TodayCommunity"', script)
         self.assertIn('$ExpectedComputerName = "CHIMNII-MAIN"', script)
@@ -741,18 +724,23 @@ class CrawlWorkflowContractTests(unittest.TestCase):
             "game-news-codex-home",
             "game-news-runs",
             "game-news-logs",
+            "game-news-runner",
         ):
             self.assertIn(path_name, script)
-        self.assertIn(r'"C:\actions-runner\todaycommunity-fm"', script)
         self.assertIn("Game-news runtime paths must not be shared.", script)
+        self.assertNotIn("C:\\actions-runner", script)
+        self.assertNotIn("requires an elevated Windows PowerShell", script)
         self.assertIn("$item.SetAccessControl($acl)", script)
         self.assertNotIn("Set-Acl -LiteralPath $item.FullName", script)
 
-        self.assertIn('$ScheduledTaskPath = "\\TodayCommunity\\"', script)
-        self.assertIn('$ScheduledTaskName = "Game News Runner"', script)
+        self.assertIn('$ScheduledTaskPath = "\\"', script)
+        self.assertIn(
+            '$ScheduledTaskName = "TodayCommunity Game News Runner"',
+            script,
+        )
         self.assertIn("windowless background per-user scheduled task", script)
-        self.assertIn('New-Object -ComObject "Schedule.Service"', script)
-        self.assertIn("CreateFolder", script)
+        self.assertNotIn('New-Object -ComObject "Schedule.Service"', script)
+        self.assertNotIn("CreateFolder", script)
         self.assertIn("New-ScheduledTaskAction", script)
         self.assertIn("-WindowStyle Hidden", script)
         self.assertIn("New-ScheduledTaskTrigger -AtLogOn -User $RunnerAccount", script)
@@ -777,10 +765,8 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         install_tail = script.split("    Assert-InstallInputs\n", 1)[1]
         install_steps = (
             "Stop-RunnerScheduledTaskForMaintenance",
-            "Initialize-RunnerParentDirectory",
             "Install-PythonRuntime",
             "Install-RunnerApplication",
-            "Grant-RunnerParentListDirectory",
             "Write-RunnerLauncher",
             "Install-RunnerScheduledTask",
             "Start-RunnerScheduledTask",
@@ -798,38 +784,6 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertIn("& $runner", launcher)
         self.assertIn("exit $LASTEXITCODE", launcher)
         self.assertNotIn("Start-Process", launcher)
-
-        self.assertIn("function Assert-RunnerParentAcl", script)
-        self.assertIn("function Initialize-RunnerParentDirectory", script)
-        self.assertIn("function Grant-RunnerParentListDirectory", script)
-        self.assertIn('"S-1-5-20"', script)
-        self.assertIn("-Rights ListDirectory", script)
-        self.assertIn(
-            "-Inheritance ([Security.AccessControl.InheritanceFlags]::None)",
-            script,
-        )
-        self.assertIn("$rules.Count -ne $expected.Count", script)
-        parent_initializer = script.split(
-            "function Initialize-RunnerParentDirectory", 1
-        )[1].split("function Grant-RunnerParentListDirectory", 1)[0]
-        self.assertIn(
-            "New-Object Security.AccessControl.DirectorySecurity",
-            parent_initializer,
-        )
-        self.assertIn(
-            "$acl.SetAccessRuleProtection($true, $false)",
-            parent_initializer,
-        )
-        self.assertIn("$acl.SetOwner($administrators)", parent_initializer)
-        self.assertIn(
-            "-Rights ReadAndExecute -Inheritance $inherit",
-            parent_initializer,
-        )
-        self.assertIn("$item.SetAccessControl($acl)", parent_initializer)
-        self.assertIn(
-            "Assert-RunnerParentAcl -RequireDedicatedUser $false",
-            parent_initializer,
-        )
 
         self.assertIn("function Stop-RunnerScheduledTaskForMaintenance", script)
         maintenance = script.split(
