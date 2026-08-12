@@ -728,8 +728,19 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         )[0]
         self.assertNotRegex(device_login, r"}\s*\|\s*Out-Null")
         self.assertIn("Follow the Codex device-auth instructions", device_login)
+        self.assertLess(
+            device_login.index("if (Test-CodexChatGPTLogin)"),
+            device_login.index("login --device-auth"),
+        )
+        self.assertIn("already logged in using ChatGPT", device_login)
         self.assertIn("login status", script)
         self.assertIn('"Logged in using ChatGPT"', script)
+        self.assertIn('$ErrorActionPreference = "Continue"', script)
+        self.assertIn(
+            "$ErrorActionPreference = $previousErrorActionPreference",
+            script,
+        )
+        self.assertIn("$statusExitCode = $LASTEXITCODE", script)
         self.assertIn('"OPENAI_API_KEY"', script)
         self.assertIn('"CODEX_API_KEY"', script)
         self.assertIn('cli_auth_credentials_store=\"keyring\"', script)
