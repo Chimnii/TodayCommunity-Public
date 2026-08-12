@@ -776,6 +776,9 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertIn("Start-ScheduledTask -TaskPath $ScheduledTaskPath", script)
         install_tail = script.split("    Assert-InstallInputs\n", 1)[1]
         install_steps = (
+            "Stop-RunnerScheduledTaskForMaintenance",
+            "Initialize-RunnerParentDirectory",
+            "Install-PythonRuntime",
             "Install-RunnerApplication",
             "Grant-RunnerParentListDirectory",
             "Write-RunnerLauncher",
@@ -797,6 +800,7 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertNotIn("Start-Process", launcher)
 
         self.assertIn("function Assert-RunnerParentAcl", script)
+        self.assertIn("function Initialize-RunnerParentDirectory", script)
         self.assertIn("function Grant-RunnerParentListDirectory", script)
         self.assertIn('"S-1-5-20"', script)
         self.assertIn("-Rights ListDirectory", script)
@@ -805,6 +809,40 @@ class CrawlWorkflowContractTests(unittest.TestCase):
             script,
         )
         self.assertIn("$rules.Count -ne $expected.Count", script)
+        parent_initializer = script.split(
+            "function Initialize-RunnerParentDirectory", 1
+        )[1].split("function Grant-RunnerParentListDirectory", 1)[0]
+        self.assertIn(
+            "New-Object Security.AccessControl.DirectorySecurity",
+            parent_initializer,
+        )
+        self.assertIn(
+            "$acl.SetAccessRuleProtection($true, $false)",
+            parent_initializer,
+        )
+        self.assertIn("$acl.SetOwner($administrators)", parent_initializer)
+        self.assertIn(
+            "-Rights ReadAndExecute -Inheritance $inherit",
+            parent_initializer,
+        )
+        self.assertIn("$item.SetAccessControl($acl)", parent_initializer)
+        self.assertIn(
+            "Assert-RunnerParentAcl -RequireDedicatedUser $false",
+            parent_initializer,
+        )
+
+        self.assertIn("function Stop-RunnerScheduledTaskForMaintenance", script)
+        maintenance = script.split(
+            "function Stop-RunnerScheduledTaskForMaintenance", 1
+        )[1].split("function Assert-InstallInputs", 1)[0]
+        self.assertIn("$remote.busy", maintenance)
+        self.assertIn("Stop-ScheduledTask", maintenance)
+        self.assertIn('$task.State -ne "Running"', maintenance)
+        self.assertIn(
+            "$restartExistingTask = Stop-RunnerScheduledTaskForMaintenance",
+            script,
+        )
+        self.assertIn("if ($restartExistingTask)", script)
 
         self.assertIn("Get-Command codex.cmd -CommandType Application", script)
         self.assertIn('$RequiredCodexVersion = "0.147.0"', script)
