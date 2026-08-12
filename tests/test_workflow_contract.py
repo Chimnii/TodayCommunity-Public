@@ -713,6 +713,8 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertIn("Game-news runtime paths must not be shared.", script)
         self.assertNotIn('"NT AUTHORITY\\NETWORK SERVICE"', script)
         self.assertNotIn('"S-1-5-20"', script)
+        self.assertIn("$item.SetAccessControl($acl)", script)
+        self.assertNotIn("Set-Acl -LiteralPath $item.FullName", script)
 
         self.assertIn("Get-Command codex.cmd -CommandType Application", script)
         self.assertIn('$RequiredCodexVersion = "0.147.0"', script)
@@ -721,6 +723,11 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertIn("Write-CodexCommandMarker", script)
         self.assertIn(".todaycommunity-game-news-codex-command", script)
         self.assertIn("login --device-auth", script)
+        device_login = script.split("function Invoke-CodexDeviceLogin", 1)[1].split(
+            "function Show-Status", 1
+        )[0]
+        self.assertNotRegex(device_login, r"}\s*\|\s*Out-Null")
+        self.assertIn("Follow the Codex device-auth instructions", device_login)
         self.assertIn("login status", script)
         self.assertIn('"Logged in using ChatGPT"', script)
         self.assertIn('"OPENAI_API_KEY"', script)
