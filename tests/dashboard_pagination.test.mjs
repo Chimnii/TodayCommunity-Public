@@ -22,7 +22,7 @@ const context = {
 };
 
 vm.runInNewContext(
-  `${appWithoutInitialization}\nglobalThis.__dashboardPaginationFunctions = {\n  getPageSequence: typeof getPageSequence === "function" ? getPageSequence : undefined,\n  parsePageJump: typeof parsePageJump === "function" ? parsePageJump : undefined,\n  normalizeSignedInteger: typeof normalizeSignedInteger === "function" ? normalizeSignedInteger : undefined,\n  createSubjectPreview: typeof createSubjectPreview === "function" ? createSubjectPreview : undefined,\n  splitSubjectGraphemes: typeof splitSubjectGraphemes === "function" ? splitSubjectGraphemes : undefined,\n};`,
+  `${appWithoutInitialization}\nglobalThis.__dashboardPaginationFunctions = {\n  getPageSequence: typeof getPageSequence === "function" ? getPageSequence : undefined,\n  parsePageJump: typeof parsePageJump === "function" ? parsePageJump : undefined,\n  normalizeSignedInteger: typeof normalizeSignedInteger === "function" ? normalizeSignedInteger : undefined,\n  createSubjectPreview: typeof createSubjectPreview === "function" ? createSubjectPreview : undefined,\n  splitSubjectGraphemes: typeof splitSubjectGraphemes === "function" ? splitSubjectGraphemes : undefined,\n  getArticleSourceLabel: typeof getArticleSourceLabel === "function" ? getArticleSourceLabel : undefined,\n};`,
   context,
   { filename: appUrl.pathname }
 );
@@ -33,6 +33,7 @@ const {
   normalizeSignedInteger,
   createSubjectPreview,
   splitSubjectGraphemes,
+  getArticleSourceLabel,
 } =
   context.__dashboardPaginationFunctions;
 
@@ -69,6 +70,31 @@ test("splitSubjectGraphemes preserves combined emoji without Intl.Segmenter", ()
   );
   assert.deepEqual(Array.from(splitSubjectGraphemes("👍🏽소식")), ["👍🏽", "소", "식"]);
   assert.deepEqual(Array.from(splitSubjectGraphemes("🇰🇷AI")), ["🇰🇷", "A", "I"]);
+});
+
+test("getArticleSourceLabel uses known aliases and future site identifiers", () => {
+  const sources = [
+    { source_key: "game-news-inven", site_name: "inven" },
+    { source_key: "game-news-thisisgame", site_name: "thisisgame" },
+    { source_key: "game-news-gamemeca", site_name: "gamemeca" },
+  ];
+
+  assert.equal(
+    getArticleSourceLabel({ source_key: "game-news-inven" }, sources),
+    "inven"
+  );
+  assert.equal(
+    getArticleSourceLabel({ source_key: "game-news-thisisgame" }, sources),
+    "tig"
+  );
+  assert.equal(
+    getArticleSourceLabel({ source_key: "game-news-gamemeca" }, sources),
+    "gamemeca"
+  );
+  assert.equal(
+    getArticleSourceLabel({ source_key: "game-news-gamefocus" }),
+    "gamefocus"
+  );
 });
 
 test("getPageSequence exposes a seven-page window around middle pages", () => {

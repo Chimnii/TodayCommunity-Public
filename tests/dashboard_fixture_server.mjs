@@ -212,7 +212,7 @@ function handleArchive(requestUrl, response) {
     archive_key: target,
     source_key: sources[index % sources.length].source_key,
     subject: articleMode
-      ? ["신작", "인터뷰", "업계 동향", "개발"][index % 4]
+      ? ["신작 및 업데이트", "인터뷰와 현장", "게임 산업 동향", "개발 이야기"][index % 4]
       : post.subject,
     title: articleMode ? `게임 뉴스 검증 기사 ${index + 1}` : post.title,
     post_url: articleMode

@@ -35,7 +35,7 @@ test("ships the compact archive surface and hidden collection dialog", () => {
   assert.match(html, /id="comments-input"[^>]*type="number"/);
   assert.match(
     html,
-    /cell-number" role="columnheader">번호<\/span>[\s\S]*cell-subject"[\s\S]*role="columnheader"[\s\S]*>말머리<\/span>[\s\S]*cell-title" role="columnheader">제목<\/span>/
+    /cell-number" role="columnheader">번호<\/span>[\s\S]*cell-subject"[\s\S]*role="columnheader"[\s\S]*>말머리<\/span>[\s\S]*cell-source" role="columnheader">출처<\/span>[\s\S]*cell-title" role="columnheader">제목<\/span>/
   );
   assert.match(
     html,
@@ -78,7 +78,7 @@ test("ships four accessible archive tabs and replaces them from the API catalog"
   assert.match(css, /\.archive-tab\[aria-selected="true"\]/);
 });
 
-test("switches article archives to a three-column, no-vote presentation", () => {
+test("switches article archives to a four-column, no-vote presentation", () => {
   assert.match(app, /getCurrentArchive\(\)\?\.content_kind === "article"/);
   assert.match(app, /document\.body\.dataset\.contentKind = articleMode \? "article" : "community"/);
   assert.match(app, /state\.minUpvotes = 0/);
@@ -88,14 +88,27 @@ test("switches article archives to a three-column, no-vote presentation", () => 
   assert.match(app, /articleMode \? "저장된 게임 기사" : "저장된 커뮤니티 글"/);
   assert.match(app, /option\.hidden = articleMode/);
   assert.match(app, /if \(!articleMode\) \{\s*content\.append\(commentCount\)/);
+  assert.match(app, /createSourceCell\(post\)/);
+  assert.match(app, /inven: "inven"/);
+  assert.match(app, /thisisgame: "tig"/);
+  assert.match(
+    app,
+    /if \(isArticleArchive\(\)\) \{\s*cell\.textContent = value;\s*return cell;/
+  );
   assert.match(css, /body\[data-content-kind="article"\] \.filter-upvotes/);
   assert.match(css, /body\[data-content-kind="article"\] \.cell-number/);
+  assert.match(css, /body\[data-content-kind="article"\] \.cell-source\s*{[^}]*display:\s*block/s);
+  assert.match(
+    css,
+    /body\[data-content-kind="article"\] \.post-row \.cell-subject\s*{[^}]*white-space:\s*normal[^}]*word-break:\s*keep-all/s
+  );
   assert.match(fixtureServer, /archive_key: "game-news"[\s\S]*content_kind: "article"/);
   assert.match(fixtureServer, /source_key: "game-news-inven"/);
   assert.match(fixtureServer, /source_key: "game-news-thisisgame"/);
+  assert.match(fixtureServer, /신작 및 업데이트/);
   assert.match(
     css,
-    /body\[data-content-kind="article"\] \.board-row\s*{[^}]*grid-template-columns:\s*96px minmax\(0, 1fr\) 104px/s
+    /body\[data-content-kind="article"\] \.board-row\s*{[^}]*grid-template-columns:\s*144px 64px minmax\(0, 1fr\) 104px/s
   );
 });
 

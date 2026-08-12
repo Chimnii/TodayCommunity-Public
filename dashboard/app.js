@@ -59,6 +59,10 @@ const VALID_SORTS = new Set(["created_at", "upvotes", "comments"]);
 const VALID_PAGE_SIZES = new Set([20, 30, 50, 100]);
 const DESKTOP_SUBJECT_PREVIEW_LENGTH = 5;
 const MOBILE_SUBJECT_PREVIEW_LENGTH = 5;
+const ARTICLE_SOURCE_LABELS = Object.freeze({
+  inven: "inven",
+  thisisgame: "tig",
+});
 const PAGE_WINDOW_RADIUS = 3;
 const subjectSegmenter = typeof Intl.Segmenter === "function"
   ? new Intl.Segmenter("ko", { granularity: "grapheme" })
@@ -714,6 +718,7 @@ function renderPosts(posts) {
     row.append(
       createCell(post.external_post_id || "-", "cell-number numeric-cell"),
       createSubjectCell(post.subject),
+      createSourceCell(post),
       createTitleCell(post),
       createCell(numberFormatter.format(normalizeSignedInteger(post.upvotes, 0)), "cell-upvotes numeric-cell"),
       createCell(formatPostDate(post.created_at), "cell-date numeric-cell")
@@ -739,6 +744,11 @@ function createSubjectCell(subject) {
     return cell;
   }
 
+  if (isArticleArchive()) {
+    cell.textContent = value;
+    return cell;
+  }
+
   const desktopPreview = createSubjectPreview(value, DESKTOP_SUBJECT_PREVIEW_LENGTH);
   const mobilePreview = createSubjectPreview(value, MOBILE_SUBJECT_PREVIEW_LENGTH);
   const desktopContent = document.createElement("span");
@@ -754,6 +764,45 @@ function createSubjectCell(subject) {
   }
 
   return cell;
+}
+
+function createSourceCell(post) {
+  const sources = getCurrentSources();
+  const source = sources.find(
+    (candidate) => candidate?.source_key === post?.source_key
+  );
+  const label = getArticleSourceLabel(post, sources);
+  const cell = createCell(label || "-", "cell-source");
+  const fullName = String(source?.board_name || source?.site_name || "").trim();
+
+  if (fullName && fullName.toLocaleLowerCase("ko-KR") !== label) {
+    cell.setAttribute("aria-label", `출처 ${fullName}`);
+  }
+
+  return cell;
+}
+
+function getArticleSourceLabel(post, sources = []) {
+  const source = Array.isArray(sources)
+    ? sources.find((candidate) => candidate?.source_key === post?.source_key)
+    : null;
+  const siteName = normalizeSiteIdentifier(source?.site_name);
+
+  if (siteName) {
+    return ARTICLE_SOURCE_LABELS[siteName] || siteName;
+  }
+
+  const sourceKey = String(post?.source_key || "").trim();
+  return normalizeSiteIdentifier(sourceKey.replace(/^game-news-/i, ""));
+}
+
+function normalizeSiteIdentifier(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLocaleLowerCase("en-US")
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "");
+  return normalized.split(/[./]/u, 1)[0].replace(/[^a-z0-9-]/gu, "");
 }
 
 function createSubjectPreview(value, previewLength) {
