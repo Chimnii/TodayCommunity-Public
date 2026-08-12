@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="커뮤니티에서 기준을 통과한 글만 모아보는 TodayCommunity 선별 글 아카이브"
+      content="커뮤니티 인기글과 휴리스틱하게 선별한 게임 기사를 모아보는 TodayCommunity 아카이브"
     />
     <title>오늘의 커뮤니티 | 선별 글 아카이브</title>
     <link rel="icon" href="data:," />
@@ -43,7 +43,7 @@
       </header>
 
       <nav class="archive-navigation" aria-label="아카이브 선택">
-        <div class="archive-tabs" id="archive-tabs" role="tablist" aria-label="커뮤니티 아카이브">
+        <div class="archive-tabs" id="archive-tabs" role="tablist" aria-label="아카이브 목록">
           <a
             class="archive-tab"
             role="tab"
@@ -67,6 +67,14 @@
             tabindex="-1"
             href="/?target=fmkorea-munich"
           >Bayern Munich</a>
+          <a
+            class="archive-tab"
+            role="tab"
+            aria-selected="false"
+            aria-controls="archive-board"
+            tabindex="-1"
+            href="/?target=game-news"
+          >게임 뉴스</a>
         </div>
       </nav>
 
@@ -104,18 +112,18 @@
             </label>
 
             <label class="filter-control">
-              <span>말머리</span>
+              <span id="subject-filter-label">말머리</span>
               <select id="subject-select" name="subject">
                 <option value="">전체 말머리</option>
               </select>
             </label>
 
-            <label class="filter-control">
+            <label class="filter-control filter-upvotes">
               <span>최소 추천</span>
               <input id="upvotes-input" name="min_upvotes" type="number" min="0" value="0" />
             </label>
 
-            <label class="filter-control">
+            <label class="filter-control filter-comments">
               <span>최소 댓글</span>
               <input id="comments-input" name="min_comments" type="number" min="0" value="0" />
             </label>
@@ -158,7 +166,11 @@
             <div class="board-head" role="rowgroup">
               <div class="board-row" role="row">
                 <span class="board-cell cell-number" role="columnheader">번호</span>
-                <span class="board-cell cell-subject" role="columnheader">말머리</span>
+                <span
+                  class="board-cell cell-subject"
+                  id="subject-column-label"
+                  role="columnheader"
+                >말머리</span>
                 <span class="board-cell cell-title" role="columnheader">제목</span>
                 <span class="board-cell cell-upvotes" role="columnheader">추천</span>
                 <span class="board-cell cell-date" role="columnheader">작성일</span>

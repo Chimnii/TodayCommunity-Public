@@ -38,10 +38,17 @@ test("cron strings map to the intended workflows", () => {
   assert.deepEqual(workflowForCron("7,22,37,52 * * * *"), {
     kind: "hot",
     workflow: "scan-dcinside.yml",
+    destinations: ["dcinside", "fmkorea"],
   });
   assert.deepEqual(workflowForCron("56 */6 * * *"), {
     kind: "backfill",
     workflow: "scan-dcinside-backfill.yml",
+    destinations: ["dcinside"],
+  });
+  assert.deepEqual(workflowForCron("17 0,12 * * *"), {
+    kind: "game-news",
+    workflow: "scan-game-news.yml",
+    destinations: ["game-news"],
   });
   assert.throws(
     () => workflowForCron("0 * * * *"),
@@ -54,6 +61,12 @@ test("deployed Cron triggers exactly match the supported schedules", () => {
     [...WRANGLER_CONFIG.triggers.crons].sort(),
     Object.keys(SCHEDULES).sort()
   );
+  assert.equal(WRANGLER_CONFIG.vars.GAME_NEWS_DISPATCH_ENABLED, "0");
+  assert.equal(
+    WRANGLER_CONFIG.vars.GAME_NEWS_GITHUB_REPOSITORY,
+    "TodayCommunity",
+  );
+  assert.ok(WRANGLER_CONFIG.triggers.crons.includes("17 0,12 * * *"));
 });
 
 test("Worker exposes only the scheduled handler", () => {
@@ -270,6 +283,178 @@ test("Backfill remains public-only even when FM dispatch is enabled", async () =
   assert.ok(calls.every(({ url }) => url.includes("TodayCommunity-Public")));
 });
 
+test("game-news cron is private-only and disabled by default", async () => {
+  const calls = [];
+  const result = await dispatchScheduledWorkflow({
+    cron: "17 0,12 * * *",
+    env: {},
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      throw new Error("disabled game-news dispatch must not call GitHub");
+    },
+    now: () => NOW,
+  });
+
+  assert.deepEqual(result, {
+    status: "completed",
+    kind: "game-news",
+    destinations: [],
+  });
+  assert.equal(calls.length, 0);
+});
+
+test("enabled game-news cron dispatches only its private workflow with persistent inputs", async () => {
+  const calls = [];
+  const result = await dispatchScheduledWorkflow({
+    cron: "17 0,12 * * *",
+    env: {
+      ...ENV,
+      GAME_NEWS_DISPATCH_ENABLED: "1",
+      GAME_NEWS_GITHUB_REPOSITORY: "TodayCommunity",
+    },
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return options.method === "GET"
+        ? jsonResponse({ workflow_runs: [] })
+        : noContentResponse();
+    },
+    now: () => NOW,
+  });
+
+  assert.deepEqual(result, {
+    status: "completed",
+    kind: "game-news",
+    destinations: [
+      {
+        destination: "game-news",
+        repository: "TodayCommunity",
+        status: "dispatched",
+        kind: "game-news",
+        workflow: "scan-game-news.yml",
+        ref: "main",
+      },
+    ],
+  });
+  assert.equal(calls.length, 2);
+  assert.ok(calls.every(({ url }) => !url.includes("TodayCommunity-Public")));
+  assert.match(calls[1].url, /scan-game-news\.yml\/dispatches$/);
+  assert.deepEqual(JSON.parse(calls[1].options.body), {
+    ref: "main",
+    inputs: {
+      dispatched_at: "2026-07-20T00:20:00.000Z",
+      persist: "true",
+    },
+  });
+});
+
+test("FM and game-news managed runs remain independent in the same private repository", async () => {
+  const gameCalls = [];
+  const gameResult = await dispatchScheduledWorkflow({
+    cron: "17 0,12 * * *",
+    env: {
+      ...ENV,
+      GAME_NEWS_DISPATCH_ENABLED: "1",
+      GAME_NEWS_GITHUB_REPOSITORY: "TodayCommunity",
+    },
+    fetchImpl: async (url, options) => {
+      gameCalls.push({ url, options });
+      return options.method === "GET"
+        ? jsonResponse({
+            workflow_runs: [
+              {
+                id: 601,
+                event: "workflow_dispatch",
+                status: "in_progress",
+                head_branch: "main",
+                path: ".github/workflows/scan-fmkorea.yml",
+                created_at: "2026-07-20T00:15:00Z",
+              },
+            ],
+          })
+        : noContentResponse();
+    },
+    now: () => NOW,
+  });
+  assert.equal(gameResult.destinations[0].status, "dispatched");
+  assert.equal(
+    gameCalls.filter(({ options }) => options.method === "POST").length,
+    1,
+  );
+
+  const hotCalls = [];
+  const hotResult = await dispatchScheduledWorkflow({
+    cron: "7,22,37,52 * * * *",
+    env: {
+      ...ENV,
+      FM_DISPATCH_ENABLED: "1",
+      FM_GITHUB_REPOSITORY: "TodayCommunity",
+    },
+    fetchImpl: async (url, options) => {
+      hotCalls.push({ url, options });
+      if (options.method === "POST") {
+        return noContentResponse();
+      }
+      if (url.includes("TodayCommunity-Public")) {
+        return jsonResponse({ workflow_runs: [] });
+      }
+      return jsonResponse({
+        workflow_runs: [
+          {
+            id: 602,
+            event: "workflow_dispatch",
+            status: "queued",
+            head_branch: "main",
+            path: ".github/workflows/scan-game-news.yml",
+            created_at: "2026-07-20T00:15:00Z",
+          },
+        ],
+      });
+    },
+    now: () => NOW,
+  });
+  assert.equal(hotResult.destinations[0].status, "dispatched");
+  assert.equal(hotResult.destinations[1].status, "dispatched");
+});
+
+test("an active game-news run suppresses only a new game-news dispatch", async () => {
+  const calls = [];
+  const result = await dispatchScheduledWorkflow({
+    cron: "17 0,12 * * *",
+    env: {
+      ...ENV,
+      GAME_NEWS_DISPATCH_ENABLED: "1",
+      GAME_NEWS_GITHUB_REPOSITORY: "TodayCommunity",
+    },
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return jsonResponse({
+        workflow_runs: [
+          {
+            id: 603,
+            event: "workflow_dispatch",
+            status: "queued",
+            head_branch: "main",
+            path: ".github/workflows/scan-game-news.yml",
+            created_at: "2026-07-19T00:00:00Z",
+          },
+        ],
+      });
+    },
+    now: () => NOW,
+  });
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(result.destinations[0], {
+    destination: "game-news",
+    repository: "TodayCommunity",
+    status: "skipped",
+    kind: "game-news",
+    workflow: "scan-game-news.yml",
+    reason: "managed_workflow_active",
+    runId: 603,
+  });
+});
+
 test("an offline queued FM run does not suppress an eligible public DC dispatch", async () => {
   const calls = [];
   const result = await dispatchScheduledWorkflow({
@@ -421,6 +606,7 @@ test("a public active run does not suppress an eligible private FM dispatch", as
 });
 
 test("Hot skips while another managed workflow is active", () => {
+  const schedule = SCHEDULES["7,22,37,52 * * * *"];
   const decision = decideDispatch({
     runs: [
       {
@@ -430,7 +616,7 @@ test("Hot skips while another managed workflow is active", () => {
         path: ".github/workflows/scan-dcinside-backfill.yml",
       },
     ],
-    schedule: SCHEDULES["7,22,37,52 * * * *"],
+    schedule: { kind: schedule.kind, workflow: schedule.workflow },
     ref: "main",
     nowMs: NOW,
   });
@@ -443,7 +629,11 @@ test("Hot skips while another managed workflow is active", () => {
 });
 
 test("Backfill may queue behind Hot but skips another active Backfill", () => {
-  const schedule = SCHEDULES["56 */6 * * *"];
+  const configuredSchedule = SCHEDULES["56 */6 * * *"];
+  const schedule = {
+    kind: configuredSchedule.kind,
+    workflow: configuredSchedule.workflow,
+  };
   assert.deepEqual(
     decideDispatch({
       runs: [
@@ -599,6 +789,57 @@ test("Backfill ignores an invalid FM enable flag", async () => {
   const result = await dispatchScheduledWorkflow({
     cron: "56 */6 * * *",
     env: { ...ENV, FM_DISPATCH_ENABLED: "invalid" },
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return options.method === "GET"
+        ? jsonResponse({ workflow_runs: [] })
+        : noContentResponse();
+    },
+    now: () => NOW,
+  });
+
+  assert.equal(result.status, "completed");
+  assert.equal(result.destinations.length, 1);
+  assert.equal(result.destinations[0].destination, "dcinside");
+  assert.equal(calls.length, 2);
+});
+
+test("game-news cron ignores FM configuration and fails closed on an invalid game flag", async () => {
+  const calls = [];
+  await assert.rejects(
+    dispatchScheduledWorkflow({
+      cron: "17 0,12 * * *",
+      env: {
+        FM_DISPATCH_ENABLED: "invalid",
+        GAME_NEWS_DISPATCH_ENABLED: "yes",
+      },
+      fetchImpl: async (url, options) => {
+        calls.push({ url, options });
+        return noContentResponse();
+      },
+      now: () => NOW,
+    }),
+    (error) => {
+      assert.ok(error instanceof ScheduledDispatchError);
+      assert.equal(error.kind, "game-news");
+      assert.equal(error.destinations.length, 1);
+      assert.equal(error.destinations[0].destination, "game-news");
+      assert.equal(error.destinations[0].status, "failed");
+      assert.match(
+        error.destinations[0].error,
+        /GAME_NEWS_DISPATCH_ENABLED must be either 0 or 1/,
+      );
+      return true;
+    },
+  );
+  assert.equal(calls.length, 0);
+});
+
+test("non-game schedules ignore an invalid game-news enable flag", async () => {
+  const calls = [];
+  const result = await dispatchScheduledWorkflow({
+    cron: "56 */6 * * *",
+    env: { ...ENV, GAME_NEWS_DISPATCH_ENABLED: "invalid" },
     fetchImpl: async (url, options) => {
       calls.push({ url, options });
       return options.method === "GET"

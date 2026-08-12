@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import unittest
 from unittest.mock import patch
 
-from crawler.d1 import D1Client
+from crawler.d1 import D1Client, split_sql_statements
 
 
 class FakeResponse:
@@ -202,6 +203,43 @@ class D1ClientResponseTests(unittest.TestCase):
             return_value=FakeResponse(payload),
         ), self.assertRaisesRegex(RuntimeError, "no statement result"):
             self.client.query("SELECT 1")
+
+
+class SqlScriptSplittingTests(unittest.TestCase):
+    def test_trigger_body_is_kept_as_one_statement(self) -> None:
+        script = """
+        CREATE TABLE events (id INTEGER PRIMARY KEY, value TEXT);
+        CREATE TRIGGER events_no_update
+        BEFORE UPDATE ON events
+        BEGIN
+          SELECT RAISE(ABORT, 'events are append-only');
+        END;
+        INSERT INTO events (value) VALUES ('a; b');
+        """
+
+        statements = split_sql_statements(script)
+
+        self.assertEqual(len(statements), 3)
+        self.assertIn("SELECT RAISE", statements[1])
+        self.assertTrue(statements[1].rstrip().endswith("END"))
+        self.assertIn("'a; b'", statements[2])
+
+    def test_current_fresh_schema_splits_into_executable_statements(self) -> None:
+        from pathlib import Path
+
+        schema = (
+            Path(__file__).resolve().parents[1] / "cloudflare" / "schema.sql"
+        ).read_text(encoding="utf-8")
+        connection = sqlite3.connect(":memory:")
+
+        for statement in split_sql_statements(schema):
+            connection.execute(statement)
+
+        trigger_count = connection.execute(
+            "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'trigger' "
+            "AND name LIKE 'game_news_%'"
+        ).fetchone()[0]
+        self.assertEqual(trigger_count, 4)
 
 
 if __name__ == "__main__":

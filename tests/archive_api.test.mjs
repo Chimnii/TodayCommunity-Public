@@ -91,6 +91,7 @@ class MockDatabase {
         archive_key: "dcinside-singularity",
         display_name: "특이점이 온다",
         description: "디시인사이드 특이점이 온다 갤러리 인기글",
+        content_kind: "community",
         display_order: 10,
         updated_at: "2026-07-17T01:07:00Z",
       },
@@ -98,6 +99,7 @@ class MockDatabase {
         archive_key: "dcinside-agent-stack",
         display_name: "에이전트 스택",
         description: "디시인사이드 에이전트 스택 갤러리 인기글",
+        content_kind: "community",
         display_order: 20,
         updated_at: "2026-07-17T01:07:00Z",
       },
@@ -105,7 +107,16 @@ class MockDatabase {
         archive_key: "fmkorea-munich",
         display_name: "뮌헨",
         description: "에펨코리아의 뮌헨 관련 인기글",
+        content_kind: "community",
         display_order: 30,
+        updated_at: "2026-07-17T01:07:00Z",
+      },
+      {
+        archive_key: "game-news",
+        display_name: "게임 뉴스",
+        description: "게임 신작, 인터뷰와 업계 동향 기사",
+        content_kind: "article",
+        display_order: 40,
         updated_at: "2026-07-17T01:07:00Z",
       },
     ];
@@ -189,7 +200,12 @@ test("defaults to the first 30 globally counted posts and preserves recent runs"
   assert.equal(body.archive.display_name, "특이점이 온다");
   assert.deepEqual(
     body.archives.map((archive) => archive.archive_key),
-    ["dcinside-singularity", "dcinside-agent-stack", "fmkorea-munich"]
+    ["dcinside-singularity", "dcinside-agent-stack", "fmkorea-munich", "game-news"]
+  );
+  assert.equal(body.archive.content_kind, "community");
+  assert.equal(
+    body.archives.find((archive) => archive.archive_key === "game-news")?.content_kind,
+    "article"
   );
   assert.equal(body.sources.length, 1);
   assert.deepEqual(body.source, body.sources[0]);
@@ -419,6 +435,52 @@ test("combines multiple collection sources under one archive", async () => {
   assert.doesNotMatch(countCall.sql, /upvotes >= \?|comments >= \?/);
   const sourceCall = findCall(database, "FROM sources", "batch");
   assert.deepEqual(sourceCall.values, [target]);
+});
+
+test("serves article archives from published posts without exposing curation data", async () => {
+  const target = "game-news";
+  const sources = [
+    {
+      source_key: "game-news-inven",
+      archive_key: target,
+      site_name: "inven",
+      board_name: "인벤",
+    },
+    {
+      source_key: "game-news-thisisgame",
+      archive_key: target,
+      site_name: "thisisgame",
+      board_name: "디스이즈게임",
+    },
+  ];
+  const database = new MockDatabase({
+    sources,
+    totalPosts: 1,
+    posts: [
+      {
+        archive_key: target,
+        source_key: sources[0].source_key,
+        external_post_id: "article-1",
+        subject: "업계 동향",
+        title: "게임 산업 기사",
+        post_url: "https://www.inven.co.kr/webzine/news/?news=1",
+        created_at: "2026-08-11T00:00:00Z",
+        upvotes: 0,
+        comments: 0,
+        qualifies_by: "llm-include",
+      },
+    ],
+  });
+
+  const { response, body } = await requestArchive(database, `?target=${target}`);
+
+  assert.equal(response.status, 200);
+  assert.equal(body.archive.content_kind, "article");
+  assert.equal(body.posts.length, 1);
+  assert.equal(body.posts[0].qualifies_by, "llm-include");
+  assert.equal(JSON.stringify(body).includes("game_news_candidates"), false);
+  assert.equal(JSON.stringify(body).includes("model_id"), false);
+  assert.ok(database.calls.every(({ sql }) => !sql.includes("game_news_")));
 });
 
 test("normalizes cache keys and reuses a five-minute edge response", async () => {

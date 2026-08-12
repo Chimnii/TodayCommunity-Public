@@ -172,6 +172,7 @@ function publicArchive(row) {
     archive_key: row.archive_key,
     display_name: row.display_name,
     description: row.description ?? "",
+    content_kind: row.content_kind === "article" ? "article" : "community",
     display_order: Number(row.display_order ?? 0),
     updated_at: row.updated_at ?? "",
   };
@@ -233,7 +234,8 @@ export async function onRequestGet(context) {
       await db
         .prepare(
           `
-          SELECT archive_key, display_name, description, display_order, updated_at
+          SELECT archive_key, display_name, description, content_kind,
+                 display_order, updated_at
           FROM archives
           WHERE archive_key = ? AND is_public = 1
           LIMIT 1
@@ -249,7 +251,8 @@ export async function onRequestGet(context) {
     const batchStatements = [
       db.prepare(
         `
-        SELECT archive_key, display_name, description, display_order, updated_at
+        SELECT archive_key, display_name, description, content_kind,
+               display_order, updated_at
         FROM archives
         WHERE is_public = 1
         ORDER BY display_order ASC, archive_key ASC

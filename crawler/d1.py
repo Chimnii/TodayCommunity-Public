@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from typing import Iterable, List, Optional, Tuple
 from urllib import request
 
@@ -124,8 +125,11 @@ def split_sql_statements(sql_script: str) -> List[str]:
         if not stripped or stripped.startswith("--"):
             continue
         current.append(line)
-        if stripped.endswith(";"):
-            statement = "\n".join(current).strip().rstrip(";").strip()
+        candidate = "\n".join(current).strip()
+        if sqlite3.complete_statement(candidate):
+            statement = candidate.rstrip()
+            if statement.endswith(";"):
+                statement = statement[:-1].rstrip()
             if statement:
                 statements.append(statement)
             current = []

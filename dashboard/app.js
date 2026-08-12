@@ -8,30 +8,42 @@ const ARCHIVE_TAB_LABELS = Object.freeze({
   "dcinside-singularity": "특이점이 온다 갤",
   "dcinside-agent-stack": "AI 활용 갤",
   "fmkorea-munich": "Bayern Munich",
+  "game-news": "게임 뉴스",
 });
 const ARCHIVE_MASTHEAD_DESCRIPTIONS = Object.freeze({
   "dcinside-singularity": "디시인사이드 특이점이 온다 갤러리 인기글.",
   "dcinside-agent-stack": "디시인사이드 AI 활용 갤러리 인기글.",
   "fmkorea-munich": "에펨코리아 바이에른 뮌헨 관련 인기글.",
+  "game-news": "게임 신작, 인터뷰와 업계 동향을 휴리스틱하게 선별한 기사.",
 });
 const FALLBACK_ARCHIVES = Object.freeze([
   {
     archive_key: "dcinside-singularity",
     display_name: "특이점이 온다",
     description: "디시인사이드 특이점이 온다 갤러리 인기글",
+    content_kind: "community",
     display_order: 10,
   },
   {
     archive_key: "dcinside-agent-stack",
     display_name: "AI 활용",
     description: "디시인사이드 AI 활용 갤러리 인기글",
+    content_kind: "community",
     display_order: 20,
   },
   {
     archive_key: "fmkorea-munich",
     display_name: "뮌헨",
     description: "에펨코리아의 뮌헨 관련 인기글",
+    content_kind: "community",
     display_order: 30,
+  },
+  {
+    archive_key: "game-news",
+    display_name: "게임 뉴스",
+    description: "게임 신작, 인터뷰와 업계 동향 기사",
+    content_kind: "article",
+    display_order: 40,
   },
 ]);
 const DEFAULT_STATE = Object.freeze({
@@ -85,9 +97,13 @@ const elements = {
   filterToggleState: document.querySelector(".filter-toggle-state"),
   searchInput: document.querySelector("#search-input"),
   subjectSelect: document.querySelector("#subject-select"),
+  subjectFilterLabel: document.querySelector("#subject-filter-label"),
+  subjectColumnLabel: document.querySelector("#subject-column-label"),
   upvotesInput: document.querySelector("#upvotes-input"),
   commentsInput: document.querySelector("#comments-input"),
   sortSelect: document.querySelector("#sort-select"),
+  sortUpvotesOption: document.querySelector('#sort-select option[value="upvotes"]'),
+  sortCommentsOption: document.querySelector('#sort-select option[value="comments"]'),
   pageSizeSelect: document.querySelector("#page-size-select"),
   filterForm: document.querySelector("#filter-form"),
 };
@@ -103,6 +119,8 @@ const dateTimeFormatter = new Intl.DateTimeFormat("ko-KR", {
 
 function initialize() {
   hydrateStateFromUrl();
+  normalizeArticleState();
+  applyContentKindMode();
   writeStateToControls();
   setMobileFiltersExpanded(hasActiveFilterState());
   bindEvents();
@@ -244,6 +262,49 @@ function getCurrentArchive() {
   return findArchive(getAvailableArchives(), state.target);
 }
 
+function isArticleArchive() {
+  return (
+    state.target === "game-news" ||
+    getCurrentArchive()?.content_kind === "article"
+  );
+}
+
+function normalizeArticleState() {
+  if (!isArticleArchive()) {
+    return;
+  }
+  state.minUpvotes = 0;
+  state.minComments = 0;
+  state.sortBy = "created_at";
+}
+
+function applyContentKindMode() {
+  const articleMode = isArticleArchive();
+  document.body.dataset.contentKind = articleMode ? "article" : "community";
+  elements.board.setAttribute(
+    "aria-label",
+    articleMode ? "저장된 게임 기사" : "저장된 커뮤니티 글"
+  );
+
+  if (elements.subjectFilterLabel) {
+    elements.subjectFilterLabel.textContent = articleMode ? "주제" : "말머리";
+  }
+  if (elements.subjectColumnLabel) {
+    elements.subjectColumnLabel.textContent = articleMode ? "주제" : "말머리";
+  }
+  for (const option of [elements.sortUpvotesOption, elements.sortCommentsOption]) {
+    if (option) {
+      option.hidden = articleMode;
+      option.disabled = articleMode;
+    }
+  }
+  if (articleMode) {
+    elements.upvotesInput.value = "0";
+    elements.commentsInput.value = "0";
+    elements.sortSelect.value = "created_at";
+  }
+}
+
 function getCurrentSources() {
   return Array.isArray(state.archive?.sources) ? state.archive.sources : [];
 }
@@ -278,6 +339,25 @@ function renderArchiveTabs() {
   }).filter(Boolean);
 
   elements.archiveTabs.replaceChildren(...tabs);
+  keepSelectedArchiveTabVisible();
+}
+
+function keepSelectedArchiveTabVisible() {
+  const navigation = elements.archiveTabs.parentElement;
+  const selected = elements.archiveTabs.querySelector('[role="tab"][aria-selected="true"]');
+  if (!navigation || !selected) {
+    return;
+  }
+
+  const visibleStart = navigation.scrollLeft;
+  const visibleEnd = visibleStart + navigation.clientWidth;
+  const selectedStart = selected.offsetLeft;
+  const selectedEnd = selectedStart + selected.offsetWidth;
+  if (selectedStart < visibleStart) {
+    navigation.scrollLeft = selectedStart;
+  } else if (selectedEnd > visibleEnd) {
+    navigation.scrollLeft = selectedEnd - navigation.clientWidth;
+  }
 }
 
 function buildArchiveHref(target) {
@@ -331,6 +411,8 @@ function selectArchive(target) {
 }
 
 function render() {
+  normalizeArticleState();
+  applyContentKindMode();
   const view = getViewModel();
   elements.board.setAttribute("aria-busy", "false");
   renderArchiveTabs();
@@ -439,7 +521,7 @@ function renderSubjectOptions() {
   options.sort((left, right) => left.localeCompare(right, "ko-KR"));
   const allOption = document.createElement("option");
   allOption.value = "";
-  allOption.textContent = "전체 말머리";
+  allOption.textContent = isArticleArchive() ? "전체 주제" : "전체 말머리";
   const subjectOptions = options.slice(0, 100).map(createSubjectOption);
 
   elements.subjectSelect.replaceChildren(allOption, ...subjectOptions);
@@ -757,6 +839,7 @@ function createTitleCell(post) {
 
   const title = String(post.title || "제목 없음");
   const comments = normalizeNonNegativeNumber(post.comments, 0);
+  const articleMode = isArticleArchive();
   const safeUrl = getSafeHttpUrl(post.post_url);
   const content = safeUrl
     ? document.createElement("a")
@@ -768,7 +851,10 @@ function createTitleCell(post) {
     content.target = "_blank";
     content.rel = "noreferrer noopener";
     content.title = title;
-    content.setAttribute("aria-label", `${title}, 댓글 ${comments}개, 원문 열기`);
+    content.setAttribute(
+      "aria-label",
+      articleMode ? `${title}, 원문 열기` : `${title}, 댓글 ${comments}개, 원문 열기`
+    );
   }
 
   const titleText = document.createElement("span");
@@ -778,9 +864,12 @@ function createTitleCell(post) {
   commentCount.className = "post-comment-count";
   commentCount.setAttribute("aria-hidden", "true");
   commentCount.textContent = `[${numberFormatter.format(comments)}]`;
-  content.append(titleText, commentCount);
+  content.append(titleText);
+  if (!articleMode) {
+    content.append(commentCount);
+  }
 
-  if (!safeUrl) {
+  if (!safeUrl && !articleMode) {
     const commentDescription = document.createElement("span");
     commentDescription.className = "visually-hidden";
     commentDescription.textContent = `댓글 ${comments}개`;
@@ -1151,6 +1240,7 @@ function readStateFromControls() {
 
   const pageSize = normalizePositiveNumber(elements.pageSizeSelect.value, DEFAULT_STATE.pageSize);
   state.pageSize = VALID_PAGE_SIZES.has(pageSize) ? pageSize : DEFAULT_STATE.pageSize;
+  normalizeArticleState();
 }
 
 function writeStateToControls() {
@@ -1180,6 +1270,7 @@ function hydrateStateFromUrl() {
   state.sortBy = VALID_SORTS.has(sortBy) ? sortBy : DEFAULT_STATE.sortBy;
   state.page = normalizePositiveNumber(params.get("page"), 1);
   state.pageSize = VALID_PAGE_SIZES.has(pageSize) ? pageSize : DEFAULT_STATE.pageSize;
+  normalizeArticleState();
 }
 
 function syncStateToUrl({ replace = true } = {}) {
@@ -1209,6 +1300,7 @@ function syncStateToUrl({ replace = true } = {}) {
 }
 
 function renderLoadingState() {
+  applyContentKindMode();
   renderArchiveTabs();
   reserveBoardRows(state.pageSize);
   elements.board.setAttribute("aria-busy", "true");

@@ -16,6 +16,7 @@ const archives = [
     archive_key: "dcinside-singularity",
     display_name: "특이점이 온다",
     description: "디시인사이드 특이점이 온다 갤러리 인기글",
+    content_kind: "community",
     display_order: 10,
     updated_at: "2026-07-17T00:30:00.000Z",
   },
@@ -23,6 +24,7 @@ const archives = [
     archive_key: "dcinside-agent-stack",
     display_name: "에이전트 스택",
     description: "디시인사이드 에이전트 스택 갤러리 인기글",
+    content_kind: "community",
     display_order: 20,
     updated_at: "2026-07-17T00:30:00.000Z",
   },
@@ -30,7 +32,16 @@ const archives = [
     archive_key: "fmkorea-munich",
     display_name: "뮌헨",
     description: "에펨코리아의 뮌헨 관련 인기글",
+    content_kind: "community",
     display_order: 30,
+    updated_at: "2026-07-17T00:30:00.000Z",
+  },
+  {
+    archive_key: "game-news",
+    display_name: "게임 뉴스",
+    description: "인벤과 디스이즈게임에서 선별한 게임 뉴스",
+    content_kind: "article",
+    display_order: 40,
     updated_at: "2026-07-17T00:30:00.000Z",
   },
 ];
@@ -85,6 +96,26 @@ const sourcesByArchive = {
       board_url: "https://www.fmkorea.com/index.php?mid=football_world&category=853073246",
       min_upvotes: 13,
       min_comments: 130,
+    },
+  ],
+  "game-news": [
+    {
+      source_key: "game-news-inven",
+      archive_key: "game-news",
+      site_name: "inven",
+      board_name: "인벤 게임 뉴스",
+      board_url: "https://www.inven.co.kr/webzine/news/",
+      min_upvotes: 0,
+      min_comments: 0,
+    },
+    {
+      source_key: "game-news-thisisgame",
+      archive_key: "game-news",
+      site_name: "thisisgame",
+      board_name: "디스이즈게임",
+      board_url: "https://www.thisisgame.com/",
+      min_upvotes: 0,
+      min_comments: 0,
     },
   ],
 };
@@ -175,11 +206,29 @@ function handleArchive(requestUrl, response) {
     return;
   }
   const sources = sourcesByArchive[target];
+  const articleMode = archive.content_kind === "article";
   const archivePosts = posts.map((post, index) => ({
     ...post,
     archive_key: target,
     source_key: sources[index % sources.length].source_key,
+    subject: articleMode
+      ? ["신작", "인터뷰", "업계 동향", "개발"][index % 4]
+      : post.subject,
+    title: articleMode ? `게임 뉴스 검증 기사 ${index + 1}` : post.title,
+    post_url: articleMode
+      ? index % 2 === 0
+        ? `https://www.inven.co.kr/webzine/news/?news=${post.external_post_id}`
+        : `https://www.thisisgame.com/webzine/news/nboard/4/?n=${post.external_post_id}`
+      : post.post_url,
+    upvotes: articleMode ? 0 : post.upvotes,
+    comments: articleMode ? 0 : post.comments,
+    qualifies_by: articleMode ? "llm-include" : post.qualifies_by,
   }));
+  const archiveSubjectOptions = [
+    ...new Set(archivePosts.map((post) => normalizeSubject(post.subject)).filter(Boolean)),
+  ]
+    .sort((left, right) => left.localeCompare(right, "ko-KR"))
+    .slice(0, 100);
   const search = String(requestUrl.searchParams.get("q") || "").trim().toLocaleLowerCase("ko-KR");
   const subject = normalizeSubject(requestUrl.searchParams.get("subject"));
   const minUpvotes = normalizeNonNegative(requestUrl.searchParams.get("min_upvotes"));
@@ -228,7 +277,7 @@ function handleArchive(requestUrl, response) {
       has_previous: page > 1,
       has_next: totalPages > 0 && page < totalPages,
     },
-    subject_options: subjectOptions,
+    subject_options: articleMode ? archiveSubjectOptions : subjectOptions,
     runs: runs.map((run, index) => ({
       ...run,
       source_key: sources[index % sources.length].source_key,

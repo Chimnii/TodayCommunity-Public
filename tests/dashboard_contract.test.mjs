@@ -35,7 +35,7 @@ test("ships the compact archive surface and hidden collection dialog", () => {
   assert.match(html, /id="comments-input"[^>]*type="number"/);
   assert.match(
     html,
-    /cell-number" role="columnheader">번호<\/span>[\s\S]*cell-subject" role="columnheader">말머리<\/span>[\s\S]*cell-title" role="columnheader">제목<\/span>/
+    /cell-number" role="columnheader">번호<\/span>[\s\S]*cell-subject"[\s\S]*role="columnheader"[\s\S]*>말머리<\/span>[\s\S]*cell-title" role="columnheader">제목<\/span>/
   );
   assert.match(
     html,
@@ -48,29 +48,55 @@ test("ships the compact archive surface and hidden collection dialog", () => {
   );
 });
 
-test("ships three accessible archive tabs and replaces them from the API catalog", () => {
+test("ships four accessible archive tabs and replaces them from the API catalog", () => {
   assert.match(html, /id="archive-tabs"[^>]*role="tablist"/);
   assert.match(html, /role="tab"[\s\S]*href="\/?\?target=dcinside-singularity"/);
   assert.match(html, /href="\/?\?target=dcinside-agent-stack"/);
   assert.match(html, /href="\/?\?target=fmkorea-munich"/);
+  assert.match(html, /href="\/?\?target=game-news"/);
   assert.match(html, />특이점이 온다 갤<\/a>/);
   assert.match(html, />AI 활용 갤<\/a>/);
   assert.match(html, />Bayern Munich<\/a>/);
+  assert.match(html, />게임 뉴스<\/a>/);
 
   assert.match(app, /Array\.isArray\(state\.archive\?\.archives\)/);
   assert.match(app, /getAvailableArchives\(\)\.map/);
   assert.match(app, /tab\.setAttribute\("role", "tab"\)/);
   assert.match(app, /tab\.setAttribute\("aria-selected", String\(key === state\.target\)\)/);
+  assert.match(app, /keepSelectedArchiveTabVisible\(\)/);
+  assert.match(app, /navigation\.scrollLeft = selectedEnd - navigation\.clientWidth/);
   assert.match(app, /\["ArrowLeft", "ArrowRight", "Home", "End"\]/);
   assert.match(app, /"dcinside-singularity": "특이점이 온다 갤"/);
   assert.match(app, /"dcinside-agent-stack": "AI 활용 갤"/);
   assert.match(app, /"fmkorea-munich": "Bayern Munich"/);
+  assert.match(app, /"game-news": "게임 뉴스"/);
   assert.match(
     app,
     /archive_key: "dcinside-agent-stack",[\s\S]*display_name: "AI 활용",[\s\S]*description: "디시인사이드 AI 활용 갤러리 인기글"/
   );
   assert.match(app, /ARCHIVE_TAB_LABELS\[key\] \|\| String\(archive\.display_name \|\| key\)/);
   assert.match(css, /\.archive-tab\[aria-selected="true"\]/);
+});
+
+test("switches article archives to a three-column, no-vote presentation", () => {
+  assert.match(app, /getCurrentArchive\(\)\?\.content_kind === "article"/);
+  assert.match(app, /document\.body\.dataset\.contentKind = articleMode \? "article" : "community"/);
+  assert.match(app, /state\.minUpvotes = 0/);
+  assert.match(app, /state\.minComments = 0/);
+  assert.match(app, /state\.sortBy = "created_at"/);
+  assert.match(app, /articleMode \? "주제" : "말머리"/);
+  assert.match(app, /articleMode \? "저장된 게임 기사" : "저장된 커뮤니티 글"/);
+  assert.match(app, /option\.hidden = articleMode/);
+  assert.match(app, /if \(!articleMode\) \{\s*content\.append\(commentCount\)/);
+  assert.match(css, /body\[data-content-kind="article"\] \.filter-upvotes/);
+  assert.match(css, /body\[data-content-kind="article"\] \.cell-number/);
+  assert.match(fixtureServer, /archive_key: "game-news"[\s\S]*content_kind: "article"/);
+  assert.match(fixtureServer, /source_key: "game-news-inven"/);
+  assert.match(fixtureServer, /source_key: "game-news-thisisgame"/);
+  assert.match(
+    css,
+    /body\[data-content-kind="article"\] \.board-row\s*{[^}]*grid-template-columns:\s*96px minmax\(0, 1fr\) 104px/s
+  );
 });
 
 test("switches archive targets with clean filters and history-aware URLs", () => {
@@ -157,7 +183,10 @@ test("filters by exact subjects from the complete saved set", () => {
   assert.match(app, /characters\.length <= 100 \? characters\.join\(""\) : ""/);
   assert.match(fixtureServer, /requestUrl\.searchParams\.get\("subject"\)/);
   assert.match(fixtureServer, /!subject \|\| post\.subject === subject/);
-  assert.match(fixtureServer, /subject_options: subjectOptions/);
+  assert.match(
+    fixtureServer,
+    /subject_options:\s*articleMode\s*\?\s*archiveSubjectOptions\s*:\s*subjectOptions/
+  );
 });
 
 test("shows an archive-specific two-line collection summary", () => {
@@ -288,7 +317,8 @@ test("moves comment counts beside ellipsized titles", () => {
   assert.doesNotMatch(app, /"cell-comments numeric-cell"/);
   assert.match(app, /commentCount\.className = "post-comment-count"/);
   assert.match(app, /commentCount\.textContent = `\[\$\{numberFormatter\.format\(comments\)\}\]`/);
-  assert.match(app, /content\.append\(titleText, commentCount\)/);
+  assert.match(app, /content\.append\(titleText\)/);
+  assert.match(app, /if \(!articleMode\) \{\s*content\.append\(commentCount\)/);
   assert.match(app, /commentDescription\.className = "visually-hidden"/);
   assert.match(app, /commentDescription\.textContent = `댓글 \$\{comments\}개`/);
   assert.match(css, /\.visually-hidden\s*{[^}]*position:\s*absolute[^}]*clip:\s*rect\(0 0 0 0\)/s);

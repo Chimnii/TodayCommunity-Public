@@ -41,13 +41,21 @@ class CrawlWorkflowContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.fmkorea = None
+        self.game_news = None
         self.runner_setup = None
+        self.game_news_runner_setup = None
         if IS_PRIVATE_SOURCE:
             self.fmkorea = (
                 ACTIVE_PRIVATE_WORKFLOWS / "scan-fmkorea.yml"
             ).read_text(encoding="utf-8")
+            self.game_news = (
+                ACTIVE_PRIVATE_WORKFLOWS / "scan-game-news.yml"
+            ).read_text(encoding="utf-8")
             self.runner_setup = (
                 ROOT / "scripts" / "setup_fmkorea_runner.ps1"
+            ).read_text(encoding="utf-8")
+            self.game_news_runner_setup = (
+                ROOT / "scripts" / "setup_game_news_runner.ps1"
             ).read_text(encoding="utf-8")
 
     def test_workflows_share_one_non_cancelling_concurrency_group(self) -> None:
@@ -59,6 +67,8 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         workflows = [self.hot, self.backfill]
         if self.fmkorea is not None:
             workflows.append(self.fmkorea)
+        if self.game_news is not None:
+            workflows.append(self.game_news)
         for workflow in workflows:
             self.assertIn(CHECKOUT_PIN, workflow)
             self.assertRegex(
@@ -109,6 +119,18 @@ class CrawlWorkflowContractTests(unittest.TestCase):
             self.assertNotIn("environment:", self.fmkorea)
             self.assertNotRegex(
                 self.fmkorea,
+                r"(?m)^\s*[A-Za-z_-]+:\s*write\s*$",
+            )
+
+        if self.game_news is not None:
+            self.assertRegex(
+                self.game_news,
+                r"(?m)^permissions:\s*\n\s+contents: read\s*$",
+            )
+            self.assertNotIn("pull_request", self.game_news)
+            self.assertNotIn("environment:", self.game_news)
+            self.assertNotRegex(
+                self.game_news,
                 r"(?m)^\s*[A-Za-z_-]+:\s*write\s*$",
             )
 
@@ -282,7 +304,7 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertIn("$dispatchBody.inputs", script)
         self.assertIn('ConvertTo-Json -Depth 4 -Compress', script)
         self.assertIn(
-            '"scan-dcinside-backfill.yml", "scan-fmkorea.yml")]',
+            '"scan-fmkorea.yml", "scan-game-news.yml")]',
             script,
         )
         self.assertIn(
@@ -295,6 +317,9 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertIn("[ValidateRange(0, 30)]", script)
         self.assertIn("dispatched_at = [DateTimeOffset]::UtcNow", script)
         self.assertIn("max_pages_per_target = [string]$FmkoreaMaxPages", script)
+        self.assertIn("[switch]$GameNewsPersist", script)
+        self.assertIn('$isGameNewsWorkflow = $Workflow -eq "scan-game-news.yml"', script)
+        self.assertIn("persist = $GameNewsPersist.IsPresent", script)
     def test_scheduler_deploys_only_relevant_main_changes_after_verification(self) -> None:
         self.assertIn("workflow_dispatch:", self.deploy_scheduler)
         self.assertRegex(self.deploy_scheduler, r"(?m)^  push:\s*$")
@@ -324,14 +349,17 @@ class CrawlWorkflowContractTests(unittest.TestCase):
                     msg=f"{path.name} still schedules the combined crawl mode",
                 )
 
-    def test_private_source_has_exactly_one_fmkorea_crawl_workflow(self) -> None:
+    def test_private_source_has_exactly_the_isolated_private_workflows(self) -> None:
         if not IS_PRIVATE_SOURCE:
             self.skipTest("running in the public mirror")
 
         workflow_names = {
             path.name for path in ACTIVE_PRIVATE_WORKFLOWS.glob("*.yml")
         }
-        self.assertEqual(workflow_names, {"scan-fmkorea.yml"})
+        self.assertEqual(
+            workflow_names,
+            {"scan-fmkorea.yml", "scan-game-news.yml"},
+        )
 
     def test_private_fmkorea_workflow_is_hot_only_and_self_hosted(self) -> None:
         if self.fmkorea is None:
@@ -491,6 +519,129 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         ):
             self.assertIn(f"secrets.{secret_name}", workflow)
 
+    def test_private_game_news_workflow_is_isolated_and_headless_only(self) -> None:
+        if self.game_news is None:
+            self.skipTest("running in the public mirror")
+
+        workflow = self.game_news
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertNotRegex(workflow, r"(?m)^\s*schedule:\s*$")
+        self.assertIn("if: github.ref == 'refs/heads/main'", workflow)
+        self.assertIn(
+            "runs-on: [self-hosted, Windows, X64, todaycommunity-game-news]",
+            workflow,
+        )
+        self.assertRegex(workflow, r"(?m)^\s+group: scan-game-news\s*$")
+        self.assertRegex(workflow, r"(?m)^\s+cancel-in-progress: false\s*$")
+        self.assertRegex(workflow, r"(?m)^\s{4}timeout-minutes: 60\s*$")
+        self.assertIn(
+            "shell: powershell -NoLogo -NoProfile -NonInteractive "
+            "-ExecutionPolicy Bypass -File {0}",
+            workflow,
+        )
+        self.assertIn('TC_GAME_NEWS_HEADLESS: "1"', workflow)
+        self.assertNotIn("TC_FMKOREA_", workflow)
+        self.assertNotIn(r"C:\ProgramData\TodayCommunity", workflow)
+        self.assertNotIn("playwright install", workflow)
+
+    def test_private_game_news_workflow_fails_closed_before_checkout(self) -> None:
+        if self.game_news is None:
+            self.skipTest("running in the public mirror")
+
+        workflow = self.game_news
+        freshness_index = workflow.index("Validate freshness and inputs before checkout")
+        identity_index = workflow.index("Verify dedicated runner account")
+        checkout_index = workflow.index("Checkout approved main revision")
+        self.assertLess(freshness_index, identity_index)
+        self.assertLess(identity_index, checkout_index)
+        self.assertIn("$maximumAgeMinutes = 45", workflow)
+        self.assertIn("$maximumFutureSkewMinutes = 5", workflow)
+        self.assertIn("$shouldRun = $false", workflow)
+        self.assertIn("PERSIST_REQUESTED: ${{ inputs.persist }}", workflow)
+        self.assertIn(
+            "Persisting dispatches require dispatched_at for stale-job protection.",
+            workflow,
+        )
+        self.assertIn('default: false', workflow)
+        self.assertIn('$accountLeaf.Equals("user"', workflow)
+        self.assertIn('$expectedIdentity = "CHIMNII-MAIN\\user"', workflow)
+        self.assertIn('"CHIMNII-MAIN"', workflow)
+        self.assertNotIn("$env:USERNAME", workflow)
+        self.assertNotIn(">> $env:GITHUB_OUTPUT", workflow)
+
+    def test_private_game_news_workflow_uses_only_dedicated_oauth_runtime(self) -> None:
+        if self.game_news is None:
+            self.skipTest("running in the public mirror")
+
+        workflow = self.game_news
+        for path_name in (
+            "game-news-venv",
+            "game-news-chrome-profile",
+            "game-news-codex-home",
+            "game-news-runs",
+            "game-news-logs",
+        ):
+            self.assertIn(path_name, workflow)
+        self.assertIn(".todaycommunity-game-news-codex-command", workflow)
+        self.assertIn("[IO.File]::ReadAllText($codexMarker)", workflow)
+        self.assertIn('[IO.Path]::GetFileName($codexPath) -ne "codex.cmd"', workflow)
+        self.assertNotIn("login status", workflow)
+        self.assertNotIn('"Logged in using ChatGPT"', workflow)
+        self.assertIn("game_news.runner", workflow)
+        self.assertIn("$env:OPENAI_API_KEY = $null", workflow)
+        self.assertIn("TC_GAME_NEWS_CODEX_HOME", workflow)
+        runtime = (ROOT / "game_news" / "codex_exec.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('cli_auth_credentials_store=\"keyring\"', runtime)
+        self.assertIn('Join-Path $codexHome "auth.json"', workflow)
+        self.assertIn("File-based Codex credentials are forbidden", workflow)
+        self.assertNotIn("upload-artifact", workflow)
+        self.assertNotIn("actions/upload-artifact", workflow)
+
+    def test_private_game_news_workflow_installs_tracked_requirements_and_runs_contract_entrypoint(self) -> None:
+        if self.game_news is None:
+            self.skipTest("running in the public mirror")
+
+        workflow = self.game_news
+        self.assertIn("game_news/requirements.txt", workflow)
+        self.assertIn("git ls-files --error-unmatch", workflow)
+        self.assertIn("--requirement $requirements", workflow)
+        self.assertIn("-m pip check", workflow)
+        schema_index = workflow.index("-m game_news.schema_check")
+        persist_index = workflow.index(
+            "-m game_news.runner `\n            --run-root",
+            schema_index,
+        )
+        self.assertLess(schema_index, persist_index)
+        self.assertEqual(workflow.count("-m game_news.runner"), 2)
+        self.assertEqual(workflow.count("--run-root"), 2)
+        self.assertIn('--run-root "${{ steps.run_root.outputs.path }}" --persist', workflow)
+        self.assertIn("inputs.persist == true", workflow)
+        self.assertIn("inputs.persist != true", workflow)
+
+    def test_private_game_news_workflow_limits_d1_secrets_and_runtime_retention(self) -> None:
+        if self.game_news is None:
+            self.skipTest("running in the public mirror")
+
+        workflow = self.game_news
+        nonpersist = workflow.split(
+            "- name: Run non-persisting game-news curation",
+            maxsplit=1,
+        )[1].split("- name: Run persisting game-news curation", maxsplit=1)[0]
+        self.assertNotIn("secrets.", nonpersist)
+        for secret_name in (
+            "TC_CF_ACCOUNT_ID",
+            "TC_CF_DATABASE_ID",
+            "TC_CF_API_TOKEN",
+        ):
+            self.assertEqual(workflow.count(f"secrets.{secret_name}"), 2)
+        self.assertIn("Apply 30-day dedicated runtime retention", workflow)
+        self.assertIn("[DateTime]::UtcNow.AddDays(-30)", workflow)
+        self.assertIn('.todaycommunity-game-news-owned', workflow)
+        self.assertIn("Remove non-persisting run root", workflow)
+        self.assertIn('"TodayCommunity-game-news-"', workflow)
+
     def test_private_runner_setup_uses_verified_service_install(self) -> None:
         if self.runner_setup is None:
             self.skipTest("running in the public mirror")
@@ -534,6 +685,89 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertNotIn('--replace', script)
         self.assertNotIn('--disableupdate', script)
 
+    def test_game_news_runner_setup_keeps_accounts_auth_and_paths_isolated(self) -> None:
+        if self.game_news_runner_setup is None:
+            self.skipTest("running in the public mirror")
+
+        script = self.game_news_runner_setup
+        self.assertIn(r'"C:\actions-runner\todaycommunity-game-news"', script)
+        self.assertIn('$RunnerLabel = "todaycommunity-game-news"', script)
+        self.assertIn('$ExpectedRepository = "Chimnii/TodayCommunity"', script)
+        self.assertIn('$ExpectedComputerName = "CHIMNII-MAIN"', script)
+        self.assertIn('$ExpectedAccountLeaf = "user"', script)
+        self.assertIn('$ServiceAccount = "CHIMNII-MAIN\\user"', script)
+        self.assertIn(
+            '$RunnerName = "todaycommunity-game-news-CHIMNII-MAIN"',
+            script,
+        )
+        for path_name in (
+            "game-news-runtime",
+            "game-news-venv",
+            "game-news-chrome-profile",
+            "game-news-codex-home",
+            "game-news-runs",
+            "game-news-logs",
+        ):
+            self.assertIn(path_name, script)
+        self.assertIn(r'"C:\actions-runner\todaycommunity-fm"', script)
+        self.assertIn("Game-news runtime paths must not be shared.", script)
+        self.assertNotIn('"NT AUTHORITY\\NETWORK SERVICE"', script)
+        self.assertNotIn('"S-1-5-20"', script)
+
+        self.assertIn("Get-Command codex.cmd -CommandType Application", script)
+        self.assertIn('$RequiredCodexVersion = "0.147.0"', script)
+        self.assertIn("function Assert-CodexVersion", script)
+        self.assertIn("codex-cli $RequiredCodexVersion", script)
+        self.assertIn("Write-CodexCommandMarker", script)
+        self.assertIn(".todaycommunity-game-news-codex-command", script)
+        self.assertIn("login --device-auth", script)
+        self.assertIn("login status", script)
+        self.assertIn('"Logged in using ChatGPT"', script)
+        self.assertIn('"OPENAI_API_KEY"', script)
+        self.assertIn('"CODEX_API_KEY"', script)
+        self.assertIn('cli_auth_credentials_store=\"keyring\"', script)
+        self.assertIn('Join-Path $CodexHome "auth.json"', script)
+        self.assertIn("OS-keyring authentication is required", script)
+        self.assertNotIn("Copy-Item -LiteralPath $CodexHome", script)
+
+        self.assertIn("Get-GitHubToken", script)
+        self.assertIn("registration-token", script)
+        self.assertIn('repositoryMetadata.private', script)
+        self.assertIn('repositoryMetadata.full_name', script)
+        self.assertIn(
+            'The game-news runner may only register to its expected private repository.',
+            script,
+        )
+        self.assertIn("sha256_checksum", script)
+        self.assertIn(
+            "Get-FileHash -LiteralPath $archive `\n                -Algorithm SHA256",
+            script,
+        )
+        self.assertIn("--runasservice", script)
+        self.assertIn("--windowslogonaccount $ServiceAccount", script)
+        self.assertIn("--windowslogonpassword $plainPassword", script)
+        self.assertIn("Get-Credential -UserName $ServiceAccount", script)
+        self.assertIn("SecureStringToBSTR", script)
+        self.assertIn("ZeroFreeBSTR", script)
+        self.assertIn("$plainPassword = $null", script)
+        self.assertNotIn("Set-Content -LiteralPath $ServiceCredential", script)
+        self.assertNotIn("--replace", script)
+        self.assertNotIn("--disableupdate", script)
+
+        self.assertIn("game_news\\requirements.txt", script)
+        self.assertIn("ls-files --error-unmatch -- game_news/requirements.txt", script)
+        self.assertIn("-m pip check", script)
+        self.assertIn("[IO.Directory]::Move($pythonStage, $PythonRoot)", script)
+        self.assertIn("[IO.Directory]::Move($venvStage, $VenvRoot)", script)
+        self.assertIn("[IO.Directory]::Move($runnerStage, $RunnerRoot)", script)
+        self.assertIn("Remove-StagingDirectory", script)
+        self.assertIn("$acl.SetAccessRuleProtection($true, $false)", script)
+        self.assertIn('"S-1-5-18"', script)
+        self.assertIn('"S-1-5-32-544"', script)
+        self.assertIn('.todaycommunity-game-news-profile', script)
+        self.assertIn('TodayCommunity dedicated game-news Chrome profile', script)
+        self.assertIn('[IO.File]::WriteAllText(', script)
+
     def test_public_mirror_keeps_agent_instructions_private(self) -> None:
         if not IS_PRIVATE_SOURCE:
             self.skipTest("running in the public mirror")
@@ -542,6 +776,7 @@ class CrawlWorkflowContractTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn('"AGENTS.md"', script)
+        self.assertIn('$path -match "^game_news/"', script)
 
     def test_local_secret_and_cloudflare_state_patterns_are_ignored(self) -> None:
         ignore_lines = {

@@ -1,7 +1,9 @@
 const GITHUB_API_ROOT = "https://api.github.com";
 const PUBLIC_DESTINATION = "dcinside";
 const FMKOREA_DESTINATION = "fmkorea";
+const GAME_NEWS_DESTINATION = "game-news";
 const FMKOREA_WORKFLOW = "scan-fmkorea.yml";
+const GAME_NEWS_WORKFLOW = "scan-game-news.yml";
 
 export const GITHUB_API_VERSION = "2022-11-28";
 export const RECENT_DISPATCH_WINDOW_MS = 10 * 60 * 1000;
@@ -10,18 +12,27 @@ export const SCHEDULES = Object.freeze({
   "7,22,37,52 * * * *": Object.freeze({
     kind: "hot",
     workflow: "scan-dcinside.yml",
+    destinations: Object.freeze([PUBLIC_DESTINATION, FMKOREA_DESTINATION]),
   }),
   "56 */6 * * *": Object.freeze({
     kind: "backfill",
     workflow: "scan-dcinside-backfill.yml",
+    destinations: Object.freeze([PUBLIC_DESTINATION]),
+  }),
+  "17 0,12 * * *": Object.freeze({
+    kind: "game-news",
+    workflow: GAME_NEWS_WORKFLOW,
+    destinations: Object.freeze([GAME_NEWS_DESTINATION]),
   }),
 });
 
-const MANAGED_WORKFLOWS = new Set(
-  Object.values(SCHEDULES).map(({ workflow }) => workflow),
-);
+const PUBLIC_MANAGED_WORKFLOWS = new Set([
+  "scan-dcinside.yml",
+  "scan-dcinside-backfill.yml",
+]);
 
 const FMKOREA_MANAGED_WORKFLOWS = new Set([FMKOREA_WORKFLOW]);
+const GAME_NEWS_MANAGED_WORKFLOWS = new Set([GAME_NEWS_WORKFLOW]);
 
 export function workflowForCron(cron) {
   const schedule = SCHEDULES[cron];
@@ -74,7 +85,7 @@ export function decideDispatch({
   ref,
   nowMs,
   recentWindowMs = RECENT_DISPATCH_WINDOW_MS,
-  managedWorkflows = MANAGED_WORKFLOWS,
+  managedWorkflows = PUBLIC_MANAGED_WORKFLOWS,
 }) {
   const recentSameDispatch = runs.find((run) =>
     isRecentSameDispatch(
@@ -97,7 +108,7 @@ export function decideDispatch({
     (run) =>
       isActiveRun(run) && managedWorkflows.has(workflowFileForRun(run)),
   );
-  if (schedule.kind === "hot" && activeManagedRuns.length > 0) {
+  if (schedule.kind !== "backfill" && activeManagedRuns.length > 0) {
     return {
       action: "skip",
       reason: "managed_workflow_active",
@@ -121,8 +132,8 @@ export function decideDispatch({
   return { action: "dispatch" };
 }
 
-function fmkoreaDispatchConfig(env) {
-  const value = env?.FM_DISPATCH_ENABLED;
+function optionalDispatchConfig(env, bindingName) {
+  const value = env?.[bindingName];
   if (value === undefined || value === null || String(value).trim() === "") {
     return { enabled: false };
   }
@@ -136,8 +147,66 @@ function fmkoreaDispatchConfig(env) {
   }
   return {
     enabled: true,
-    error: new Error("FM_DISPATCH_ENABLED must be either 0 or 1"),
+    error: new Error(`${bindingName} must be either 0 or 1`),
   };
+}
+
+function destinationsForSchedule(schedule, env, nowMs) {
+  const destinations = [];
+  for (const destination of schedule.destinations) {
+    if (destination === PUBLIC_DESTINATION) {
+      destinations.push({
+        destination,
+        repositoryBinding: "GITHUB_REPOSITORY",
+        schedule: { kind: schedule.kind, workflow: schedule.workflow },
+        managedWorkflows: PUBLIC_MANAGED_WORKFLOWS,
+      });
+      continue;
+    }
+
+    if (destination === FMKOREA_DESTINATION) {
+      const config = optionalDispatchConfig(env, "FM_DISPATCH_ENABLED");
+      if (config.enabled) {
+        destinations.push({
+          destination,
+          repositoryBinding: "FM_GITHUB_REPOSITORY",
+          schedule: { kind: "hot", workflow: FMKOREA_WORKFLOW },
+          managedWorkflows: FMKOREA_MANAGED_WORKFLOWS,
+          inputs: {
+            dispatched_at: new Date(nowMs).toISOString(),
+            persist: "true",
+            max_pages_per_target: "0",
+          },
+          configurationError: config.error,
+        });
+      }
+      continue;
+    }
+
+    if (destination === GAME_NEWS_DESTINATION) {
+      const config = optionalDispatchConfig(
+        env,
+        "GAME_NEWS_DISPATCH_ENABLED",
+      );
+      if (config.enabled) {
+        destinations.push({
+          destination,
+          repositoryBinding: "GAME_NEWS_GITHUB_REPOSITORY",
+          schedule: { kind: "game-news", workflow: GAME_NEWS_WORKFLOW },
+          managedWorkflows: GAME_NEWS_MANAGED_WORKFLOWS,
+          inputs: {
+            dispatched_at: new Date(nowMs).toISOString(),
+            persist: "true",
+          },
+          configurationError: config.error,
+        });
+      }
+      continue;
+    }
+
+    throw new Error(`Unsupported scheduler destination: ${destination}`);
+  }
+  return destinations;
 }
 
 function githubHeaders(token, includeJsonBody = false) {
@@ -273,31 +342,7 @@ export async function dispatchScheduledWorkflow({
     throw new Error("Scheduler clock returned an invalid timestamp");
   }
 
-  const destinations = [
-    {
-      destination: PUBLIC_DESTINATION,
-      repositoryBinding: "GITHUB_REPOSITORY",
-      schedule,
-      managedWorkflows: MANAGED_WORKFLOWS,
-    },
-  ];
-  if (schedule.kind === "hot") {
-    const fmkoreaConfig = fmkoreaDispatchConfig(env);
-    if (fmkoreaConfig.enabled) {
-      destinations.push({
-        destination: FMKOREA_DESTINATION,
-        repositoryBinding: "FM_GITHUB_REPOSITORY",
-        schedule: { kind: "hot", workflow: FMKOREA_WORKFLOW },
-        managedWorkflows: FMKOREA_MANAGED_WORKFLOWS,
-        inputs: {
-          dispatched_at: new Date(nowMs).toISOString(),
-          persist: "true",
-          max_pages_per_target: "0",
-        },
-        configurationError: fmkoreaConfig.error,
-      });
-    }
-  }
+  const destinations = destinationsForSchedule(schedule, env, nowMs);
 
   const settled = await Promise.allSettled(
     destinations.map((destination) =>
