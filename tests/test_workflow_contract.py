@@ -519,7 +519,7 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         ):
             self.assertIn(f"secrets.{secret_name}", workflow)
 
-    def test_private_game_news_workflow_is_isolated_and_headless_only(self) -> None:
+    def test_private_game_news_workflow_is_isolated_and_headed_only(self) -> None:
         if self.game_news is None:
             self.skipTest("running in the public mirror")
 
@@ -539,7 +539,8 @@ class CrawlWorkflowContractTests(unittest.TestCase):
             "-ExecutionPolicy Bypass -File {0}",
             workflow,
         )
-        self.assertIn('TC_GAME_NEWS_HEADLESS: "1"', workflow)
+        self.assertEqual(workflow.count('TC_GAME_NEWS_HEADLESS: "0"'), 2)
+        self.assertNotIn('TC_GAME_NEWS_HEADLESS: "1"', workflow)
         self.assertNotIn("TC_FMKOREA_", workflow)
         self.assertNotIn(r"C:\ProgramData\TodayCommunity", workflow)
         self.assertNotIn("playwright install", workflow)

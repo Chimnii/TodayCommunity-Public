@@ -24,6 +24,7 @@ from crawler.jobs.scan_new_posts import (
     CrawlTimeoutError,
     CrawlTransientError,
     fetch_html,
+    mark_posts_deleted,
     record_run,
     update_finalized_posts,
     upsert_posts,
@@ -138,6 +139,7 @@ class PhaseSummary:
     target_complete: bool = False
     committed_intervals: int = 0
     confirmed_absences: int = 0
+    deleted_posts: int = 0
     stop_reason: str = ""
     oldest_seen_at: str = ""
     pages: List[int] = field(default_factory=list)
@@ -148,6 +150,7 @@ class PhaseSummary:
                 "target_complete": self.target_complete,
                 "committed_intervals": self.committed_intervals,
                 "confirmed_absences": self.confirmed_absences,
+                "deleted_posts": self.deleted_posts,
                 "hot_persisted_posts": self.hot_persisted_posts,
                 "stop_reason": self.stop_reason,
                 "oldest_seen_at": self.oldest_seen_at,
@@ -387,9 +390,11 @@ class CrawlCycle:
         return summary
 
     def _run_backfill(self) -> List[PhaseSummary]:
-        # Recent finalization leaves the configured wall-clock reservation for
-        # history. History then uses whatever time remains before the cycle
-        # deadline. Request counts are telemetry, not an execution budget.
+        # Recent finalization first connects the moving cutoff boundary to
+        # authoritative coverage. History then spends the reserved window on
+        # the newest remaining gap before extending the oldest frontier.
+        # Request counts are telemetry, not an execution budget.
+        reconciled_deletions = self._sync_confirmed_deletions()
         recent = self._run_recent_finalization()
         if recent.stop_reason == "no_finalizable_posts":
             historical = PhaseSummary(
@@ -400,6 +405,7 @@ class CrawlCycle:
             self.summaries.append(historical)
         else:
             historical = self._run_historical_backfill()
+        historical.deleted_posts += reconciled_deletions
 
         if self.client:
             self._record_summary(recent)
@@ -442,28 +448,71 @@ class CrawlCycle:
             summary.stop_reason = summary.stop_reason or "cutoff_not_located"
             return summary
 
-        eligible = self._eligible_posts(snapshot.posts)
-        if not eligible:
-            summary.status = "partial"
-            summary.stop_reason = "cutoff_page_has_no_eligible_posts"
-            return summary
-        if not finalization_eligibility_is_id_suffix(
-            snapshot.posts, self.finalization_cutoff
-        ):
-            # Concurrent inserts can assign neighboring IDs a few seconds out
-            # of timestamp order. Never let one still-live observed post sit
-            # inside a finalized ID interval; retry after the boundary moves.
-            self.source_state.state_metadata["finalize_page_hint"] = snapshot.page
-            summary.status = "partial"
-            summary.stop_reason = "cutoff_page_eligibility_not_id_suffix"
-            return summary
+        cutoff_page = snapshot.page
+        while True:
+            eligible = self._eligible_posts(snapshot.posts)
+            if not eligible:
+                summary.status = "partial"
+                summary.stop_reason = "cutoff_page_has_no_eligible_posts"
+                return summary
+            if not finalization_eligibility_is_id_suffix(
+                snapshot.posts, self.finalization_cutoff
+            ):
+                # Concurrent inserts can assign neighboring IDs a few seconds
+                # out of timestamp order. Never let one still-live observed
+                # post sit inside a finalized ID interval; retry after the
+                # boundary moves.
+                self.source_state.state_metadata["finalize_page_hint"] = cutoff_page
+                summary.status = "partial"
+                summary.stop_reason = "cutoff_page_eligibility_not_id_suffix"
+                return summary
 
-        committed = self._commit_finalized_page(snapshot.posts)
-        summary.matched_posts = count_qualifying(eligible, self.target)
-        summary.committed_intervals = 1 if committed else 0
-        summary.target_complete = True
-        summary.stop_reason = "cutoff_page_checked" if committed else "already_covered"
-        return summary
+            preview = interval_from_posts(
+                source_key=self.target.key,
+                posts=eligible,
+                checked_at=self.run_started_at,
+            )
+            rejoined_coverage = interval_reaches_older_coverage(
+                preview,
+                self._effective_coverage(),
+            )
+            committed = self._commit_finalized_page(snapshot.posts)
+            summary.matched_posts += count_qualifying(eligible, self.target)
+            summary.committed_intervals += 1 if committed else 0
+
+            if self._mark_history_frontier_exhausted(snapshot, preview):
+                summary.target_complete = True
+                summary.stop_reason = "recent_frontier_exhausted"
+                return summary
+            if rejoined_coverage:
+                summary.target_complete = True
+                summary.stop_reason = (
+                    "recent_coverage_rejoined" if committed else "already_covered"
+                )
+                return summary
+
+            next_page = snapshot.page + 1
+            try:
+                snapshot = self._fetch_backfill_page(
+                    next_page,
+                    summary,
+                    reserve_seconds=self.config.deep_reserved_seconds,
+                    allow_unordered=True,
+                )
+            except RuntimeLimitReached as exc:
+                summary.status = "partial"
+                summary.target_complete = False
+                summary.stop_reason = exc.reason
+                return summary
+            if not snapshot.coverage_ordered:
+                summary.matched_posts += self._persist_collection_safe_eligible(
+                    snapshot.posts
+                )
+                self.source_state.state_metadata["finalize_page_hint"] = cutoff_page
+                summary.status = "partial"
+                summary.target_complete = False
+                summary.stop_reason = "page_order_not_coverage_safe"
+                return summary
 
     def _run_historical_backfill(self) -> PhaseSummary:
         self._historical_phase_active = True
@@ -479,7 +528,6 @@ class CrawlCycle:
             summary.target_complete = False
             summary.stop_reason = "absence_invalidated_reselect"
             self.source_state.state_metadata["history_page_hint"] = exc.page
-            self.source_state.state_metadata["history_target_mode"] = "gap"
             return summary
         except CoverageOrderUnsafe as exc:
             summary = self.summaries[-1]
@@ -510,8 +558,6 @@ class CrawlCycle:
         self.source_state.state_metadata["history_order_unsafe_page"] = (
             first_snapshot.page
         )
-        self.source_state.state_metadata["history_target_mode"] = "frontier"
-
         # Scanning past this page is safe only when authoritative coverage
         # already exists on its newer side. Later ordered pages can then form
         # the older side of an explicit numeric gap. Without that upper
@@ -558,6 +604,10 @@ class CrawlCycle:
                     posts=eligible,
                     checked_at=self.run_started_at,
                 )
+                rejoined_coverage = interval_reaches_older_coverage(
+                    preview,
+                    self._effective_coverage(),
+                )
                 committed = self._commit_finalized_page(snapshot.posts)
                 summary.matched_posts += count_qualifying(eligible, self.target)
                 summary.committed_intervals += 1 if committed else 0
@@ -576,7 +626,12 @@ class CrawlCycle:
                     summary.stop_reason = (
                         "history_frontier_exhausted_with_unordered_gap"
                     )
-                    self.source_state.state_metadata["history_target_mode"] = "gap"
+                    break
+                if rejoined_coverage:
+                    self.source_state.state_metadata["history_page_hint"] = (
+                        first_snapshot.page
+                    )
+                    summary.stop_reason = "coverage_rejoined_after_unordered_gap"
                     break
             else:
                 summary.matched_posts += self._persist_collection_safe_eligible(
@@ -602,7 +657,6 @@ class CrawlCycle:
                     PageSnapshot(page=exc.page, posts=exc.posts),
                 )
                 self.source_state.state_metadata["history_page_hint"] = exc.page
-                self.source_state.state_metadata["history_target_mode"] = "gap"
                 summary.stop_reason = "absence_invalidated_reselect"
                 break
             except RuntimeLimitReached as exc:
@@ -610,149 +664,159 @@ class CrawlCycle:
                 break
 
         if committed_after_unsafe:
-            self.source_state.state_metadata["history_target_mode"] = "gap"
+            # The unsafe page remains the newest unresolved work item even if
+            # ordered pages behind it were safely committed.
+            self.source_state.state_metadata["history_page_hint"] = (
+                first_snapshot.page
+            )
         return summary
 
     def _run_historical_backfill_impl(self) -> PhaseSummary:
         summary = PhaseSummary(run_type="backfill_history")
         self.summaries.append(summary)
 
-        effective_coverage = self._effective_coverage()
-        gap_cursor = positive_int(
-            self.source_state.state_metadata.get("history_gap_cursor"),
-            default=0,
-        )
-        target_id, target_kind = select_history_target(
-            effective_coverage,
-            prefer_gap=str(
-                self.source_state.state_metadata.get("history_target_mode", "gap")
-            ) == "gap",
-            after_gap_id=gap_cursor or None,
-        )
-        frontier_exhausted = is_truthy(
-            str(
-                self.source_state.state_metadata.get(
-                    "history_frontier_exhausted", False
-                )
-            )
-        )
-        if effective_coverage and frontier_exhausted and target_kind != "gap":
-            # The physical end is already proven. Remaining work may only be
-            # authoritative numeric gaps between saved intervals.
-            target_id, target_kind = select_history_target(
-                effective_coverage,
-                prefer_gap=True,
-                after_gap_id=gap_cursor or None,
-            )
-            if target_kind != "gap":
-                target_id, target_kind = None, "complete"
-        if target_kind == "complete":
-            summary.target_complete = True
-            summary.stop_reason = "history_complete"
-            return summary
-        if target_kind == "gap" and target_id is not None:
-            # This is only a fairness cursor. It never proves coverage and may
-            # safely be lost or stale without causing a skipped interval.
-            self.source_state.state_metadata["history_gap_cursor"] = target_id
-        default_page = positive_int(
-            self.source_state.state_metadata.get("finalize_page_hint"), default=1
-        ) + 1
-        page_hint = positive_int(
-            self.source_state.state_metadata.get("history_page_hint"),
-            default=default_page,
-        )
+        # These hints belonged to the former gap/frontier fairness rotation.
+        # Remove them as each source next runs so operational state cannot
+        # imply that the retired priority policy is still active.
+        self.source_state.state_metadata.pop("history_target_mode", None)
+        self.source_state.state_metadata.pop("history_gap_cursor", None)
         self.pending_absence = None
         self.absence_recheck_page = None
-
-        try:
-            if target_id is None:
-                snapshot = self._fetch_backfill_page(page_hint, summary)
-            else:
-                snapshot = self._locate_post_id_page(
-                    target_id=target_id,
-                    page_hint=page_hint,
-                    summary=summary,
-                )
-        except RuntimeLimitReached as exc:
-            summary.status = "partial"
-            summary.stop_reason = exc.reason
-            return summary
-        if snapshot is None:
-            summary.status = "partial"
-            summary.stop_reason = summary.stop_reason or "history_target_not_located"
-            if target_kind == "gap":
-                self.source_state.state_metadata["history_target_mode"] = "frontier"
-            return summary
-
-        page = snapshot.page
         while True:
-            eligible = self._eligible_posts(snapshot.posts)
-            if eligible:
-                if not finalization_eligibility_is_id_suffix(
-                    snapshot.posts, self.finalization_cutoff
-                ):
-                    self.source_state.state_metadata["history_page_hint"] = page
-                    summary.status = "partial"
-                    summary.target_complete = False
-                    summary.stop_reason = "history_page_eligibility_not_id_suffix"
-                    break
-                preview = interval_from_posts(
-                    source_key=self.target.key,
-                    posts=eligible,
-                    checked_at=self.run_started_at,
+            effective_coverage = self._effective_coverage()
+            target_id, target_kind = select_history_target(effective_coverage)
+            frontier_exhausted = is_truthy(
+                str(
+                    self.source_state.state_metadata.get(
+                        "history_frontier_exhausted", False
+                    )
                 )
-                committed = self._commit_finalized_page(snapshot.posts)
-                absence_recorded = self._record_pending_absence(snapshot)
-                summary.matched_posts += count_qualifying(eligible, self.target)
-                summary.committed_intervals += 1 if committed else 0
-                summary.confirmed_absences += 1 if absence_recorded else 0
+            )
+            if (
+                effective_coverage
+                and frontier_exhausted
+                and target_kind != "gap"
+            ):
+                # A proven physical end leaves only gaps as valid work. Never
+                # report completion while any newer gap remains.
+                target_id, target_kind = None, "complete"
+            if target_kind == "complete":
                 summary.target_complete = True
-                summary.stop_reason = (
-                    f"{target_kind or 'frontier'}_checked"
-                    if committed
-                    else "already_covered"
-                )
-                self.source_state.backfill_anchor_post_id = str(
-                    min(int(post.external_post_id) for post in eligible)
-                )
-                self.source_state.backfill_anchor_created_at = min(
-                    eligible, key=lambda post: int(post.external_post_id)
-                ).created_at
-                frontier_was_exhausted = self._mark_history_frontier_exhausted(
-                    snapshot, preview
-                )
-                if absence_recorded:
-                    summary.stop_reason = "verified_absence_recorded"
-                    break
-                if self.absence_recheck_page is not None:
-                    self.source_state.state_metadata[
-                        "history_page_hint"
-                    ] = self.absence_recheck_page
-                    summary.target_complete = False
-                    summary.status = "partial"
-                    summary.stop_reason = "absence_evidence_needs_recheck"
-                    break
-                if frontier_was_exhausted:
-                    self.source_state.state_metadata["history_page_hint"] = page
-                    summary.stop_reason = "history_frontier_exhausted"
-                    break
+                summary.stop_reason = "history_complete"
+                return summary
 
-            next_page = page + 1
-            self.source_state.state_metadata["history_page_hint"] = next_page
-            page = next_page
+            default_page = positive_int(
+                self.source_state.state_metadata.get("finalize_page_hint"),
+                default=1,
+            ) + 1
+            page_hint = positive_int(
+                self.source_state.state_metadata.get("history_page_hint"),
+                default=default_page,
+            )
             try:
-                snapshot = self._fetch_backfill_page(page, summary)
+                if target_id is None:
+                    snapshot = self._fetch_backfill_page(page_hint, summary)
+                else:
+                    snapshot = self._locate_post_id_page(
+                        target_id=target_id,
+                        page_hint=page_hint,
+                        summary=summary,
+                    )
             except RuntimeLimitReached as exc:
                 summary.status = "partial"
                 summary.stop_reason = exc.reason
-                break
+                return summary
+            if snapshot is None:
+                summary.status = "partial"
+                summary.target_complete = False
+                summary.stop_reason = (
+                    summary.stop_reason or "history_target_not_located"
+                )
+                return summary
 
-        self.source_state.state_metadata["history_target_mode"] = (
-            "gap"
-            if self.absence_recheck_page is not None
-            else ("frontier" if target_kind == "gap" else "gap")
-        )
-        return summary
+            page = snapshot.page
+            while True:
+                eligible = self._eligible_posts(snapshot.posts)
+                if eligible:
+                    if not finalization_eligibility_is_id_suffix(
+                        snapshot.posts, self.finalization_cutoff
+                    ):
+                        self.source_state.state_metadata["history_page_hint"] = page
+                        summary.status = "partial"
+                        summary.target_complete = False
+                        summary.stop_reason = (
+                            "history_page_eligibility_not_id_suffix"
+                        )
+                        return summary
+                    preview = interval_from_posts(
+                        source_key=self.target.key,
+                        posts=eligible,
+                        checked_at=self.run_started_at,
+                    )
+                    rejoined_coverage = interval_reaches_older_coverage(
+                        preview,
+                        self._effective_coverage(),
+                    )
+                    committed = self._commit_finalized_page(snapshot.posts)
+                    absence_recorded, deleted_posts = (
+                        self._record_pending_absence(snapshot)
+                    )
+                    summary.matched_posts += count_qualifying(
+                        eligible, self.target
+                    )
+                    summary.committed_intervals += 1 if committed else 0
+                    summary.confirmed_absences += 1 if absence_recorded else 0
+                    summary.deleted_posts += deleted_posts
+                    summary.target_complete = True
+                    summary.stop_reason = (
+                        f"{target_kind or 'frontier'}_checked"
+                        if committed
+                        else "already_covered"
+                    )
+                    self.source_state.backfill_anchor_post_id = str(
+                        min(int(post.external_post_id) for post in eligible)
+                    )
+                    self.source_state.backfill_anchor_created_at = min(
+                        eligible, key=lambda post: int(post.external_post_id)
+                    ).created_at
+                    frontier_was_exhausted = self._mark_history_frontier_exhausted(
+                        snapshot, preview
+                    )
+                    if absence_recorded:
+                        summary.stop_reason = "verified_absence_recorded"
+                        return summary
+                    if self.absence_recheck_page is not None:
+                        self.source_state.state_metadata[
+                            "history_page_hint"
+                        ] = self.absence_recheck_page
+                        summary.target_complete = False
+                        summary.status = "partial"
+                        summary.stop_reason = "absence_evidence_needs_recheck"
+                        return summary
+                    if frontier_was_exhausted:
+                        self.source_state.state_metadata["history_page_hint"] = page
+                        summary.stop_reason = "history_frontier_exhausted"
+                        return summary
+                    if rejoined_coverage:
+                        # The selected newest gap is now connected to its older
+                        # completed interval. Start the next target near the
+                        # following page instead of rereading covered history.
+                        self.source_state.state_metadata["history_page_hint"] = (
+                            page + 1
+                        )
+                        summary.stop_reason = "history_coverage_rejoined"
+                        break
+
+                next_page = page + 1
+                self.source_state.state_metadata["history_page_hint"] = next_page
+                page = next_page
+                try:
+                    snapshot = self._fetch_backfill_page(page, summary)
+                except RuntimeLimitReached as exc:
+                    summary.status = "partial"
+                    summary.target_complete = False
+                    summary.stop_reason = exc.reason
+                    return summary
 
     def _locate_cutoff_page(
         self,
@@ -1227,6 +1291,18 @@ class CrawlCycle:
             for absence in self.coverage_absences
             if absence.post_id in observed_ids
         ]
+        if invalidated and self.client:
+            invalidated_ids = {absence.post_id for absence in invalidated}
+            update_finalized_posts(
+                self.client,
+                self.target,
+                [
+                    asdict(post)
+                    for post in posts
+                    if int(post.external_post_id) in invalidated_ids
+                ],
+                self.run_started_at,
+            )
         for absence in invalidated:
             if self.absence_repository:
                 self.absence_repository.delete(
@@ -1321,28 +1397,44 @@ class CrawlCycle:
     def _record_pending_absence(
         self,
         snapshot: PageSnapshot,
-    ) -> Optional[CoverageAbsence]:
+    ) -> tuple[Optional[CoverageAbsence], int]:
         absence = self.pending_absence
         if absence is None or absence.older_page != snapshot.page:
-            return None
+            return None, 0
         if not (
             contains_post_id(self.coverage, absence.newer_boundary_post_id)
             and contains_post_id(self.coverage, absence.older_boundary_post_id)
         ):
             # Both sides must already be authoritative finalized coverage.
             self.pending_absence = None
-            return None
+            return None, 0
 
         if any(
             item.post_id == absence.post_id for item in self.coverage_absences
         ):
             self.pending_absence = None
-            return None
+            return None, 0
         if self.absence_repository:
             absence = self.absence_repository.record(absence)
+        deleted_posts = 0
+        if self.client:
+            deleted_posts = mark_posts_deleted(
+                self.client,
+                self.target,
+                [absence.post_id],
+            )
         self.coverage_absences.append(absence)
         self.pending_absence = None
-        return absence
+        return absence, deleted_posts
+
+    def _sync_confirmed_deletions(self) -> int:
+        if not self.client or not self.coverage_absences:
+            return 0
+        return mark_posts_deleted(
+            self.client,
+            self.target,
+            [absence.post_id for absence in self.coverage_absences],
+        )
 
     def _update_summary(self, summary: PhaseSummary, snapshot: PageSnapshot) -> None:
         summary.scanned_pages += 1
@@ -1536,27 +1628,40 @@ def interval_is_covered(
     )
 
 
+def interval_reaches_older_coverage(
+    target: CoverageInterval,
+    intervals: Sequence[CoverageInterval],
+) -> bool:
+    """Return whether an older-directed scan has rejoined saved coverage."""
+
+    return any(
+        interval.source_key == target.source_key
+        and interval.oldest_post_id <= target.oldest_post_id
+        and interval.newest_post_id >= target.oldest_post_id - 1
+        for interval in intervals
+    )
+
+
 def select_history_target(
     intervals: Sequence[CoverageInterval],
     *,
-    prefer_gap: bool,
+    prefer_gap: bool = True,
     after_gap_id: Optional[int] = None,
 ) -> tuple[Optional[int], str]:
+    """Choose the newest unresolved gap before extending the old frontier.
+
+    The keyword arguments remain accepted for compatibility with older callers
+    and persisted-state tests, but no longer change latest-first priority.
+    """
+
+    del prefer_gap, after_gap_id
     if not intervals:
         return None, "bootstrap"
 
     ordered = sorted(intervals, key=lambda item: item.newest_post_id, reverse=True)
-    gaps: List[int] = []
     for newer, older in zip(ordered, ordered[1:]):
         if newer.oldest_post_id > older.newest_post_id + 1:
-            gaps.append(newer.oldest_post_id - 1)
-
-    if prefer_gap and gaps:
-        if after_gap_id is not None:
-            for gap_target in gaps:
-                if gap_target < after_gap_id:
-                    return gap_target, "gap"
-        return gaps[0], "gap"
+            return newer.oldest_post_id - 1, "gap"
     frontier = min(interval.oldest_post_id for interval in ordered) - 1
     if frontier <= 0:
         return None, "complete"

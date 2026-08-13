@@ -8,7 +8,7 @@ import sys
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional
 from urllib import error, request
 
 from crawler.config import get_env, get_required_env, is_truthy
@@ -441,6 +441,53 @@ def update_finalized_posts(
         )
     ]
     upsert_posts(client, target, persistable, checked_at)
+
+
+def mark_posts_deleted(
+    client: D1Client,
+    target: TargetBoard,
+    external_post_ids: Iterable[object],
+) -> int:
+    """Soft-delete previously archived rows backed by confirmed absence evidence."""
+
+    normalized_ids = list(
+        dict.fromkeys(
+            str(external_post_id).strip()
+            for external_post_id in external_post_ids
+            if str(external_post_id).strip()
+        )
+    )
+    deleted_count = 0
+    for offset in range(0, len(normalized_ids), EXISTING_POST_IDS_PER_QUERY):
+        chunk = normalized_ids[offset : offset + EXISTING_POST_IDS_PER_QUERY]
+        placeholders = ", ".join("?" for _ in chunk)
+        active_rows = client.query(
+            f"""
+            SELECT external_post_id
+            FROM posts
+            WHERE source_key = ?
+              AND external_post_id IN ({placeholders})
+              AND status = 'active'
+            """,
+            [target.key, *chunk],
+        )
+        active_ids = [str(row["external_post_id"]) for row in active_rows]
+        if not active_ids:
+            continue
+
+        active_placeholders = ", ".join("?" for _ in active_ids)
+        client.query(
+            f"""
+            UPDATE posts
+            SET status = 'deleted'
+            WHERE source_key = ?
+              AND external_post_id IN ({active_placeholders})
+              AND status = 'active'
+            """,
+            [target.key, *active_ids],
+        )
+        deleted_count += len(active_ids)
+    return deleted_count
 
 
 def utc_now() -> str:

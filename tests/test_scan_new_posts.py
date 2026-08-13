@@ -18,6 +18,7 @@ from crawler.jobs.scan_new_posts import (
     detect_blocked_html,
     existing_post_lookup_query_count,
     fetch_html,
+    mark_posts_deleted,
     post_upsert_query_count,
     update_finalized_posts,
     upsert_posts,
@@ -345,6 +346,41 @@ class SourceBootstrapTests(unittest.TestCase):
 
 
 class BatchedPostUpsertTests(unittest.TestCase):
+    def test_confirmed_deletion_is_reversible_and_idempotent(self) -> None:
+        client = SqliteClient()
+        target = get_target("dcinside-singularity")
+        checked_at = "2026-07-16T00:00:00+00:00"
+        upsert_source(client, target, checked_at)
+        upsert_posts(client, target, [sample_post(1), sample_post(2)], checked_at)
+
+        self.assertEqual(mark_posts_deleted(client, target, ["1", 1, "999"]), 1)
+        self.assertEqual(mark_posts_deleted(client, target, ["1"]), 0)
+        self.assertEqual(
+            client.query(
+                "SELECT external_post_id, status FROM posts ORDER BY external_post_id"
+            ),
+            [
+                {"external_post_id": "1", "status": "deleted"},
+                {"external_post_id": "2", "status": "active"},
+            ],
+        )
+
+        restored = {**sample_post(1), "upvotes": 9, "comments": 3}
+        update_finalized_posts(
+            client,
+            target,
+            [restored],
+            "2026-07-16T01:00:00+00:00",
+        )
+
+        self.assertEqual(
+            client.query(
+                "SELECT status, upvotes, comments FROM posts WHERE external_post_id = ?",
+                ["1"],
+            ),
+            [{"status": "active", "upvotes": 9, "comments": 3}],
+        )
+
     def test_finalizer_applies_combined_rule_only_to_new_posts(self) -> None:
         client = RecordingClient()
         posts = [

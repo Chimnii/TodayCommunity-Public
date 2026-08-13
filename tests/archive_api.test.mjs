@@ -242,6 +242,7 @@ test("defaults to the first 30 globally counted posts and preserves recent runs"
 
   const filteredCountCall = findCall(database, "AS filtered_posts", "batch");
   assert.deepEqual(filteredCountCall.values, ["dcinside-singularity"]);
+  assert.match(filteredCountCall.sql, /status = 'active'/);
   assert.doesNotMatch(filteredCountCall.sql, /upvotes >= \?|comments >= \?/);
 
   const summaryCall = findCall(database, "AS total_posts", "batch");
@@ -249,10 +250,12 @@ test("defaults to the first 30 globally counted posts and preserves recent runs"
   assert.match(summaryCall.sql, /SELECT DISTINCT TRIM\(subject\) AS subject/);
   assert.match(summaryCall.sql, /length\(TRIM\(subject\)\) <= 100/);
   assert.match(summaryCall.sql, /ORDER BY subject COLLATE NOCASE, subject LIMIT 100/);
+  assert.equal(summaryCall.sql.match(/status = 'active'/g)?.length, 2);
   assert.deepEqual(summaryCall.values, ["dcinside-singularity", "dcinside-singularity"]);
 
   const postCall = findCall(database, "SELECT archive_key, source_key, external_post_id", "batch");
   assert.match(postCall.sql, /external_post_id, subject, title/);
+  assert.match(postCall.sql, /status = 'active'/);
   assert.match(postCall.sql, /ORDER BY created_at DESC, id DESC LIMIT \? OFFSET \?/);
   assert.deepEqual(postCall.values, ["dcinside-singularity", 30, 0]);
   assert.equal(body.posts[0].subject, "AI 소식");

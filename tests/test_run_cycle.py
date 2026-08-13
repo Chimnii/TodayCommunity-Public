@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import sqlite3
 import unittest
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Optional
@@ -502,6 +503,42 @@ class CrawlCycleTests(unittest.TestCase):
             state_rows[0]["state_metadata"],
         )
 
+    def test_http_failure_does_not_delete_without_confirmed_absence(self) -> None:
+        client = SqliteClient()
+        target = get_target("dcinside-singularity")
+        settings = config()
+
+        def failing_fetcher(url: str, timeout_seconds: float) -> str:
+            raise CrawlTransientError("Source returned transient HTTP 503")
+
+        cycle = CrawlCycle(
+            target=target,
+            config=settings,
+            runtime=runtime(settings),
+            client=client,
+            fetcher=failing_fetcher,
+            cycle_started_at=FIXED_NOW,
+            mode=CYCLE_MODE_BACKFILL,
+        )
+        upsert_posts(
+            client,
+            target,
+            [asdict(post(105, "2026-07-15T10:00:00+00:00"))],
+            cycle.run_started_at,
+        )
+
+        result = cycle.run()
+
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(
+            client.query(
+                "SELECT status FROM posts WHERE source_key = ? AND external_post_id = ?",
+                [target.key, "105"],
+            ),
+            [{"status": "active"}],
+        )
+        self.assertEqual(client.query("SELECT * FROM coverage_absences"), [])
+
     def test_live_style_adjacent_id_swap_remains_fetchable(self) -> None:
         pages = {
             1: page_html(
@@ -799,7 +836,7 @@ class CrawlCycleTests(unittest.TestCase):
                 row(88, "2026-07-15 20:59:59", upvotes=4),
             ),
         }
-        fetcher = MappingFetcher(pages)
+        fetcher = MappingFetcher(pages, last_page=2)
         settings = config()
         cycle = CrawlCycle(
             target=get_target("dcinside-singularity"),
@@ -814,6 +851,7 @@ class CrawlCycleTests(unittest.TestCase):
         self.assertEqual(fetcher.requested_pages, [1, 2])
         self.assertTrue(summary.target_complete)
         self.assertEqual(summary.committed_intervals, 1)
+        self.assertEqual(summary.stop_reason, "recent_frontier_exhausted")
         self.assertEqual(
             [(item.oldest_post_id, item.newest_post_id) for item in cycle.coverage],
             [(88, 88)],
@@ -919,13 +957,10 @@ class CrawlCycleTests(unittest.TestCase):
             [(111, 160), (88, 89)],
         )
         self.assertEqual(
-            cycle.source_state.state_metadata["history_page_hint"], 3
+            cycle.source_state.state_metadata["history_page_hint"], 2
         )
         self.assertEqual(
             cycle.source_state.state_metadata["history_order_unsafe_page"], 2
-        )
-        self.assertEqual(
-            cycle.source_state.state_metadata["history_target_mode"], "gap"
         )
         self.assertEqual(cycle.source_state.backfill_anchor_post_id, "88")
 
@@ -1316,6 +1351,16 @@ class CrawlCycleTests(unittest.TestCase):
         )
         cycle.absence_repository.record(evidence)
         cycle.coverage_absences = [evidence]
+        upsert_posts(
+            client,
+            cycle.target,
+            [asdict(post(105, "2026-07-15T10:00:00+00:00"))],
+            cycle.run_started_at,
+        )
+        client.query(
+            "UPDATE posts SET status = 'deleted' WHERE external_post_id = ?",
+            ["105"],
+        )
         cycle.coverage = [
             CoverageInterval("dcinside-singularity", 104, 104),
             CoverageInterval("dcinside-singularity", 106, 106),
@@ -1326,6 +1371,13 @@ class CrawlCycleTests(unittest.TestCase):
         self.assertEqual(cycle.coverage_absences, [])
         self.assertEqual(client.query("SELECT * FROM coverage_absences"), [])
         self.assertEqual(
+            client.query(
+                "SELECT status FROM posts WHERE external_post_id = ?",
+                ["105"],
+            ),
+            [{"status": "active"}],
+        )
+        self.assertEqual(
             select_history_target(
                 normalize_effective_coverage(
                     cycle.coverage, cycle.coverage_absences
@@ -1333,6 +1385,53 @@ class CrawlCycleTests(unittest.TestCase):
                 prefer_gap=True,
             ),
             (105, "gap"),
+        )
+
+    def test_backfill_reconciles_preexisting_absence_to_deleted_status(self) -> None:
+        client = SqliteClient()
+        target = get_target("dcinside-singularity")
+        settings = config()
+        initial_cycle = CrawlCycle(
+            target=target,
+            config=settings,
+            runtime=runtime(settings),
+            client=client,
+            fetcher=MappingFetcher({}),
+            cycle_started_at=FIXED_NOW,
+        )
+        upsert_posts(
+            client,
+            target,
+            [asdict(post(105, "2026-07-15T10:00:00+00:00"))],
+            initial_cycle.run_started_at,
+        )
+        initial_cycle.absence_repository.record(
+            CoverageAbsence(
+                source_key=target.key,
+                post_id=105,
+                newer_page=1,
+                older_page=2,
+                newer_boundary_post_id=106,
+                older_boundary_post_id=104,
+            )
+        )
+        reloaded_cycle = CrawlCycle(
+            target=target,
+            config=settings,
+            runtime=runtime(settings),
+            client=client,
+            fetcher=MappingFetcher({}),
+            cycle_started_at=FIXED_NOW,
+        )
+
+        self.assertEqual(reloaded_cycle._sync_confirmed_deletions(), 1)
+        self.assertEqual(reloaded_cycle._sync_confirmed_deletions(), 0)
+        self.assertEqual(
+            client.query(
+                "SELECT status FROM posts WHERE external_post_id = ?",
+                ["105"],
+            ),
+            [{"status": "deleted"}],
         )
 
     def test_historical_reappearance_aborts_stale_target_selection(self) -> None:
@@ -1442,15 +1541,22 @@ class CrawlCycleTests(unittest.TestCase):
         self.assertEqual(phases["hot_scan"]["pages"], [1, 2, 3])
         self.assertEqual(
             phases["finalize_recent"]["pages"],
-            [1, 2, 4, 8, 6, 5],
+            [1, 2, 4, 8, 6, 5, 7, 8, 9, 10, 11, 12],
+        )
+        self.assertEqual(phases["backfill_history"]["pages"], [])
+        self.assertEqual(
+            phases["finalize_recent"]["stop_reason"],
+            "recent_frontier_exhausted",
         )
         self.assertEqual(
-            phases["backfill_history"]["pages"],
-            [7, 8, 9, 10, 11, 12],
+            phases["backfill_history"]["stop_reason"],
+            "history_complete",
         )
         self.assertGreater(cycle_runtime.request_count, 9)
 
-    def test_hot_scan_and_both_backfill_lanes_receive_requests(self) -> None:
+    def test_recent_finalization_can_finish_without_redundant_history_requests(
+        self,
+    ) -> None:
         pages = {
             1: page_html(
                 row(1000, "2026-07-16 20:55:00"),
@@ -1480,7 +1586,10 @@ class CrawlCycleTests(unittest.TestCase):
         phases = {item["run_type"]: item for item in result["phases"]}
         self.assertEqual(phases["hot_scan"]["pages"], [1, 2])
         self.assertGreater(phases["finalize_recent"]["scanned_pages"], 0)
-        self.assertGreater(phases["backfill_history"]["scanned_pages"], 0)
+        self.assertEqual(phases["backfill_history"]["scanned_pages"], 0)
+        self.assertEqual(
+            phases["backfill_history"]["stop_reason"], "history_complete"
+        )
         self.assertGreaterEqual(cycle_runtime.request_count, 4)
 
     def test_block_in_hot_scan_stops_the_complete_cycle(self) -> None:
@@ -1586,7 +1695,7 @@ class CrawlCycleTests(unittest.TestCase):
         coverage = client.query("SELECT * FROM coverage_intervals")
         self.assertEqual(coverage, [])
 
-    def test_history_target_alternates_between_gap_and_old_frontier(self) -> None:
+    def test_history_target_always_prefers_the_newest_gap(self) -> None:
         intervals = [
             CoverageInterval("dcinside-singularity", 900, 950),
             CoverageInterval("dcinside-singularity", 800, 850),
@@ -1595,7 +1704,59 @@ class CrawlCycleTests(unittest.TestCase):
         self.assertEqual(select_history_target(intervals, prefer_gap=True), (899, "gap"))
         self.assertEqual(
             select_history_target(intervals, prefer_gap=False),
-            (799, "frontier"),
+            (899, "gap"),
+        )
+        self.assertEqual(
+            select_history_target(
+                [
+                    CoverageInterval("dcinside-singularity", 100, 110),
+                    CoverageInterval("dcinside-singularity", 1, 50),
+                ],
+                prefer_gap=False,
+            ),
+            (99, "gap"),
+        )
+
+    def test_history_rejoins_then_jumps_to_the_next_newest_gap(self) -> None:
+        pages = {
+            2: page_html(
+                row(99, "2026-07-15 10:00:00"),
+                row(91, "2026-07-15 09:50:00"),
+            ),
+            3: page_html(
+                row(79, "2026-07-15 09:40:00"),
+                row(71, "2026-07-15 09:30:00"),
+            ),
+        }
+        fetcher = MappingFetcher(pages)
+        settings = config()
+        cycle = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=runtime(settings),
+            fetcher=fetcher,
+            cycle_started_at=FIXED_NOW,
+        )
+        cycle.coverage = [
+            CoverageInterval("dcinside-singularity", 100, 110),
+            CoverageInterval("dcinside-singularity", 80, 90),
+            CoverageInterval("dcinside-singularity", 1, 70),
+        ]
+        cycle.source_state.state_metadata["history_page_hint"] = 2
+        cycle.source_state.state_metadata["history_target_mode"] = "frontier"
+        cycle.source_state.state_metadata["history_gap_cursor"] = 99
+
+        summary = cycle._run_historical_backfill()
+
+        self.assertEqual(fetcher.requested_pages, [2, 3])
+        self.assertEqual(summary.stop_reason, "history_complete")
+        self.assertTrue(summary.target_complete)
+        self.assertEqual(summary.committed_intervals, 2)
+        self.assertNotIn("history_target_mode", cycle.source_state.state_metadata)
+        self.assertNotIn("history_gap_cursor", cycle.source_state.state_metadata)
+        self.assertEqual(
+            [(item.oldest_post_id, item.newest_post_id) for item in cycle.coverage],
+            [(1, 110)],
         )
 
     def test_separate_page_ranges_do_not_false_bridge_an_id_gap(self) -> None:
@@ -1677,12 +1838,19 @@ class CrawlCycleTests(unittest.TestCase):
             cycle_started_at=FIXED_NOW,
         )
         cycle.source_state.state_metadata["finalize_page_hint"] = 8
+        cycle.coverage = [
+            CoverageInterval("dcinside-singularity", 900, 998),
+        ]
 
         summary = cycle._run_recent_finalization()
 
         self.assertEqual(fetcher.requested_pages, [8, 7, 5, 1, 3])
         self.assertTrue(summary.target_complete)
-        self.assertEqual(summary.stop_reason, "cutoff_page_checked")
+        self.assertEqual(summary.stop_reason, "recent_coverage_rejoined")
+        self.assertEqual(
+            [(item.oldest_post_id, item.newest_post_id) for item in cycle.coverage],
+            [(900, 999)],
+        )
 
     def test_backfill_mode_probes_fresh_head_before_using_saved_cutoff_hint(self) -> None:
         pages = {
@@ -1744,7 +1912,7 @@ class CrawlCycleTests(unittest.TestCase):
             1: page_html(row(1100, "2026-07-16 20:00:00")),
             2: page_html(row(1000, "2026-07-15 19:00:00")),
         }
-        fetcher = MappingFetcher(pages)
+        fetcher = MappingFetcher(pages, last_page=2)
         settings = config()
         cycle = CrawlCycle(
             target=get_target("dcinside-singularity"),
@@ -1759,13 +1927,51 @@ class CrawlCycleTests(unittest.TestCase):
 
         self.assertEqual(fetcher.requested_pages, [2, 1])
         self.assertTrue(summary.target_complete)
-        self.assertEqual(summary.stop_reason, "cutoff_page_checked")
+        self.assertEqual(summary.stop_reason, "recent_frontier_exhausted")
         self.assertEqual(
             [(item.oldest_post_id, item.newest_post_id) for item in cycle.coverage],
             [(1000, 1000)],
         )
 
+    def test_recent_finalization_scans_until_it_rejoins_saved_coverage(self) -> None:
+        pages = {
+            1: page_html(
+                row(110, "2026-07-15 21:00:01"),
+                row(109, "2026-07-15 20:59:59"),
+            ),
+            2: page_html(
+                row(108, "2026-07-15 20:50:00"),
+                row(105, "2026-07-15 20:40:00"),
+            ),
+            3: page_html(row(99, "2026-07-15 20:30:00")),
+        }
+        fetcher = MappingFetcher(pages, last_page=3)
+        settings = config()
+        cycle = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=runtime(settings),
+            fetcher=fetcher,
+            cycle_started_at=FIXED_NOW,
+        )
+        cycle.coverage = [
+            CoverageInterval("dcinside-singularity", 100, 105),
+        ]
+
+        summary = cycle._run_recent_finalization()
+
+        self.assertEqual(fetcher.requested_pages, [1, 2])
+        self.assertEqual(summary.stop_reason, "recent_coverage_rejoined")
+        self.assertTrue(summary.target_complete)
+        self.assertEqual(summary.committed_intervals, 2)
+        self.assertEqual(
+            [(item.oldest_post_id, item.newest_post_id) for item in cycle.coverage],
+            [(100, 109)],
+        )
+
     def test_missing_history_target_uses_older_page_without_false_bridge(self) -> None:
+        client = SqliteClient()
+        target = get_target("dcinside-singularity")
         pages = {
             1: page_html(
                 row(110, "2026-07-15 10:00:00"),
@@ -1779,11 +1985,18 @@ class CrawlCycleTests(unittest.TestCase):
         fetcher = MappingFetcher(pages)
         settings = config()
         cycle = CrawlCycle(
-            target=get_target("dcinside-singularity"),
+            target=target,
             config=settings,
             runtime=runtime(settings),
+            client=client,
             fetcher=fetcher,
             cycle_started_at=FIXED_NOW,
+        )
+        upsert_posts(
+            client,
+            target,
+            [asdict(post(99, "2026-07-15T09:45:00+00:00"))],
+            cycle.run_started_at,
         )
         cycle.coverage = [
             CoverageInterval("dcinside-singularity", 100, 110),
@@ -1799,9 +2012,16 @@ class CrawlCycleTests(unittest.TestCase):
             sorted((item.oldest_post_id, item.newest_post_id) for item in cycle.coverage),
             [(70, 80), (90, 98), (100, 110)],
         )
-        self.assertEqual(cycle.source_state.state_metadata["history_gap_cursor"], 99)
         self.assertEqual([item.post_id for item in cycle.coverage_absences], [99])
         self.assertEqual(summary.confirmed_absences, 1)
+        self.assertEqual(summary.deleted_posts, 1)
+        self.assertEqual(
+            client.query(
+                "SELECT status FROM posts WHERE external_post_id = ?",
+                ["99"],
+            ),
+            [{"status": "deleted"}],
+        )
         self.assertEqual(summary.stop_reason, "verified_absence_recorded")
         self.assertEqual(
             select_history_target(
@@ -1848,7 +2068,6 @@ class CrawlCycleTests(unittest.TestCase):
         self.assertFalse(summary.target_complete)
         self.assertEqual(summary.stop_reason, "absence_evidence_needs_recheck")
         self.assertEqual(cycle.source_state.state_metadata["history_page_hint"], 1)
-        self.assertEqual(cycle.source_state.state_metadata["history_target_mode"], "gap")
 
     def test_absence_recheck_deadline_keeps_gap_open(self) -> None:
         pages = {
@@ -1974,6 +2193,12 @@ class CrawlCycleTests(unittest.TestCase):
             fetcher=MappingFetcher(pages),
             cycle_started_at=FIXED_NOW,
         )
+        upsert_posts(
+            client,
+            cycle.target,
+            [asdict(post(99, "2026-07-15T09:45:00+00:00"))],
+            cycle.run_started_at,
+        )
         cycle.coverage = [
             CoverageInterval("dcinside-singularity", 100, 110),
             CoverageInterval("dcinside-singularity", 70, 80),
@@ -1985,6 +2210,13 @@ class CrawlCycleTests(unittest.TestCase):
 
         self.assertEqual(cycle.coverage_absences, [])
         self.assertEqual(client.query("SELECT * FROM coverage_absences"), [])
+        self.assertEqual(
+            client.query(
+                "SELECT status FROM posts WHERE external_post_id = ?",
+                ["99"],
+            ),
+            [{"status": "active"}],
+        )
         self.assertEqual(
             select_history_target(
                 normalize_effective_coverage(
@@ -2137,7 +2369,8 @@ class CrawlCycleTests(unittest.TestCase):
         summary = cycle._run_recent_finalization()
 
         self.assertEqual(fetcher.timeouts, [5.0])
-        self.assertEqual(summary.stop_reason, "cutoff_page_checked")
+        self.assertEqual(summary.stop_reason, "deep_time_reservation")
+        self.assertFalse(summary.target_complete)
         self.assertEqual(cycle_runtime.remaining_seconds(), 30.0)
         self.assertEqual(
             [(item.oldest_post_id, item.newest_post_id) for item in cycle.coverage],
@@ -2663,7 +2896,8 @@ class CrawlCycleTests(unittest.TestCase):
             runtime=cycle_runtime,
             client=client,
             fetcher=MappingFetcher(
-                {1: page_html(row(1000, "2026-07-15 10:00:00", upvotes=4))}
+                {1: page_html(row(1000, "2026-07-15 10:00:00", upvotes=4))},
+                last_page=1,
             ),
             cycle_started_at=FIXED_NOW,
             mode=CYCLE_MODE_BACKFILL,
@@ -2682,7 +2916,7 @@ class CrawlCycleTests(unittest.TestCase):
         summary = cycle._run_recent_finalization()
 
         self.assertEqual(summary.status, "completed")
-        self.assertEqual(summary.stop_reason, "cutoff_page_checked")
+        self.assertEqual(summary.stop_reason, "recent_frontier_exhausted")
         self.assertEqual(summary.committed_intervals, 1)
         self.assertEqual(
             client.query("SELECT external_post_id FROM posts"),

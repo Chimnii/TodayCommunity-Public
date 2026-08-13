@@ -102,7 +102,7 @@ function normalizeSubjectOptions(rawValue) {
 }
 
 function buildPostFilter(target, query, minUpvotes, minComments, subject) {
-  const clauses = ["archive_key = ?"];
+  const clauses = ["archive_key = ?", "status = 'active'"];
   const bindings = [target];
 
   if (minUpvotes > 0) {
@@ -281,6 +281,7 @@ export async function onRequestGet(context) {
                 SELECT DISTINCT TRIM(subject) AS subject
                 FROM posts
                 WHERE archive_key = ?
+                  AND status = 'active'
                   AND TRIM(subject) <> ''
                   AND length(TRIM(subject)) <= ${MAX_SUBJECT_LENGTH}
                 ORDER BY subject COLLATE NOCASE, subject
@@ -289,6 +290,7 @@ export async function onRequestGet(context) {
             ) AS subject_options_json
           FROM posts
           WHERE archive_key = ?
+            AND status = 'active'
           `
         )
         .bind(target, target),
