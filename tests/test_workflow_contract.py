@@ -609,6 +609,10 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertIn("--requirement $requirements", workflow)
         self.assertIn("-m pip check", workflow)
         schema_index = workflow.index("-m game_news.schema_check")
+        self.assertIn(
+            "-m game_news.schema_check --bootstrap-sources",
+            workflow,
+        )
         persist_index = workflow.index(
             "-m game_news.runner `\n            --run-root",
             schema_index,

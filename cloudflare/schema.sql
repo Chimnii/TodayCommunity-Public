@@ -45,7 +45,7 @@ INSERT OR IGNORE INTO archives (
   (
     'game-news',
     '게임 뉴스',
-    '인벤과 디스이즈게임에서 선별한 게임 뉴스',
+    '인벤, 디스이즈게임, 게임메카, 게임인사이트에서 선별한 게임 뉴스',
     40,
     1,
     'article'
@@ -342,9 +342,27 @@ INSERT OR IGNORE INTO sources (
   (
     'game-news-thisisgame',
     'game-news',
-    'thisisgame',
+    'tig',
     '디스이즈게임',
     'https://www.thisisgame.com/',
+    0,
+    0
+  ),
+  (
+    'game-news-gamemeca',
+    'game-news',
+    'gm',
+    '게임메카',
+    'https://www.gamemeca.com/',
+    0,
+    0
+  ),
+  (
+    'game-news-gameinsight',
+    'game-news',
+    'gi',
+    '게임인사이트',
+    'https://www.gameinsight.co.kr/',
     0,
     0
   );

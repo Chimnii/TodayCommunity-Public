@@ -76,7 +76,8 @@ test("getArticleSourceLabel uses known aliases and future site identifiers", () 
   const sources = [
     { source_key: "game-news-inven", site_name: "inven" },
     { source_key: "game-news-thisisgame", site_name: "thisisgame" },
-    { source_key: "game-news-gamemeca", site_name: "gamemeca" },
+    { source_key: "game-news-gamemeca", site_name: "gm" },
+    { source_key: "game-news-gameinsight", site_name: "gi" },
   ];
 
   assert.equal(
@@ -89,7 +90,11 @@ test("getArticleSourceLabel uses known aliases and future site identifiers", () 
   );
   assert.equal(
     getArticleSourceLabel({ source_key: "game-news-gamemeca" }, sources),
-    "gamemeca"
+    "gm"
+  );
+  assert.equal(
+    getArticleSourceLabel({ source_key: "game-news-gameinsight" }, sources),
+    "gi"
   );
   assert.equal(
     getArticleSourceLabel({ source_key: "game-news-gamefocus" }),
