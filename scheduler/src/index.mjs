@@ -19,7 +19,7 @@ export const SCHEDULES = Object.freeze({
     workflow: "scan-dcinside-backfill.yml",
     destinations: Object.freeze([PUBLIC_DESTINATION]),
   }),
-  "17 0,12 * * *": Object.freeze({
+  "17 * * * *": Object.freeze({
     kind: "game-news",
     workflow: GAME_NEWS_WORKFLOW,
     destinations: Object.freeze([GAME_NEWS_DESTINATION]),

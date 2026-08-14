@@ -45,7 +45,7 @@ test("cron strings map to the intended workflows", () => {
     workflow: "scan-dcinside-backfill.yml",
     destinations: ["dcinside"],
   });
-  assert.deepEqual(workflowForCron("17 0,12 * * *"), {
+  assert.deepEqual(workflowForCron("17 * * * *"), {
     kind: "game-news",
     workflow: "scan-game-news.yml",
     destinations: ["game-news"],
@@ -66,7 +66,7 @@ test("deployed Cron triggers exactly match the supported schedules", () => {
     WRANGLER_CONFIG.vars.GAME_NEWS_GITHUB_REPOSITORY,
     "TodayCommunity",
   );
-  assert.ok(WRANGLER_CONFIG.triggers.crons.includes("17 0,12 * * *"));
+  assert.ok(WRANGLER_CONFIG.triggers.crons.includes("17 * * * *"));
 });
 
 test("Worker exposes only the scheduled handler", () => {
@@ -286,7 +286,7 @@ test("Backfill remains public-only even when FM dispatch is enabled", async () =
 test("game-news cron is disabled when its flag is absent", async () => {
   const calls = [];
   const result = await dispatchScheduledWorkflow({
-    cron: "17 0,12 * * *",
+    cron: "17 * * * *",
     env: {},
     fetchImpl: async (url, options) => {
       calls.push({ url, options });
@@ -306,7 +306,7 @@ test("game-news cron is disabled when its flag is absent", async () => {
 test("enabled game-news cron dispatches only its private workflow with persistent inputs", async () => {
   const calls = [];
   const result = await dispatchScheduledWorkflow({
-    cron: "17 0,12 * * *",
+    cron: "17 * * * *",
     env: {
       ...ENV,
       GAME_NEWS_DISPATCH_ENABLED: "1",
@@ -350,7 +350,7 @@ test("enabled game-news cron dispatches only its private workflow with persisten
 test("FM and game-news managed runs remain independent in the same private repository", async () => {
   const gameCalls = [];
   const gameResult = await dispatchScheduledWorkflow({
-    cron: "17 0,12 * * *",
+    cron: "17 * * * *",
     env: {
       ...ENV,
       GAME_NEWS_DISPATCH_ENABLED: "1",
@@ -419,7 +419,7 @@ test("FM and game-news managed runs remain independent in the same private repos
 test("an active game-news run suppresses only a new game-news dispatch", async () => {
   const calls = [];
   const result = await dispatchScheduledWorkflow({
-    cron: "17 0,12 * * *",
+    cron: "17 * * * *",
     env: {
       ...ENV,
       GAME_NEWS_DISPATCH_ENABLED: "1",
@@ -808,7 +808,7 @@ test("game-news cron ignores FM configuration and fails closed on an invalid gam
   const calls = [];
   await assert.rejects(
     dispatchScheduledWorkflow({
-      cron: "17 0,12 * * *",
+      cron: "17 * * * *",
       env: {
         FM_DISPATCH_ENABLED: "invalid",
         GAME_NEWS_DISPATCH_ENABLED: "yes",
