@@ -60,8 +60,12 @@ const VALID_PAGE_SIZES = new Set([20, 30, 50, 100]);
 const DESKTOP_SUBJECT_PREVIEW_LENGTH = 5;
 const MOBILE_SUBJECT_PREVIEW_LENGTH = 5;
 const ARTICLE_SOURCE_LABELS = Object.freeze({
-  inven: "inven",
+  inven: "inv",
   thisisgame: "tig",
+});
+const ARTICLE_SUBJECT_LABELS = Object.freeze({
+  development: "dev",
+  technology: "tech",
 });
 const PAGE_WINDOW_RADIUS = 3;
 const subjectSegmenter = typeof Intl.Segmenter === "function"
@@ -745,7 +749,11 @@ function createSubjectCell(subject) {
   }
 
   if (isArticleArchive()) {
-    cell.textContent = value;
+    const label = getArticleSubjectLabel(value);
+    cell.textContent = label;
+    if (label !== value) {
+      cell.setAttribute("aria-label", `주제 ${value}`);
+    }
     return cell;
   }
 
@@ -789,11 +797,16 @@ function getArticleSourceLabel(post, sources = []) {
   const siteName = normalizeSiteIdentifier(source?.site_name);
 
   if (siteName) {
-    return ARTICLE_SOURCE_LABELS[siteName] || siteName;
+    return (ARTICLE_SOURCE_LABELS[siteName] || siteName).slice(0, 3);
   }
 
   const sourceKey = String(post?.source_key || "").trim();
-  return normalizeSiteIdentifier(sourceKey.replace(/^game-news-/i, ""));
+  return normalizeSiteIdentifier(sourceKey.replace(/^game-news-/i, "")).slice(0, 3);
+}
+
+function getArticleSubjectLabel(subject) {
+  const value = String(subject || "").trim();
+  return ARTICLE_SUBJECT_LABELS[value.toLocaleLowerCase("en-US")] || value;
 }
 
 function normalizeSiteIdentifier(value) {

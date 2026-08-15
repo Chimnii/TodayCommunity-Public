@@ -89,11 +89,13 @@ test("switches article archives to a four-column, no-vote presentation", () => {
   assert.match(app, /option\.hidden = articleMode/);
   assert.match(app, /if \(!articleMode\) \{\s*content\.append\(commentCount\)/);
   assert.match(app, /createSourceCell\(post\)/);
-  assert.match(app, /inven: "inven"/);
+  assert.match(app, /inven: "inv"/);
   assert.match(app, /thisisgame: "tig"/);
+  assert.match(app, /development: "dev"/);
+  assert.match(app, /technology: "tech"/);
   assert.match(
     app,
-    /if \(isArticleArchive\(\)\) \{\s*cell\.textContent = value;\s*return cell;/
+    /if \(isArticleArchive\(\)\) \{\s*const label = getArticleSubjectLabel\(value\);\s*cell\.textContent = label;/
   );
   assert.match(css, /body\[data-content-kind="article"\] \.filter-upvotes/);
   assert.match(css, /body\[data-content-kind="article"\] \.cell-number/);
@@ -105,11 +107,14 @@ test("switches article archives to a four-column, no-vote presentation", () => {
   assert.match(fixtureServer, /archive_key: "game-news"[\s\S]*content_kind: "article"/);
   assert.match(fixtureServer, /source_key: "game-news-inven"/);
   assert.match(fixtureServer, /source_key: "game-news-thisisgame"/);
-  assert.match(fixtureServer, /신작 및 업데이트/);
+  assert.match(fixtureServer, /const ARTICLE_SUBJECTS = Object\.freeze\(\[/);
+  assert.match(fixtureServer, /"development"/);
+  assert.match(fixtureServer, /"technology"/);
   assert.match(
     css,
-    /body\[data-content-kind="article"\] \.board-row\s*{[^}]*grid-template-columns:\s*144px 64px minmax\(0, 1fr\) 104px/s
+    /body\[data-content-kind="article"\] \.board-row\s*{[^}]*grid-template-columns:\s*68px 40px minmax\(0, 1fr\) 104px/s
   );
+  assert.match(css, /\.cell-source\s*\{[^}]*padding:\s*0 var\(--space-1\)[^}]*font-weight:\s*400/s);
 });
 
 test("switches archive targets with clean filters and history-aware URLs", () => {

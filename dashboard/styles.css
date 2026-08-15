@@ -423,7 +423,7 @@ body[data-content-kind="article"] .filter-comments {
 }
 
 body[data-content-kind="article"] .board-row {
-  grid-template-columns: 144px 64px minmax(0, 1fr) 104px;
+  grid-template-columns: 68px 40px minmax(0, 1fr) 104px;
 }
 
 body[data-content-kind="article"] .cell-number,
@@ -503,16 +503,17 @@ body[data-content-kind="article"] .post-row .cell-subject {
 .cell-source {
   display: none;
   overflow: hidden;
-  padding: 0 var(--space-2);
+  padding: 0 var(--space-1);
   color: var(--color-ink-muted);
   font-size: var(--text-xs);
-  font-weight: 700;
+  font-weight: 400;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 body[data-content-kind="article"] .cell-source {
   display: block;
+  padding: 0 var(--space-1);
 }
 
 .cell-subject {
@@ -956,7 +957,7 @@ body[data-content-kind="article"] .cell-source {
   }
 
   body[data-content-kind="article"] .board-row {
-    grid-template-columns: 120px 64px minmax(0, 1fr) 104px;
+    grid-template-columns: 68px 40px minmax(0, 1fr) 104px;
   }
 
   .cell-number {
@@ -1042,7 +1043,7 @@ body[data-content-kind="article"] .cell-source {
   }
 
   body[data-content-kind="article"] .board-row {
-    grid-template-columns: 104px 52px minmax(0, 1fr);
+    grid-template-columns: 68px 40px minmax(0, 1fr);
   }
 
   .cell-date {

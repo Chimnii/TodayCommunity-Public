@@ -22,7 +22,7 @@ const context = {
 };
 
 vm.runInNewContext(
-  `${appWithoutInitialization}\nglobalThis.__dashboardPaginationFunctions = {\n  getPageSequence: typeof getPageSequence === "function" ? getPageSequence : undefined,\n  parsePageJump: typeof parsePageJump === "function" ? parsePageJump : undefined,\n  normalizeSignedInteger: typeof normalizeSignedInteger === "function" ? normalizeSignedInteger : undefined,\n  createSubjectPreview: typeof createSubjectPreview === "function" ? createSubjectPreview : undefined,\n  splitSubjectGraphemes: typeof splitSubjectGraphemes === "function" ? splitSubjectGraphemes : undefined,\n  getArticleSourceLabel: typeof getArticleSourceLabel === "function" ? getArticleSourceLabel : undefined,\n};`,
+  `${appWithoutInitialization}\nglobalThis.__dashboardPaginationFunctions = {\n  getPageSequence: typeof getPageSequence === "function" ? getPageSequence : undefined,\n  parsePageJump: typeof parsePageJump === "function" ? parsePageJump : undefined,\n  normalizeSignedInteger: typeof normalizeSignedInteger === "function" ? normalizeSignedInteger : undefined,\n  createSubjectPreview: typeof createSubjectPreview === "function" ? createSubjectPreview : undefined,\n  splitSubjectGraphemes: typeof splitSubjectGraphemes === "function" ? splitSubjectGraphemes : undefined,\n  getArticleSourceLabel: typeof getArticleSourceLabel === "function" ? getArticleSourceLabel : undefined,\n  getArticleSubjectLabel: typeof getArticleSubjectLabel === "function" ? getArticleSubjectLabel : undefined,\n};`,
   context,
   { filename: appUrl.pathname }
 );
@@ -34,6 +34,7 @@ const {
   createSubjectPreview,
   splitSubjectGraphemes,
   getArticleSourceLabel,
+  getArticleSubjectLabel,
 } =
   context.__dashboardPaginationFunctions;
 
@@ -82,7 +83,7 @@ test("getArticleSourceLabel uses known aliases and future site identifiers", () 
 
   assert.equal(
     getArticleSourceLabel({ source_key: "game-news-inven" }, sources),
-    "inven"
+    "inv"
   );
   assert.equal(
     getArticleSourceLabel({ source_key: "game-news-thisisgame" }, sources),
@@ -98,8 +99,15 @@ test("getArticleSourceLabel uses known aliases and future site identifiers", () 
   );
   assert.equal(
     getArticleSourceLabel({ source_key: "game-news-gamefocus" }),
-    "gamefocus"
+    "gam"
   );
+});
+
+test("getArticleSubjectLabel shortens only the requested game-news topics", () => {
+  assert.equal(getArticleSubjectLabel("development"), "dev");
+  assert.equal(getArticleSubjectLabel("technology"), "tech");
+  assert.equal(getArticleSubjectLabel("business"), "business");
+  assert.equal(getArticleSubjectLabel("platform"), "platform");
 });
 
 test("getPageSequence exposes a seven-page window around middle pages", () => {

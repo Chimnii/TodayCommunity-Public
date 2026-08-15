@@ -10,6 +10,17 @@ const requestedPostCount = Number.parseInt(process.env.TC_FIXTURE_POST_COUNT || 
 const postCount = Number.isInteger(requestedPostCount) && requestedPostCount > 0
   ? Math.min(requestedPostCount, 1000)
   : 73;
+const ARTICLE_SUBJECTS = Object.freeze([
+  "business",
+  "development",
+  "platform",
+  "policy",
+  "technology",
+  "security",
+  "esports",
+  "release",
+  "other",
+]);
 
 const archives = [
   {
@@ -212,7 +223,7 @@ function handleArchive(requestUrl, response) {
     archive_key: target,
     source_key: sources[index % sources.length].source_key,
     subject: articleMode
-      ? ["신작 및 업데이트", "인터뷰와 현장", "게임 산업 동향", "개발 이야기"][index % 4]
+      ? ARTICLE_SUBJECTS[index % ARTICLE_SUBJECTS.length]
       : post.subject,
     title: articleMode ? `게임 뉴스 검증 기사 ${index + 1}` : post.title,
     post_url: articleMode
