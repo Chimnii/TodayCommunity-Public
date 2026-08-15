@@ -16,10 +16,9 @@ const manualRules = new Map();
 const ARTICLE_SUBJECTS = Object.freeze([
   "business",
   "development",
-  "platform",
+  "store",
   "policy",
   "technology",
-  "security",
   "esports",
   "release",
   "other",

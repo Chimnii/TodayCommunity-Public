@@ -66,6 +66,7 @@ const ARTICLE_SOURCE_LABELS = Object.freeze({
 const ARTICLE_SUBJECT_LABELS = Object.freeze({
   business: "biz",
   development: "dev",
+  platform: "store",
   release: "launch",
   technology: "tech",
   other: "etc",

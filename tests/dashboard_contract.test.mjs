@@ -93,6 +93,7 @@ test("switches article archives to a five-column feedback presentation", () => {
   assert.match(app, /thisisgame: "tig"/);
   assert.match(app, /business: "biz"/);
   assert.match(app, /development: "dev"/);
+  assert.match(app, /platform: "store"/);
   assert.match(app, /release: "launch"/);
   assert.match(app, /technology: "tech"/);
   assert.match(app, /other: "etc"/);
@@ -111,11 +112,17 @@ test("switches article archives to a five-column feedback presentation", () => {
   assert.match(fixtureServer, /source_key: "game-news-inven"/);
   assert.match(fixtureServer, /source_key: "game-news-thisisgame"/);
   assert.match(fixtureServer, /const ARTICLE_SUBJECTS = Object\.freeze\(\[/);
+  assert.match(fixtureServer, /"store"/);
+  assert.doesNotMatch(fixtureServer, /"security"/);
   assert.match(fixtureServer, /"development"/);
   assert.match(fixtureServer, /"technology"/);
   assert.match(
     css,
-    /body\[data-content-kind="article"\] \.board-row\s*{[^}]*grid-template-columns:\s*68px 40px minmax\(0, 1fr\) 92px 176px/s
+    /body\[data-content-kind="article"\] \.board-row\s*{[^}]*grid-template-columns:\s*60px 40px minmax\(0, 1fr\) 92px 176px/s
+  );
+  assert.equal(
+    (css.match(/grid-template-columns:\s*60px 40px/g) || []).length,
+    3
   );
   assert.match(css, /\.cell-source\s*{[^}]*padding:\s*0 var\(--space-1\)[^}]*font-weight:\s*400/s);
   assert.match(html, /class="board-cell cell-feedback"[^>]*role="columnheader">평가/);

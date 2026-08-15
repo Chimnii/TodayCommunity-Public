@@ -109,9 +109,9 @@ test("getArticleSubjectLabel shortens only the requested game-news topics", () =
   assert.equal(getArticleSubjectLabel("release"), "launch");
   assert.equal(getArticleSubjectLabel("technology"), "tech");
   assert.equal(getArticleSubjectLabel("other"), "etc");
-  assert.equal(getArticleSubjectLabel("platform"), "platform");
+  assert.equal(getArticleSubjectLabel("store"), "store");
+  assert.equal(getArticleSubjectLabel("platform"), "store");
   assert.equal(getArticleSubjectLabel("policy"), "policy");
-  assert.equal(getArticleSubjectLabel("security"), "security");
   assert.equal(getArticleSubjectLabel("esports"), "esports");
 });
 

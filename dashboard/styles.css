@@ -431,7 +431,7 @@ body[data-content-kind="article"] .filter-comments {
 }
 
 body[data-content-kind="article"] .board-row {
-  grid-template-columns: 68px 40px minmax(0, 1fr) 92px 176px;
+  grid-template-columns: 60px 40px minmax(0, 1fr) 92px 176px;
 }
 
 body[data-content-kind="article"] .cell-number,
@@ -458,7 +458,7 @@ body[data-content-kind="article"] .post-row {
 
 body[data-content-kind="article"] .post-row .cell-subject {
   overflow: visible;
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-2);
   line-height: 1.4;
   overflow-wrap: anywhere;
   white-space: normal;
@@ -1138,7 +1138,7 @@ body[data-content-kind="article"] .cell-source {
 
   body[data-content-kind="article"] .board-head .board-row,
   body[data-content-kind="article"] .post-row {
-    grid-template-columns: 68px 40px minmax(0, 1fr) 104px;
+    grid-template-columns: 60px 40px minmax(0, 1fr) 104px;
   }
 
   body[data-content-kind="article"] .board-head .cell-feedback {
@@ -1268,7 +1268,7 @@ body[data-content-kind="article"] .cell-source {
 
   body[data-content-kind="article"] .board-head .board-row,
   body[data-content-kind="article"] .post-row {
-    grid-template-columns: 68px 40px minmax(0, 1fr);
+    grid-template-columns: 60px 40px minmax(0, 1fr);
   }
 
   .game-news-tools {
