@@ -64,8 +64,11 @@ const ARTICLE_SOURCE_LABELS = Object.freeze({
   thisisgame: "tig",
 });
 const ARTICLE_SUBJECT_LABELS = Object.freeze({
+  business: "biz",
   development: "dev",
+  release: "launch",
   technology: "tech",
+  other: "etc",
 });
 const PAGE_WINDOW_RADIUS = 3;
 const FEEDBACK_KEY_PATTERN = /^[a-f0-9]{32}$/;

@@ -104,10 +104,15 @@ test("getArticleSourceLabel uses known aliases and future site identifiers", () 
 });
 
 test("getArticleSubjectLabel shortens only the requested game-news topics", () => {
+  assert.equal(getArticleSubjectLabel("business"), "biz");
   assert.equal(getArticleSubjectLabel("development"), "dev");
+  assert.equal(getArticleSubjectLabel("release"), "launch");
   assert.equal(getArticleSubjectLabel("technology"), "tech");
-  assert.equal(getArticleSubjectLabel("business"), "business");
+  assert.equal(getArticleSubjectLabel("other"), "etc");
   assert.equal(getArticleSubjectLabel("platform"), "platform");
+  assert.equal(getArticleSubjectLabel("policy"), "policy");
+  assert.equal(getArticleSubjectLabel("security"), "security");
+  assert.equal(getArticleSubjectLabel("esports"), "esports");
 });
 
 test("getPageSequence exposes a seven-page window around middle pages", () => {

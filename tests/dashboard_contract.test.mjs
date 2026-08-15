@@ -91,8 +91,11 @@ test("switches article archives to a five-column feedback presentation", () => {
   assert.match(app, /createSourceCell\(post\)/);
   assert.match(app, /inven: "inv"/);
   assert.match(app, /thisisgame: "tig"/);
+  assert.match(app, /business: "biz"/);
   assert.match(app, /development: "dev"/);
+  assert.match(app, /release: "launch"/);
   assert.match(app, /technology: "tech"/);
+  assert.match(app, /other: "etc"/);
   assert.match(
     app,
     /if \(isArticleArchive\(\)\) \{\s*const label = getArticleSubjectLabel\(value\);\s*cell\.textContent = label;/
