@@ -1,0 +1,330 @@
+import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+
+const source = await readFile(
+  new URL("../functions/api/game-news/[[path]].js", import.meta.url),
+  "utf8"
+);
+const api = await import(
+  `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`
+);
+
+function compact(sql) {
+  return sql.replace(/\s+/gu, " ").trim();
+}
+
+class MockStatement {
+  constructor(db, sql) {
+    this.db = db;
+    this.sql = compact(sql);
+    this.values = [];
+  }
+
+  bind(...values) {
+    this.values = values;
+    return this;
+  }
+
+  async all() {
+    return { results: this.db.all(this.sql, this.values) };
+  }
+
+  async run() {
+    return this.db.run(this.sql, this.values);
+  }
+}
+
+class MockDatabase {
+  constructor() {
+    this.postKey = "a".repeat(32);
+    this.urlHash = "b".repeat(64);
+    this.post = {
+      id: 1,
+      external_post_id: this.postKey,
+      canonical_post_key: `game-news:${this.urlHash}`,
+      archive_key: "game-news",
+      status: "active",
+      title: "테스트 게임 기사",
+      post_url: "https://example.com/article",
+      subject: "industry",
+      last_seen_at: "2026-08-15T00:00:00Z",
+    };
+    this.candidate = {
+      id: 7,
+      url_sha256: this.urlHash,
+      current_evaluation_id: 9,
+    };
+    this.feedback = [];
+    this.visibility = [];
+    this.rules = [];
+  }
+
+  prepare(sql) {
+    return new MockStatement(this, sql);
+  }
+
+  all(sql, values) {
+    if (sql.includes("FROM posts AS p") && sql.includes("LIMIT 2")) {
+      if (values[0] !== this.post.external_post_id) return [];
+      return [{
+        post_id: this.post.id,
+        post_key: this.post.external_post_id,
+        status: this.post.status,
+        title: this.post.title,
+        post_url: this.post.post_url,
+        subject: this.post.subject,
+        last_seen_at: this.post.last_seen_at,
+        candidate_id: this.candidate.id,
+        evaluation_id: this.candidate.current_evaluation_id,
+      }];
+    }
+    if (sql.includes("LEFT JOIN game_news_feedback AS f")) {
+      const actor = values[0];
+      return values.slice(1).filter((key) => key === this.post.external_post_id).map((key) => {
+        const latest = this.feedback.filter(
+          (entry) => entry.candidate_id === this.candidate.id && entry.actor === actor
+        ).at(-1);
+        return {
+          post_key: key,
+          rating_level: latest?.feedback_type === "clear" ? null : latest?.rating_level ?? null,
+          feedback_version: latest?.id ?? 0,
+          reason_code: latest?.reason_code ?? null,
+          hidden: this.post.status === "hidden" ? 1 : 0,
+        };
+      });
+    }
+    if (sql.includes("FROM game_news_feedback WHERE idempotency_key")) {
+      return this.feedback.filter((entry) => entry.idempotency_key === values[0]);
+    }
+    if (sql.startsWith("INSERT INTO game_news_feedback")) {
+      if (this.feedback.some((entry) => entry.idempotency_key === values[7])) return [];
+      const row = {
+        id: this.feedback.length + 1,
+        candidate_id: values[0],
+        evaluation_id: values[1],
+        feedback_type: values[2],
+        rating_level: values[3],
+        reason_code: values[4],
+        note: values[5],
+        actor: values[6],
+        idempotency_key: values[7],
+        created_at: values[8],
+      };
+      this.feedback.push(row);
+      return [{ id: row.id }];
+    }
+    if (sql.includes("FROM posts") && sql.includes("status = 'hidden'")) {
+      return this.post.status === "hidden" ? [{
+        post_key: this.post.external_post_id,
+        title: this.post.title,
+        post_url: this.post.post_url,
+        subject: this.post.subject,
+        last_seen_at: this.post.last_seen_at,
+      }] : [];
+    }
+    if (sql.includes("FROM game_news_visibility_events WHERE idempotency_key")) {
+      return this.visibility.filter((entry) => entry.idempotency_key === values[0]);
+    }
+    if (sql.startsWith("INSERT INTO game_news_visibility_events")) {
+      if (this.visibility.some((entry) => entry.idempotency_key === values[4])) return [];
+      const row = {
+        id: this.visibility.length + 1,
+        candidate_id: values[0],
+        evaluation_id: values[1],
+        action: values[2],
+        actor: values[3],
+        idempotency_key: values[4],
+        created_at: values[5],
+      };
+      this.visibility.push(row);
+      return [{ id: row.id }];
+    }
+    if (sql.includes("FROM game_news_manual_rule_events AS r")) {
+      const actor = values[0];
+      const latestByKey = new Map();
+      for (const row of this.rules.filter((entry) => entry.actor === actor)) {
+        latestByKey.set(row.rule_key, row);
+      }
+      return [...latestByKey.values()].filter((row) => row.action === "set").map((row) => ({
+        rule_event_id: row.id,
+        rule_key: row.rule_key,
+        rule_text: row.rule_text,
+        strength: row.strength,
+        created_at: row.created_at,
+      }));
+    }
+    if (sql.includes("FROM game_news_manual_rule_events WHERE idempotency_key")) {
+      return this.rules.filter((entry) => entry.idempotency_key === values[0]);
+    }
+    if (sql.startsWith("INSERT INTO game_news_manual_rule_events")) {
+      if (this.rules.some((entry) => entry.idempotency_key === values[5])) return [];
+      const row = {
+        id: this.rules.length + 1,
+        rule_key: values[0],
+        action: values[1],
+        rule_text: values[2],
+        strength: values[3],
+        actor: values[4],
+        idempotency_key: values[5],
+        created_at: values[6],
+      };
+      this.rules.push(row);
+      return [{ id: row.id }];
+    }
+    throw new Error(`Unexpected SQL: ${sql}`);
+  }
+
+  run(sql, values) {
+    if (sql.startsWith("UPDATE posts SET status")) {
+      assert.equal(values[1], this.post.id);
+      this.post.status = values[0];
+      return { success: true, meta: { changes: 1 } };
+    }
+    throw new Error(`Unexpected run SQL: ${sql}`);
+  }
+}
+
+function request(resource, { method = "GET", body, headers = {}, db } = {}) {
+  const requestHeaders = new Headers({ accept: "application/json", ...headers });
+  if (body !== undefined) {
+    requestHeaders.set("Content-Type", "application/json");
+  }
+  const req = new Request(`https://todaycommunity.example/api/game-news/${resource}`, {
+    method,
+    headers: requestHeaders,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  return (method === "POST" ? api.onRequestPost : api.onRequestGet)({
+    request: req,
+    env: { DB: db },
+  });
+}
+
+async function body(response) {
+  return response.json();
+}
+
+const writeHeaders = {
+  Origin: "https://todaycommunity.example",
+  "Sec-Fetch-Site": "same-origin",
+  "X-TodayCommunity-Write": "1",
+};
+
+test("exposes one replaceable open-owner session boundary", async () => {
+  const response = await request("session");
+  assert.equal(response.status, 200);
+  const payload = await body(response);
+  assert.equal(payload.authentication, "open-owner");
+  assert.deepEqual(payload.capabilities, { rate: true, hide: true, manage_rules: true });
+  assert.match(response.headers.get("cache-control"), /no-store/);
+});
+
+test("records four-level feedback and handles exact idempotent retries", async () => {
+  const db = new MockDatabase();
+  const feedbackBody = {
+    post_key: db.postKey,
+    rating_level: -2,
+    reason_code: null,
+    actor: "client-supplied-actor-is-ignored",
+    idempotency_key: "feedback:1234567890abcdef",
+  };
+  const first = await request("feedback", {
+    method: "POST", body: feedbackBody, headers: writeHeaders, db,
+  });
+  assert.equal(first.status, 201);
+  assert.equal((await body(first)).item.rating_level, -2);
+  assert.equal(db.feedback[0].actor, "owner:open-v1");
+  const retry = await request("feedback", {
+    method: "POST", body: feedbackBody, headers: writeHeaders, db,
+  });
+  assert.equal(retry.status, 201);
+  assert.equal(db.feedback.length, 1);
+
+  const conflict = await request("feedback", {
+    method: "POST",
+    body: { ...feedbackBody, rating_level: 2 },
+    headers: writeHeaders,
+    db,
+  });
+  assert.equal(conflict.status, 409);
+});
+
+test("requires the explicit same-origin write contract", async () => {
+  const db = new MockDatabase();
+  const response = await request("feedback", {
+    method: "POST",
+    body: {
+      post_key: db.postKey,
+      rating_level: 1,
+      idempotency_key: "feedback:missing-header",
+    },
+    db,
+  });
+  assert.equal(response.status, 403);
+  assert.equal(db.feedback.length, 0);
+});
+
+test("keeps X visibility separate, reversible, and globally projected", async () => {
+  const db = new MockDatabase();
+  const hidden = await request("visibility", {
+    method: "POST",
+    body: {
+      post_key: db.postKey,
+      action: "hide",
+      idempotency_key: "visibility:hide:123456",
+    },
+    headers: writeHeaders,
+    db,
+  });
+  assert.equal(hidden.status, 201);
+  assert.equal(db.post.status, "hidden");
+  assert.equal(db.feedback.length, 0);
+  assert.equal((await body(await request("hidden", { db }))).items.length, 1);
+
+  const restored = await request("visibility", {
+    method: "POST",
+    body: {
+      post_key: db.postKey,
+      action: "restore",
+      idempotency_key: "visibility:restore:1234",
+    },
+    headers: writeHeaders,
+    db,
+  });
+  assert.equal(restored.status, 201);
+  assert.equal(db.post.status, "active");
+  assert.equal((await body(await request("hidden", { db }))).items.length, 0);
+});
+
+test("sets and retracts versioned manual preference rules", async () => {
+  const db = new MockDatabase();
+  const ruleKey = "owner-rule:12345678";
+  const setResponse = await request("rules", {
+    method: "POST",
+    body: {
+      rule_key: ruleKey,
+      action: "set",
+      rule_text: "LCK 기사는 큰 사건만 수집해줘.",
+      strength: "strong",
+      idempotency_key: "rule:set:1234567890",
+    },
+    headers: writeHeaders,
+    db,
+  });
+  assert.equal(setResponse.status, 201);
+  assert.equal((await body(setResponse)).items.length, 1);
+  const retractResponse = await request("rules", {
+    method: "POST",
+    body: {
+      rule_key: ruleKey,
+      action: "retract",
+      idempotency_key: "rule:retract:123456",
+    },
+    headers: writeHeaders,
+    db,
+  });
+  assert.equal(retractResponse.status, 201);
+  assert.equal((await body(retractResponse)).items.length, 0);
+});

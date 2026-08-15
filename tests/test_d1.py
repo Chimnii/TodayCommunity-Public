@@ -235,11 +235,26 @@ class SqlScriptSplittingTests(unittest.TestCase):
         for statement in split_sql_statements(schema):
             connection.execute(statement)
 
-        trigger_count = connection.execute(
-            "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'trigger' "
-            "AND name LIKE 'game_news_%'"
-        ).fetchone()[0]
-        self.assertEqual(trigger_count, 4)
+        trigger_names = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_schema WHERE type = 'trigger' "
+                "AND name LIKE 'game_news_%'"
+            )
+        }
+        self.assertEqual(
+            trigger_names,
+            {
+                "game_news_evaluations_no_update",
+                "game_news_evaluations_no_delete",
+                "game_news_feedback_no_update",
+                "game_news_feedback_no_delete",
+                "game_news_visibility_events_no_update",
+                "game_news_visibility_events_no_delete",
+                "game_news_manual_rule_events_no_update",
+                "game_news_manual_rule_events_no_delete",
+            },
+        )
 
 
 if __name__ == "__main__":

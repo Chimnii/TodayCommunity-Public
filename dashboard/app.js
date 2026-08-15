@@ -68,6 +68,13 @@ const ARTICLE_SUBJECT_LABELS = Object.freeze({
   technology: "tech",
 });
 const PAGE_WINDOW_RADIUS = 3;
+const FEEDBACK_KEY_PATTERN = /^[a-f0-9]{32}$/;
+const FEEDBACK_RATINGS = Object.freeze([
+  { level: 2, icon: "👍👍", label: "아주 흥미있음" },
+  { level: 1, icon: "👍", label: "흥미는 있음" },
+  { level: -1, icon: "👎", label: "별로 관심 없음" },
+  { level: -2, icon: "👎👎", label: "아주 관심 없음" },
+]);
 const subjectSegmenter = typeof Intl.Segmenter === "function"
   ? new Intl.Segmenter("ko", { granularity: "grapheme" })
   : null;
@@ -81,6 +88,13 @@ const state = {
   filterTimer: null,
   focusPageContentAfterLoad: false,
   focusArchiveTabAfterLoad: false,
+  feedbackSession: null,
+  feedbackSessionPromise: null,
+  feedbackByPost: new Map(),
+  feedbackReady: false,
+  pendingFeedback: new Set(),
+  undoAction: null,
+  toastTimer: null,
 };
 
 const elements = {
@@ -114,6 +128,24 @@ const elements = {
   sortCommentsOption: document.querySelector('#sort-select option[value="comments"]'),
   pageSizeSelect: document.querySelector("#page-size-select"),
   filterForm: document.querySelector("#filter-form"),
+  gameNewsTools: document.querySelector("#game-news-tools"),
+  rulesOpen: document.querySelector("#rules-open"),
+  rulesDialog: document.querySelector("#rules-dialog"),
+  rulesClose: document.querySelector("#rules-close"),
+  ruleForm: document.querySelector("#rule-form"),
+  ruleText: document.querySelector("#rule-text"),
+  ruleStrength: document.querySelector("#rule-strength"),
+  rulesStatus: document.querySelector("#rules-status"),
+  rulesList: document.querySelector("#rules-list"),
+  hiddenOpen: document.querySelector("#hidden-open"),
+  hiddenCount: document.querySelector("#hidden-count"),
+  hiddenDialog: document.querySelector("#hidden-dialog"),
+  hiddenClose: document.querySelector("#hidden-close"),
+  hiddenStatus: document.querySelector("#hidden-status"),
+  hiddenList: document.querySelector("#hidden-list"),
+  feedbackToast: document.querySelector("#feedback-toast"),
+  feedbackToastMessage: document.querySelector("#feedback-toast-message"),
+  feedbackUndo: document.querySelector("#feedback-undo"),
 };
 
 const numberFormatter = new Intl.NumberFormat("ko-KR");
@@ -293,6 +325,7 @@ function applyContentKindMode() {
     "aria-label",
     articleMode ? "저장된 게임 기사" : "저장된 커뮤니티 글"
   );
+  elements.gameNewsTools.hidden = !articleMode;
 
   if (elements.subjectFilterLabel) {
     elements.subjectFilterLabel.textContent = articleMode ? "주제" : "말머리";
@@ -410,6 +443,8 @@ function selectArchive(target) {
   window.clearTimeout(state.filterTimer);
   Object.assign(state, DEFAULT_STATE);
   state.target = normalizedTarget;
+  state.feedbackByPost.clear();
+  state.feedbackReady = false;
   state.focusPageContentAfterLoad = false;
   state.focusArchiveTabAfterLoad = true;
   writeStateToControls();
@@ -429,6 +464,9 @@ function render() {
   renderNotice();
   renderRuns();
   renderPosts(view.posts);
+  if (isArticleArchive()) {
+    void loadFeedbackState(view.posts);
+  }
   renderResultStatus(view);
   renderPagination(view.pagination);
   restoreArchiveTabFocus();
@@ -725,7 +763,8 @@ function renderPosts(posts) {
       createSourceCell(post),
       createTitleCell(post),
       createCell(numberFormatter.format(normalizeSignedInteger(post.upvotes, 0)), "cell-upvotes numeric-cell"),
-      createCell(formatPostDate(post.created_at), "cell-date numeric-cell")
+      createCell(formatPostDate(post.created_at), "cell-date numeric-cell"),
+      createFeedbackCell(post)
     );
 
     elements.posts.append(row);
@@ -772,6 +811,323 @@ function createSubjectCell(subject) {
   }
 
   return cell;
+}
+
+function createFeedbackCell(post) {
+  const cell = document.createElement("span");
+  cell.className = "board-cell cell-feedback";
+  cell.setAttribute("role", "cell");
+
+  if (!isArticleArchive()) {
+    return cell;
+  }
+
+  const postKey = normalizeFeedbackKey(post?.feedback_key);
+  if (!postKey) {
+    const unavailable = document.createElement("span");
+    unavailable.className = "visually-hidden";
+    unavailable.textContent = "이 글은 아직 평가할 수 없습니다.";
+    cell.append(unavailable);
+    return cell;
+  }
+
+  const title = String(post?.title || "게임 기사");
+  const toolbar = document.createElement("div");
+  toolbar.className = "feedback-toolbar";
+  toolbar.dataset.postKey = postKey;
+  toolbar.setAttribute("role", "toolbar");
+  toolbar.setAttribute("aria-label", `「${title}」 평가`);
+
+  for (const rating of FEEDBACK_RATINGS) {
+    const button = document.createElement("button");
+    button.className = "feedback-button";
+    button.type = "button";
+    button.dataset.rating = String(rating.level);
+    button.dataset.feedbackLabel = rating.label;
+    button.setAttribute("aria-label", rating.label);
+    button.setAttribute("aria-pressed", "false");
+    button.textContent = rating.icon;
+    button.addEventListener("click", () => {
+      void submitRating(postKey, rating.level, toolbar, button);
+    });
+    toolbar.append(button);
+  }
+
+  const hideButton = document.createElement("button");
+  hideButton.className = "feedback-button feedback-hide";
+  hideButton.type = "button";
+  hideButton.dataset.action = "hide";
+  hideButton.setAttribute("aria-label", "목록에서 숨기고 강한 비선호로 기록");
+  hideButton.textContent = "×";
+  hideButton.addEventListener("click", () => {
+    void hidePost(post, toolbar, hideButton);
+  });
+  toolbar.append(hideButton);
+  toolbar.addEventListener("keydown", handleFeedbackToolbarKeydown);
+  cell.append(toolbar);
+  syncFeedbackToolbar(toolbar);
+  return cell;
+}
+
+function normalizeFeedbackKey(value) {
+  const key = String(value || "").trim().toLocaleLowerCase("en-US");
+  return FEEDBACK_KEY_PATTERN.test(key) ? key : "";
+}
+
+async function loadFeedbackState(posts) {
+  const postKeys = [...new Set(
+    posts.map((post) => normalizeFeedbackKey(post?.feedback_key)).filter(Boolean)
+  )];
+  if (!postKeys.length) {
+    state.feedbackReady = true;
+    syncRenderedFeedbackControls();
+    return;
+  }
+
+  try {
+    const session = await ensureFeedbackSession();
+    if (!session?.capabilities?.rate) {
+      throw new Error("평가 기능을 사용할 수 없습니다.");
+    }
+    const params = new URLSearchParams();
+    for (const postKey of postKeys) {
+      params.append("post_key", postKey);
+    }
+    const payload = await fetchGameNewsJson(`/api/game-news/feedback?${params}`);
+    for (const item of Array.isArray(payload?.items) ? payload.items : []) {
+      const postKey = normalizeFeedbackKey(item?.post_key);
+      if (postKey) {
+        state.feedbackByPost.set(postKey, normalizeFeedbackState(item));
+      }
+    }
+    state.feedbackReady = true;
+    syncRenderedFeedbackControls();
+    void refreshHiddenCount();
+  } catch (error) {
+    state.feedbackReady = false;
+    syncRenderedFeedbackControls();
+    showFeedbackToast(`평가 기록을 불러오지 못했습니다: ${error.message}`);
+  }
+}
+
+async function ensureFeedbackSession() {
+  if (state.feedbackSession) {
+    return state.feedbackSession;
+  }
+  if (!state.feedbackSessionPromise) {
+    state.feedbackSessionPromise = fetchGameNewsJson("/api/game-news/session")
+      .then((session) => {
+        state.feedbackSession = session;
+        return session;
+      })
+      .finally(() => {
+        state.feedbackSessionPromise = null;
+      });
+  }
+  return state.feedbackSessionPromise;
+}
+
+function normalizeFeedbackState(item) {
+  const rating = Number(item?.rating_level);
+  return {
+    post_key: normalizeFeedbackKey(item?.post_key),
+    rating_level: FEEDBACK_RATINGS.some((entry) => entry.level === rating)
+      ? rating
+      : null,
+    feedback_version: normalizeNonNegativeNumber(item?.feedback_version, 0),
+    reason_code: item?.reason_code ? String(item.reason_code) : null,
+    hidden: Boolean(item?.hidden),
+  };
+}
+
+function syncRenderedFeedbackControls() {
+  for (const toolbar of elements.posts.querySelectorAll(".feedback-toolbar")) {
+    syncFeedbackToolbar(toolbar);
+  }
+}
+
+function syncFeedbackToolbar(toolbar) {
+  const postKey = normalizeFeedbackKey(toolbar?.dataset?.postKey);
+  const feedback = state.feedbackByPost.get(postKey) || { rating_level: null };
+  const pending = state.pendingFeedback.has(postKey);
+  const disabled = !state.feedbackReady || pending;
+  const buttons = Array.from(toolbar.querySelectorAll("button"));
+  let rovingIndex = 0;
+
+  for (const [index, button] of buttons.entries()) {
+    const rating = Number(button.dataset.rating);
+    const selected = Number.isInteger(rating) && rating === feedback.rating_level;
+    if (button.hasAttribute("aria-pressed")) {
+      button.setAttribute("aria-pressed", String(selected));
+      const label = button.dataset.feedbackLabel || "평가";
+      button.setAttribute(
+        "aria-label",
+        selected ? `${label}, 선택됨, 다시 누르면 평가 지우기` : label
+      );
+    }
+    if (selected) {
+      rovingIndex = index;
+    }
+    button.disabled = disabled;
+    button.title = disabled && !pending
+      ? "평가 기록을 확인한 뒤 사용할 수 있습니다."
+      : button.getAttribute("aria-label");
+  }
+  buttons.forEach((button, index) => {
+    button.tabIndex = index === rovingIndex ? 0 : -1;
+  });
+  toolbar.setAttribute("aria-busy", String(pending));
+}
+
+function handleFeedbackToolbarKeydown(event) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+    return;
+  }
+  const buttons = Array.from(event.currentTarget.querySelectorAll("button:not(:disabled)"));
+  if (!buttons.length) {
+    return;
+  }
+  event.preventDefault();
+  const currentIndex = Math.max(0, buttons.indexOf(document.activeElement));
+  let nextIndex = currentIndex;
+  if (event.key === "Home") {
+    nextIndex = 0;
+  } else if (event.key === "End") {
+    nextIndex = buttons.length - 1;
+  } else {
+    const offset = event.key === "ArrowRight" ? 1 : -1;
+    nextIndex = (currentIndex + offset + buttons.length) % buttons.length;
+  }
+  buttons.forEach((button, index) => {
+    button.tabIndex = index === nextIndex ? 0 : -1;
+  });
+  buttons[nextIndex].focus();
+}
+
+async function submitRating(postKey, ratingLevel, toolbar, sourceButton) {
+  if (state.pendingFeedback.has(postKey)) {
+    return;
+  }
+  const current = state.feedbackByPost.get(postKey)?.rating_level ?? null;
+  const nextRating = current === ratingLevel ? null : ratingLevel;
+  state.pendingFeedback.add(postKey);
+  syncFeedbackToolbar(toolbar);
+  try {
+    const payload = await postGameNewsJson("/api/game-news/feedback", {
+      post_key: postKey,
+      rating_level: nextRating,
+      reason_code: null,
+      idempotency_key: createRequestKey("feedback"),
+    });
+    state.feedbackByPost.set(postKey, normalizeFeedbackState(payload.item));
+    const label = nextRating === null
+      ? "평가를 지웠습니다."
+      : `${FEEDBACK_RATINGS.find((item) => item.level === nextRating)?.label || "평가"}으로 기록했습니다.`;
+    showFeedbackToast(label);
+  } catch (error) {
+    showFeedbackToast(`평가를 저장하지 못했습니다: ${error.message}`);
+  } finally {
+    state.pendingFeedback.delete(postKey);
+    syncFeedbackToolbar(toolbar);
+    if (sourceButton.isConnected) {
+      sourceButton.focus({ preventScroll: true });
+    }
+  }
+}
+
+async function hidePost(post, toolbar, sourceButton) {
+  const postKey = normalizeFeedbackKey(post?.feedback_key);
+  if (!postKey || state.pendingFeedback.has(postKey)) {
+    return;
+  }
+  state.pendingFeedback.add(postKey);
+  syncFeedbackToolbar(toolbar);
+  try {
+    await postGameNewsJson("/api/game-news/visibility", {
+      post_key: postKey,
+      action: "hide",
+      idempotency_key: createRequestKey("hide"),
+    });
+    const title = String(post?.title || "게임 기사");
+    state.archive.posts = (state.archive.posts || []).filter(
+      (item) => normalizeFeedbackKey(item?.feedback_key) !== postKey
+    );
+    renderPosts(getViewModel().posts);
+    showFeedbackToast(`「${title}」을 숨겼습니다.`, async () => {
+      await restoreHiddenPost(postKey);
+    });
+    void refreshHiddenCount();
+    void loadArchive();
+  } catch (error) {
+    showFeedbackToast(`글을 숨기지 못했습니다: ${error.message}`);
+    if (sourceButton.isConnected) {
+      sourceButton.focus({ preventScroll: true });
+    }
+  } finally {
+    state.pendingFeedback.delete(postKey);
+    if (toolbar.isConnected) {
+      syncFeedbackToolbar(toolbar);
+    }
+  }
+}
+
+async function restoreHiddenPost(postKey) {
+  await postGameNewsJson("/api/game-news/visibility", {
+    post_key: postKey,
+    action: "restore",
+    idempotency_key: createRequestKey("restore"),
+  });
+  showFeedbackToast("숨긴 글을 목록에 복구했습니다.");
+  await loadArchive();
+  void refreshHiddenCount();
+}
+
+async function fetchGameNewsJson(url, options = {}) {
+  const { headers = {}, ...requestOptions } = options;
+  const response = await fetch(url, {
+    cache: "no-store",
+    ...requestOptions,
+    headers: { accept: "application/json", ...headers },
+  });
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+  if (!response.ok) {
+    throw new Error(payload?.error || `HTTP ${response.status}`);
+  }
+  return payload;
+}
+
+function postGameNewsJson(url, body) {
+  return fetchGameNewsJson(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-TodayCommunity-Write": "1",
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+function createRequestKey(prefix) {
+  const random = globalThis.crypto?.randomUUID?.()
+    || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
+  return `${prefix}:${random}`;
+}
+
+function showFeedbackToast(message, undoAction = null) {
+  window.clearTimeout(state.toastTimer);
+  state.undoAction = undoAction;
+  elements.feedbackToastMessage.textContent = String(message);
+  elements.feedbackUndo.hidden = typeof undoAction !== "function";
+  elements.feedbackToast.hidden = false;
+  state.toastTimer = window.setTimeout(() => {
+    state.undoAction = null;
+    elements.feedbackToast.hidden = true;
+  }, undoAction ? 10000 : 5000);
 }
 
 function createSourceCell(post) {
@@ -1230,10 +1586,46 @@ function bindEvents() {
     elements.runsOpen.setAttribute("aria-expanded", "false");
     elements.runsOpen.focus();
   });
+  elements.rulesOpen.addEventListener("click", openRulesDialog);
+  elements.rulesClose.addEventListener("click", () => elements.rulesDialog.close());
+  elements.rulesDialog.addEventListener("click", (event) => {
+    if (event.target === elements.rulesDialog) {
+      elements.rulesDialog.close();
+    }
+  });
+  elements.ruleForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void addManualRule();
+  });
+  elements.hiddenOpen.addEventListener("click", openHiddenDialog);
+  elements.hiddenClose.addEventListener("click", () => elements.hiddenDialog.close());
+  elements.hiddenDialog.addEventListener("click", (event) => {
+    if (event.target === elements.hiddenDialog) {
+      elements.hiddenDialog.close();
+    }
+  });
+  elements.feedbackUndo.addEventListener("click", () => {
+    const undoAction = state.undoAction;
+    if (typeof undoAction !== "function") {
+      return;
+    }
+    state.undoAction = null;
+    elements.feedbackUndo.disabled = true;
+    Promise.resolve(undoAction())
+      .catch((error) => showFeedbackToast(`실행 취소에 실패했습니다: ${error.message}`))
+      .finally(() => {
+        elements.feedbackUndo.disabled = false;
+      });
+  });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && elements.runsDrawer.open) {
-      event.preventDefault();
-      elements.runsDrawer.close();
+    if (event.key === "Escape") {
+      for (const dialog of [elements.runsDrawer, elements.rulesDialog, elements.hiddenDialog]) {
+        if (dialog.open) {
+          event.preventDefault();
+          dialog.close();
+          break;
+        }
+      }
     }
   });
   window.addEventListener("popstate", () => {
@@ -1288,6 +1680,180 @@ function openRunsDrawer() {
     elements.runsDrawer.showModal();
     elements.runsOpen.setAttribute("aria-expanded", "true");
     elements.runsClose.focus();
+  }
+}
+
+function openRulesDialog() {
+  if (typeof elements.rulesDialog.showModal !== "function") {
+    return;
+  }
+  elements.rulesDialog.showModal();
+  elements.rulesStatus.textContent = "규칙을 불러오는 중입니다.";
+  elements.ruleText.focus();
+  void refreshRules();
+}
+
+async function refreshRules() {
+  try {
+    const payload = await fetchGameNewsJson("/api/game-news/rules");
+    renderRules(Array.isArray(payload?.items) ? payload.items : []);
+    elements.rulesStatus.textContent = payload?.items?.length
+      ? "현재 적용 중인 규칙입니다."
+      : "아직 페이지에서 추가한 규칙이 없습니다.";
+  } catch (error) {
+    elements.rulesStatus.textContent = `규칙을 불러오지 못했습니다: ${error.message}`;
+    elements.rulesList.replaceChildren();
+  }
+}
+
+function renderRules(rules) {
+  elements.rulesList.replaceChildren();
+  for (const rule of rules) {
+    const item = document.createElement("div");
+    item.className = "management-item";
+    const copy = document.createElement("div");
+    copy.className = "management-item-copy";
+    const text = document.createElement("p");
+    text.textContent = String(rule.rule_text || "");
+    const meta = document.createElement("p");
+    meta.className = "management-item-meta";
+    meta.textContent = rule.strength === "strong" ? "강하게 반영" : "경향으로 참고";
+    copy.append(text, meta);
+    const retract = document.createElement("button");
+    retract.className = "button button-secondary";
+    retract.type = "button";
+    retract.textContent = "해제";
+    retract.addEventListener("click", () => {
+      void retractManualRule(String(rule.rule_key || ""), retract);
+    });
+    item.append(copy, retract);
+    elements.rulesList.append(item);
+  }
+}
+
+async function addManualRule() {
+  const ruleText = String(elements.ruleText.value || "").trim();
+  if (!ruleText) {
+    elements.ruleText.focus();
+    return;
+  }
+  const submit = elements.ruleForm.querySelector('button[type="submit"]');
+  submit.disabled = true;
+  elements.rulesStatus.textContent = "규칙을 저장하는 중입니다.";
+  try {
+    const payload = await postGameNewsJson("/api/game-news/rules", {
+      rule_key: createRequestKey("owner-rule"),
+      action: "set",
+      rule_text: ruleText,
+      strength: elements.ruleStrength.value,
+      idempotency_key: createRequestKey("rule-set"),
+    });
+    elements.ruleForm.reset();
+    renderRules(Array.isArray(payload?.items) ? payload.items : []);
+    elements.rulesStatus.textContent = "규칙을 추가했습니다. 다음 수집부터 참고합니다.";
+    elements.ruleText.focus();
+  } catch (error) {
+    elements.rulesStatus.textContent = `규칙을 저장하지 못했습니다: ${error.message}`;
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+async function retractManualRule(ruleKey, button) {
+  button.disabled = true;
+  elements.rulesStatus.textContent = "규칙을 해제하는 중입니다.";
+  try {
+    const payload = await postGameNewsJson("/api/game-news/rules", {
+      rule_key: ruleKey,
+      action: "retract",
+      idempotency_key: createRequestKey("rule-retract"),
+    });
+    renderRules(Array.isArray(payload?.items) ? payload.items : []);
+    elements.rulesStatus.textContent = "규칙을 해제했습니다.";
+  } catch (error) {
+    elements.rulesStatus.textContent = `규칙을 해제하지 못했습니다: ${error.message}`;
+    button.disabled = false;
+  }
+}
+
+function openHiddenDialog() {
+  if (typeof elements.hiddenDialog.showModal !== "function") {
+    return;
+  }
+  elements.hiddenDialog.showModal();
+  elements.hiddenStatus.textContent = "숨긴 글을 불러오는 중입니다.";
+  void refreshHiddenItems();
+}
+
+async function refreshHiddenItems() {
+  try {
+    const payload = await fetchGameNewsJson("/api/game-news/hidden");
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+    elements.hiddenCount.textContent = numberFormatter.format(items.length);
+    renderHiddenItems(items);
+    elements.hiddenStatus.textContent = items.length
+      ? `숨긴 글 ${numberFormatter.format(items.length)}개`
+      : "숨긴 글이 없습니다.";
+  } catch (error) {
+    elements.hiddenStatus.textContent = `숨긴 글을 불러오지 못했습니다: ${error.message}`;
+    elements.hiddenList.replaceChildren();
+  }
+}
+
+async function refreshHiddenCount() {
+  try {
+    const payload = await fetchGameNewsJson("/api/game-news/hidden");
+    elements.hiddenCount.textContent = numberFormatter.format(
+      Array.isArray(payload?.items) ? payload.items.length : 0
+    );
+  } catch {
+    elements.hiddenCount.textContent = "-";
+  }
+}
+
+function renderHiddenItems(items) {
+  elements.hiddenList.replaceChildren();
+  for (const post of items) {
+    const postKey = normalizeFeedbackKey(post?.post_key);
+    if (!postKey) {
+      continue;
+    }
+    const item = document.createElement("div");
+    item.className = "management-item";
+    const copy = document.createElement("div");
+    copy.className = "management-item-copy";
+    const title = document.createElement("p");
+    const safeUrl = getSafeHttpUrl(post.post_url);
+    if (safeUrl) {
+      const link = document.createElement("a");
+      link.href = safeUrl;
+      link.target = "_blank";
+      link.rel = "noreferrer noopener";
+      link.textContent = String(post.title || "제목 없음");
+      title.append(link);
+    } else {
+      title.textContent = String(post.title || "제목 없음");
+    }
+    const meta = document.createElement("p");
+    meta.className = "management-item-meta";
+    meta.textContent = String(post.subject || "주제 없음");
+    copy.append(title, meta);
+    const restore = document.createElement("button");
+    restore.className = "button button-secondary";
+    restore.type = "button";
+    restore.textContent = "복구";
+    restore.addEventListener("click", async () => {
+      restore.disabled = true;
+      try {
+        await restoreHiddenPost(postKey);
+        await refreshHiddenItems();
+      } catch (error) {
+        elements.hiddenStatus.textContent = `복구하지 못했습니다: ${error.message}`;
+        restore.disabled = false;
+      }
+    });
+    item.append(copy, restore);
+    elements.hiddenList.append(item);
   }
 }
 

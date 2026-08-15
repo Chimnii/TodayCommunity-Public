@@ -13,9 +13,9 @@ const SORT_COLUMNS = {
   comments: "comments",
 };
 
-function jsonResponse(body, status = 200) {
+function jsonResponse(body, status = 200, cacheable = true) {
   const cacheControl =
-    status >= 400
+    status >= 400 || !cacheable
       ? "no-store"
       : "public, max-age=15, s-maxage=300";
   return new Response(JSON.stringify(body, null, 2), {
@@ -221,7 +221,8 @@ export async function onRequestGet(context) {
       subject,
       sort,
     });
-    const edgeCache = globalThis.caches?.default;
+    const cacheable = target !== "game-news";
+    const edgeCache = cacheable ? globalThis.caches?.default : null;
     if (edgeCache) {
       const cached = await edgeCache.match(cacheKey);
       if (cached) {
@@ -387,7 +388,11 @@ export async function onRequestGet(context) {
           : null,
       })
     );
-    const posts = postResult.results ?? [];
+    const posts = (postResult.results ?? []).map((post) => (
+      target === "game-news"
+        ? { ...post, feedback_key: String(post.external_post_id || "") }
+        : post
+    ));
     const totalPosts = normalizeCount(summary?.total_posts);
     const visibleFrom = posts.length > 0 ? offset + 1 : 0;
     const visibleTo = posts.length > 0 ? offset + posts.length : 0;
@@ -417,7 +422,7 @@ export async function onRequestGet(context) {
       },
       runs,
       posts,
-    });
+    }, 200, cacheable);
     if (edgeCache) {
       const cacheWrite = edgeCache.put(cacheKey, response.clone());
       if (typeof context.waitUntil === "function") {

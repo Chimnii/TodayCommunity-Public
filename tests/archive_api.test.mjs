@@ -463,7 +463,7 @@ test("serves article archives from published posts without exposing curation dat
       {
         archive_key: target,
         source_key: sources[0].source_key,
-        external_post_id: "article-1",
+        external_post_id: "a".repeat(32),
         subject: "업계 동향",
         title: "게임 산업 기사",
         post_url: "https://www.inven.co.kr/webzine/news/?news=1",
@@ -481,6 +481,8 @@ test("serves article archives from published posts without exposing curation dat
   assert.equal(body.archive.content_kind, "article");
   assert.equal(body.posts.length, 1);
   assert.equal(body.posts[0].qualifies_by, "llm-include");
+  assert.equal(body.posts[0].feedback_key, "a".repeat(32));
+  assert.equal(response.headers.get("cache-control"), "no-store");
   assert.equal(JSON.stringify(body).includes("game_news_candidates"), false);
   assert.equal(JSON.stringify(body).includes("model_id"), false);
   assert.ok(database.calls.every(({ sql }) => !sql.includes("game_news_")));

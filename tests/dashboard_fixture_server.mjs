@@ -10,6 +10,9 @@ const requestedPostCount = Number.parseInt(process.env.TC_FIXTURE_POST_COUNT || 
 const postCount = Number.isInteger(requestedPostCount) && requestedPostCount > 0
   ? Math.min(requestedPostCount, 1000)
   : 73;
+const feedbackByPost = new Map();
+const hiddenPostKeys = new Set();
+const manualRules = new Map();
 const ARTICLE_SUBJECTS = Object.freeze([
   "business",
   "development",
@@ -234,7 +237,8 @@ function handleArchive(requestUrl, response) {
     upvotes: articleMode ? 0 : post.upvotes,
     comments: articleMode ? 0 : post.comments,
     qualifies_by: articleMode ? "llm-include" : post.qualifies_by,
-  }));
+    feedback_key: articleMode ? feedbackKeyForIndex(index) : undefined,
+  })).filter((post) => !articleMode || !hiddenPostKeys.has(post.feedback_key));
   const archiveSubjectOptions = [
     ...new Set(archivePosts.map((post) => normalizeSubject(post.subject)).filter(Boolean)),
   ]
@@ -296,6 +300,108 @@ function handleArchive(requestUrl, response) {
     })),
     posts: visiblePosts,
   });
+}
+
+function feedbackKeyForIndex(index) {
+  return (index + 1).toString(16).padStart(32, "0");
+}
+
+async function readJson(request) {
+  const chunks = [];
+  for await (const chunk of request) {
+    chunks.push(chunk);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+}
+
+function fixtureArticle(postKey) {
+  const index = Number.parseInt(postKey, 16) - 1;
+  const post = posts[index];
+  if (!post || feedbackKeyForIndex(index) !== postKey) {
+    return null;
+  }
+  return {
+    post_key: postKey,
+    title: `게임 뉴스 검증 기사 ${index + 1}`,
+    post_url: index % 2 === 0
+      ? `https://www.inven.co.kr/webzine/news/?news=${post.external_post_id}`
+      : `https://www.thisisgame.com/webzine/news/nboard/4/?n=${post.external_post_id}`,
+    subject: ARTICLE_SUBJECTS[index % ARTICLE_SUBJECTS.length],
+    last_seen_at: post.last_seen_at,
+  };
+}
+
+async function handleGameNewsApi(request, requestUrl, response) {
+  const resource = requestUrl.pathname.split("/").at(-1);
+  if (request.method === "GET" && resource === "session") {
+    sendJson(response, {
+      actor: "owner:open-v1",
+      authentication: "open-owner",
+      capabilities: { rate: true, hide: true, manage_rules: true },
+    });
+    return;
+  }
+  if (request.method === "GET" && resource === "feedback") {
+    const items = requestUrl.searchParams.getAll("post_key").map((postKey) => ({
+      post_key: postKey,
+      rating_level: feedbackByPost.get(postKey)?.rating_level ?? null,
+      feedback_version: feedbackByPost.get(postKey)?.version ?? 0,
+      reason_code: null,
+      hidden: hiddenPostKeys.has(postKey),
+    }));
+    sendJson(response, { items });
+    return;
+  }
+  if (request.method === "GET" && resource === "hidden") {
+    sendJson(response, {
+      items: [...hiddenPostKeys].map(fixtureArticle).filter(Boolean),
+    });
+    return;
+  }
+  if (request.method === "GET" && resource === "rules") {
+    sendJson(response, { items: [...manualRules.values()] });
+    return;
+  }
+  if (request.method !== "POST") {
+    sendJson(response, { error: "Unsupported fixture route" }, 404);
+    return;
+  }
+  const body = await readJson(request);
+  if (resource === "feedback") {
+    const current = feedbackByPost.get(body.post_key);
+    const item = {
+      post_key: body.post_key,
+      rating_level: body.rating_level,
+      feedback_version: (current?.version ?? 0) + 1,
+      reason_code: body.reason_code ?? null,
+      hidden: hiddenPostKeys.has(body.post_key),
+    };
+    feedbackByPost.set(body.post_key, { ...item, version: item.feedback_version });
+    sendJson(response, { item }, 201);
+    return;
+  }
+  if (resource === "visibility") {
+    if (body.action === "hide") hiddenPostKeys.add(body.post_key);
+    if (body.action === "restore") hiddenPostKeys.delete(body.post_key);
+    sendJson(response, { item: { post_key: body.post_key, hidden: body.action === "hide" } }, 201);
+    return;
+  }
+  if (resource === "rules") {
+    if (body.action === "set") {
+      manualRules.set(body.rule_key, {
+        rule_event_id: manualRules.size + 1,
+        rule_key: body.rule_key,
+        rule_text: body.rule_text,
+        strength: body.strength,
+        created_at: new Date().toISOString(),
+      });
+    } else if (body.action === "retract") {
+      manualRules.delete(body.rule_key);
+    }
+    sendJson(response, { items: [...manualRules.values()] }, 201);
+    return;
+  }
+  sendJson(response, { error: "Unsupported fixture route" }, 404);
 }
 
 function comparePosts(left, right, sortBy) {
@@ -363,6 +469,10 @@ const server = createServer(async (request, response) => {
   const requestUrl = new URL(request.url || "/", `http://${request.headers.host}`);
   if (requestUrl.pathname === "/api/archive") {
     handleArchive(requestUrl, response);
+    return;
+  }
+  if (requestUrl.pathname.startsWith("/api/game-news/")) {
+    await handleGameNewsApi(request, requestUrl, response);
     return;
   }
   await serveStatic(requestUrl, response);

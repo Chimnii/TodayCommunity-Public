@@ -78,7 +78,7 @@ test("ships four accessible archive tabs and replaces them from the API catalog"
   assert.match(css, /\.archive-tab\[aria-selected="true"\]/);
 });
 
-test("switches article archives to a four-column, no-vote presentation", () => {
+test("switches article archives to a five-column feedback presentation", () => {
   assert.match(app, /getCurrentArchive\(\)\?\.content_kind === "article"/);
   assert.match(app, /document\.body\.dataset\.contentKind = articleMode \? "article" : "community"/);
   assert.match(app, /state\.minUpvotes = 0/);
@@ -112,9 +112,39 @@ test("switches article archives to a four-column, no-vote presentation", () => {
   assert.match(fixtureServer, /"technology"/);
   assert.match(
     css,
-    /body\[data-content-kind="article"\] \.board-row\s*{[^}]*grid-template-columns:\s*68px 40px minmax\(0, 1fr\) 104px/s
+    /body\[data-content-kind="article"\] \.board-row\s*{[^}]*grid-template-columns:\s*68px 40px minmax\(0, 1fr\) 92px 176px/s
   );
-  assert.match(css, /\.cell-source\s*\{[^}]*padding:\s*0 var\(--space-1\)[^}]*font-weight:\s*400/s);
+  assert.match(css, /\.cell-source\s*{[^}]*padding:\s*0 var\(--space-1\)[^}]*font-weight:\s*400/s);
+  assert.match(html, /class="board-cell cell-feedback"[^>]*role="columnheader">평가/);
+  assert.match(app, /FEEDBACK_RATINGS = Object\.freeze/);
+  assert.match(app, /아주 흥미있음/);
+  assert.match(app, /흥미는 있음/);
+  assert.match(app, /별로 관심 없음/);
+  assert.match(app, /아주 관심 없음/);
+  assert.match(app, /목록에서 숨기고 강한 비선호로 기록/);
+  assert.match(app, /toolbar\.setAttribute\("role", "toolbar"\)/);
+  assert.match(app, /button\.setAttribute\("aria-pressed", "false"\)/);
+  assert.match(css, /\.feedback-toolbar\s*{[^}]*grid-template-columns:\s*repeat\(5, 28px\)/s);
+  assert.match(
+    css,
+    /@media \(max-width:\s*768px\)[\s\S]*\.feedback-toolbar\s*{[^}]*grid-template-columns:\s*repeat\(5, 44px\)/
+  );
+});
+
+test("ships reversible hiding and versioned manual preference controls", () => {
+  assert.match(html, /id="rules-open"/);
+  assert.match(html, /id="hidden-open"/);
+  assert.match(html, /id="rules-dialog"/);
+  assert.match(html, /id="hidden-dialog"/);
+  assert.match(html, /id="feedback-undo"/);
+  assert.match(app, /postGameNewsJson\("\/api\/game-news\/feedback"/);
+  assert.match(app, /postGameNewsJson\("\/api\/game-news\/visibility"/);
+  assert.match(app, /postGameNewsJson\("\/api\/game-news\/rules"/);
+  assert.match(app, /action:\s*"restore"/);
+  assert.match(app, /strength:\s*elements\.ruleStrength\.value/);
+  assert.match(app, /state\.feedbackByPost\.set/);
+  assert.match(app, /"X-TodayCommunity-Write": "1"/);
+  assert.doesNotMatch(app, /innerHTML\s*=/);
 });
 
 test("switches archive targets with clean filters and history-aware URLs", () => {

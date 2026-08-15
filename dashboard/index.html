@@ -84,6 +84,20 @@
             <h2 id="archive-title" tabindex="-1">선별 글 아카이브</h2>
             <p id="result-count" aria-live="polite">목록을 불러오는 중입니다.</p>
           </div>
+          <div class="game-news-tools" id="game-news-tools" hidden>
+            <button
+              class="button button-secondary"
+              id="rules-open"
+              type="button"
+              aria-controls="rules-dialog"
+            >선호 규칙</button>
+            <button
+              class="button button-secondary"
+              id="hidden-open"
+              type="button"
+              aria-controls="hidden-dialog"
+            >숨긴 글 <span class="button-count" id="hidden-count">0</span></button>
+          </div>
         </div>
 
         <div class="filter-shell" id="filter-shell">
@@ -175,6 +189,7 @@
                 <span class="board-cell cell-title" role="columnheader">제목</span>
                 <span class="board-cell cell-upvotes" role="columnheader">추천</span>
                 <span class="board-cell cell-date" role="columnheader">작성일</span>
+                <span class="board-cell cell-feedback" role="columnheader">평가</span>
               </div>
             </div>
 
@@ -207,6 +222,66 @@
         <div class="runs-list" id="runs"></div>
       </div>
     </dialog>
+
+    <dialog class="management-dialog" id="rules-dialog" aria-labelledby="rules-title">
+      <div class="management-dialog-content">
+        <header class="drawer-header">
+          <div>
+            <h2 id="rules-title">수동 선호 규칙</h2>
+            <p>기사 하나의 평가로 설명하기 어려운 취향을 문장으로 남깁니다.</p>
+          </div>
+          <button class="icon-button" id="rules-close" type="button" aria-label="선호 규칙 닫기">
+            <span aria-hidden="true">×</span>
+          </button>
+        </header>
+        <form class="rule-form" id="rule-form">
+          <label class="filter-control rule-text-control">
+            <span>추가할 규칙</span>
+            <textarea
+              id="rule-text"
+              maxlength="1000"
+              rows="4"
+              required
+              placeholder="예: LCK 관련 기사는 역대급 이벤트가 아니라면 가급적 제외해줘."
+            ></textarea>
+          </label>
+          <label class="filter-control">
+            <span>반영 강도</span>
+            <select id="rule-strength">
+              <option value="soft" selected>경향으로 참고</option>
+              <option value="strong">강하게 반영</option>
+            </select>
+          </label>
+          <button class="button button-primary" type="submit">규칙 추가</button>
+        </form>
+        <p class="management-hint">
+          저장소의 기본 선호 파일과 여기에서 추가한 규칙이 함께 적용됩니다. 두 강도 모두 안전·중복 검사보다 우선하지 않습니다.
+        </p>
+        <p class="management-status" id="rules-status" role="status" aria-live="polite"></p>
+        <div class="management-list" id="rules-list"></div>
+      </div>
+    </dialog>
+
+    <dialog class="management-dialog" id="hidden-dialog" aria-labelledby="hidden-title">
+      <div class="management-dialog-content">
+        <header class="drawer-header">
+          <div>
+            <h2 id="hidden-title">숨긴 게임 기사</h2>
+            <p>X로 숨긴 글을 확인하거나 다시 목록에 복구합니다.</p>
+          </div>
+          <button class="icon-button" id="hidden-close" type="button" aria-label="숨긴 글 닫기">
+            <span aria-hidden="true">×</span>
+          </button>
+        </header>
+        <p class="management-status" id="hidden-status" role="status" aria-live="polite"></p>
+        <div class="management-list" id="hidden-list"></div>
+      </div>
+    </dialog>
+
+    <div class="feedback-toast" id="feedback-toast" role="status" aria-live="polite" hidden>
+      <span id="feedback-toast-message"></span>
+      <button class="button button-secondary" id="feedback-undo" type="button" hidden>실행 취소</button>
+    </div>
 
     <noscript>
       <p class="noscript-notice">이 페이지의 목록과 필터를 사용하려면 JavaScript가 필요합니다.</p>
