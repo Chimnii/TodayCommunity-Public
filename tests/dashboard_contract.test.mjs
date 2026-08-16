@@ -106,7 +106,7 @@ test("switches article archives to a five-column feedback presentation", () => {
   assert.match(css, /body\[data-content-kind="article"\] \.cell-source\s*{[^}]*display:\s*block/s);
   assert.match(
     css,
-    /body\[data-content-kind="article"\] \.post-row \.cell-subject\s*{[^}]*white-space:\s*normal[^}]*word-break:\s*keep-all/s
+    /body\[data-content-kind="article"\] \.post-row \.cell-subject\s*{[^}]*text-overflow:\s*ellipsis[^}]*white-space:\s*nowrap/s
   );
   assert.match(fixtureServer, /archive_key: "game-news"[\s\S]*content_kind: "article"/);
   assert.match(fixtureServer, /source_key: "game-news-inven"/);
@@ -118,7 +118,7 @@ test("switches article archives to a five-column feedback presentation", () => {
   assert.match(fixtureServer, /"technology"/);
   assert.match(
     css,
-    /body\[data-content-kind="article"\] \.board-row\s*{[^}]*grid-template-columns:\s*60px 40px minmax\(0, 1fr\) 92px 176px/s
+    /body\[data-content-kind="article"\] \.board-row\s*{[^}]*grid-template-columns:\s*60px 40px minmax\(0, 1fr\) 92px 56px/s
   );
   assert.equal(
     (css.match(/grid-template-columns:\s*60px 40px/g) || []).length,
@@ -132,13 +132,20 @@ test("switches article archives to a five-column feedback presentation", () => {
   assert.match(app, /별로 관심 없음/);
   assert.match(app, /아주 관심 없음/);
   assert.match(app, /목록에서 숨기고 강한 비선호로 기록/);
-  assert.match(app, /toolbar\.setAttribute\("role", "toolbar"\)/);
+  assert.match(html, /id="feedback-dialog"/);
+  assert.match(html, /id="feedback-article-title"/);
+  assert.match(app, /button\.className = "feedback-open-button"/);
+  assert.match(app, /button\.textContent = "평가"/);
+  assert.match(app, /function openFeedbackDialog\(post, trigger\)/);
+  assert.match(app, /elements\.feedbackDialogToolbar\.setAttribute\("aria-label"/);
   assert.match(app, /button\.setAttribute\("aria-pressed", "false"\)/);
-  assert.match(css, /\.feedback-toolbar\s*{[^}]*grid-template-columns:\s*repeat\(5, 28px\)/s);
+  assert.match(css, /\.feedback-open-button\s*{[^}]*height:\s*24px/s);
+  assert.match(css, /\.feedback-toolbar\s*{[^}]*grid-template-columns:\s*repeat\(5, minmax\(48px, 1fr\)\)/s);
   assert.match(
     css,
-    /@media \(max-width:\s*768px\)[\s\S]*\.feedback-toolbar\s*{[^}]*grid-template-columns:\s*repeat\(5, 44px\)/
+    /@media \(max-width:\s*768px\)[\s\S]*body\[data-content-kind="article"\] \.post-row\s*{[^}]*grid-template-columns:\s*60px 40px minmax\(0, 1fr\) 92px 56px/
   );
+  assert.doesNotMatch(css, /\.post-row \.cell-feedback\s*{[^}]*grid-column:\s*1 \/ -1/s);
 });
 
 test("ships reversible hiding and versioned manual preference controls", () => {
@@ -360,7 +367,7 @@ test("locks desktop rows and responsive column reduction", () => {
   assert.match(css, /text-overflow:\s*ellipsis/);
   assert.match(css, /grid-template-columns:\s*88px 72px minmax\(0, 1fr\) 64px 104px/);
   assert.match(css, /\.cell-subject\s*{[^}]*text-overflow:\s*clip[^}]*white-space:\s*nowrap/);
-  assert.doesNotMatch(css, /\.cell-subject\s*{[^}]*text-overflow:\s*ellipsis/);
+  assert.match(css, /body\[data-content-kind="article"\] \.post-row \.cell-subject\s*{[^}]*text-overflow:\s*ellipsis/);
   assert.match(css, /\.post-row \.cell-subject:empty::before\s*{\s*content:\s*"\\00a0"/);
   assert.match(css, /@media \(max-width:\s*520px\)[\s\S]*grid-template-columns:\s*72px minmax\(0, 1fr\) 48px/);
   assert.match(css, /@media \(max-width:\s*520px\)[\s\S]*html\s*{[^}]*font-size:\s*96\.875%/);

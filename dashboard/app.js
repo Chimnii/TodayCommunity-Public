@@ -97,6 +97,8 @@ const state = {
   feedbackByPost: new Map(),
   feedbackReady: false,
   pendingFeedback: new Set(),
+  feedbackDialogPost: null,
+  feedbackDialogTrigger: null,
   undoAction: null,
   toastTimer: null,
 };
@@ -147,6 +149,10 @@ const elements = {
   hiddenClose: document.querySelector("#hidden-close"),
   hiddenStatus: document.querySelector("#hidden-status"),
   hiddenList: document.querySelector("#hidden-list"),
+  feedbackDialog: document.querySelector("#feedback-dialog"),
+  feedbackDialogClose: document.querySelector("#feedback-dialog-close"),
+  feedbackArticleTitle: document.querySelector("#feedback-article-title"),
+  feedbackDialogToolbar: document.querySelector("#feedback-dialog-toolbar"),
   feedbackToast: document.querySelector("#feedback-toast"),
   feedbackToastMessage: document.querySelector("#feedback-toast-message"),
   feedbackUndo: document.querySelector("#feedback-undo"),
@@ -835,12 +841,29 @@ function createFeedbackCell(post) {
     return cell;
   }
 
+  const button = document.createElement("button");
+  button.className = "feedback-open-button";
+  button.type = "button";
+  button.dataset.postKey = postKey;
+  button.textContent = "평가";
+  button.addEventListener("click", () => openFeedbackDialog(post, button));
+  cell.append(button);
+  syncFeedbackOpenButton(button);
+  return cell;
+}
+
+function openFeedbackDialog(post, trigger) {
+  const postKey = normalizeFeedbackKey(post?.feedback_key);
+  if (!postKey || typeof elements.feedbackDialog.showModal !== "function") {
+    return;
+  }
   const title = String(post?.title || "게임 기사");
-  const toolbar = document.createElement("div");
-  toolbar.className = "feedback-toolbar";
-  toolbar.dataset.postKey = postKey;
-  toolbar.setAttribute("role", "toolbar");
-  toolbar.setAttribute("aria-label", `「${title}」 평가`);
+  state.feedbackDialogPost = post;
+  state.feedbackDialogTrigger = trigger;
+  elements.feedbackArticleTitle.textContent = title;
+  elements.feedbackDialogToolbar.dataset.postKey = postKey;
+  elements.feedbackDialogToolbar.setAttribute("aria-label", `「${title}」 평가`);
+  elements.feedbackDialogToolbar.replaceChildren();
 
   for (const rating of FEEDBACK_RATINGS) {
     const button = document.createElement("button");
@@ -852,9 +875,9 @@ function createFeedbackCell(post) {
     button.setAttribute("aria-pressed", "false");
     button.textContent = rating.icon;
     button.addEventListener("click", () => {
-      void submitRating(postKey, rating.level, toolbar, button);
+      void submitRating(postKey, rating.level, elements.feedbackDialogToolbar, button);
     });
-    toolbar.append(button);
+    elements.feedbackDialogToolbar.append(button);
   }
 
   const hideButton = document.createElement("button");
@@ -864,13 +887,18 @@ function createFeedbackCell(post) {
   hideButton.setAttribute("aria-label", "목록에서 숨기고 강한 비선호로 기록");
   hideButton.textContent = "×";
   hideButton.addEventListener("click", () => {
-    void hidePost(post, toolbar, hideButton);
+    void hidePost(post, elements.feedbackDialogToolbar, hideButton);
   });
-  toolbar.append(hideButton);
-  toolbar.addEventListener("keydown", handleFeedbackToolbarKeydown);
-  cell.append(toolbar);
-  syncFeedbackToolbar(toolbar);
-  return cell;
+  elements.feedbackDialogToolbar.append(hideButton);
+
+  elements.feedbackDialog.showModal();
+  syncFeedbackToolbar(elements.feedbackDialogToolbar);
+  window.requestAnimationFrame(() => {
+    const selected = elements.feedbackDialogToolbar.querySelector(
+      '.feedback-button[aria-pressed="true"]'
+    );
+    (selected || elements.feedbackDialogToolbar.querySelector("button"))?.focus();
+  });
 }
 
 function normalizeFeedbackKey(value) {
@@ -945,9 +973,28 @@ function normalizeFeedbackState(item) {
 }
 
 function syncRenderedFeedbackControls() {
-  for (const toolbar of elements.posts.querySelectorAll(".feedback-toolbar")) {
-    syncFeedbackToolbar(toolbar);
+  for (const button of elements.posts.querySelectorAll(".feedback-open-button")) {
+    syncFeedbackOpenButton(button);
   }
+  if (elements.feedbackDialog.open) {
+    syncFeedbackToolbar(elements.feedbackDialogToolbar);
+  }
+}
+
+function syncFeedbackOpenButton(button) {
+  const postKey = normalizeFeedbackKey(button?.dataset?.postKey);
+  const feedback = state.feedbackByPost.get(postKey) || { rating_level: null };
+  const rating = FEEDBACK_RATINGS.find((entry) => entry.level === feedback.rating_level);
+  const pending = state.pendingFeedback.has(postKey);
+  button.classList.toggle("is-rated", Boolean(rating));
+  button.disabled = !state.feedbackReady || pending;
+  button.setAttribute(
+    "aria-label",
+    rating ? `평가 열기, 현재 ${rating.label}` : "평가 열기"
+  );
+  button.title = button.disabled && !pending
+    ? "평가 기록을 확인한 뒤 사용할 수 있습니다."
+    : button.getAttribute("aria-label");
 }
 
 function syncFeedbackToolbar(toolbar) {
@@ -1016,6 +1063,7 @@ async function submitRating(postKey, ratingLevel, toolbar, sourceButton) {
   const nextRating = current === ratingLevel ? null : ratingLevel;
   state.pendingFeedback.add(postKey);
   syncFeedbackToolbar(toolbar);
+  let saved = false;
   try {
     const payload = await postGameNewsJson("/api/game-news/feedback", {
       post_key: postKey,
@@ -1028,12 +1076,15 @@ async function submitRating(postKey, ratingLevel, toolbar, sourceButton) {
       ? "평가를 지웠습니다."
       : `${FEEDBACK_RATINGS.find((item) => item.level === nextRating)?.label || "평가"}으로 기록했습니다.`;
     showFeedbackToast(label);
+    saved = true;
   } catch (error) {
     showFeedbackToast(`평가를 저장하지 못했습니다: ${error.message}`);
   } finally {
     state.pendingFeedback.delete(postKey);
-    syncFeedbackToolbar(toolbar);
-    if (sourceButton.isConnected) {
+    syncRenderedFeedbackControls();
+    if (saved && elements.feedbackDialog.open) {
+      elements.feedbackDialog.close();
+    } else if (sourceButton.isConnected) {
       sourceButton.focus({ preventScroll: true });
     }
   }
@@ -1053,10 +1104,25 @@ async function hidePost(post, toolbar, sourceButton) {
       idempotency_key: createRequestKey("hide"),
     });
     const title = String(post?.title || "게임 기사");
+    const triggerButtons = Array.from(
+      elements.posts.querySelectorAll(".feedback-open-button")
+    );
+    const triggerIndex = Math.max(0, triggerButtons.indexOf(state.feedbackDialogTrigger));
+    state.feedbackDialogTrigger = null;
+    if (elements.feedbackDialog.open) {
+      elements.feedbackDialog.close();
+    }
     state.archive.posts = (state.archive.posts || []).filter(
       (item) => normalizeFeedbackKey(item?.feedback_key) !== postKey
     );
     renderPosts(getViewModel().posts);
+    window.requestAnimationFrame(() => {
+      const remaining = Array.from(
+        elements.posts.querySelectorAll(".feedback-open-button:not(:disabled)")
+      );
+      remaining[Math.min(triggerIndex, Math.max(0, remaining.length - 1))]
+        ?.focus({ preventScroll: true });
+    });
     showFeedbackToast(`「${title}」을 숨겼습니다.`, async () => {
       await restoreHiddenPost(postKey);
     });
@@ -1069,9 +1135,7 @@ async function hidePost(post, toolbar, sourceButton) {
     }
   } finally {
     state.pendingFeedback.delete(postKey);
-    if (toolbar.isConnected) {
-      syncFeedbackToolbar(toolbar);
-    }
+    syncRenderedFeedbackControls();
   }
 }
 
@@ -1608,6 +1672,25 @@ function bindEvents() {
       elements.hiddenDialog.close();
     }
   });
+  elements.feedbackDialogClose.addEventListener("click", () => {
+    elements.feedbackDialog.close();
+  });
+  elements.feedbackDialog.addEventListener("click", (event) => {
+    if (event.target === elements.feedbackDialog) {
+      elements.feedbackDialog.close();
+    }
+  });
+  elements.feedbackDialog.addEventListener("close", () => {
+    const trigger = state.feedbackDialogTrigger;
+    state.feedbackDialogPost = null;
+    state.feedbackDialogTrigger = null;
+    elements.feedbackDialogToolbar.replaceChildren();
+    elements.feedbackDialogToolbar.removeAttribute("data-post-key");
+    if (trigger?.isConnected) {
+      trigger.focus({ preventScroll: true });
+    }
+  });
+  elements.feedbackDialogToolbar.addEventListener("keydown", handleFeedbackToolbarKeydown);
   elements.feedbackUndo.addEventListener("click", () => {
     const undoAction = state.undoAction;
     if (typeof undoAction !== "function") {
@@ -1623,7 +1706,12 @@ function bindEvents() {
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
-      for (const dialog of [elements.runsDrawer, elements.rulesDialog, elements.hiddenDialog]) {
+      for (const dialog of [
+        elements.runsDrawer,
+        elements.feedbackDialog,
+        elements.rulesDialog,
+        elements.hiddenDialog,
+      ]) {
         if (dialog.open) {
           event.preventDefault();
           dialog.close();

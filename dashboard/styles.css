@@ -431,7 +431,7 @@ body[data-content-kind="article"] .filter-comments {
 }
 
 body[data-content-kind="article"] .board-row {
-  grid-template-columns: 60px 40px minmax(0, 1fr) 92px 176px;
+  grid-template-columns: 60px 40px minmax(0, 1fr) 92px 56px;
 }
 
 body[data-content-kind="article"] .cell-number,
@@ -444,7 +444,10 @@ body[data-content-kind="article"] .cell-upvotes {
 }
 
 body[data-content-kind="article"] .cell-feedback {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--space-1);
 }
 
 body[data-content-kind="article"] .cell-subject {
@@ -452,17 +455,14 @@ body[data-content-kind="article"] .cell-subject {
 }
 
 body[data-content-kind="article"] .post-row {
-  height: auto;
-  min-height: var(--board-row-height);
+  height: var(--board-row-height);
 }
 
 body[data-content-kind="article"] .post-row .cell-subject {
-  overflow: visible;
-  padding: var(--space-2);
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-  white-space: normal;
-  word-break: keep-all;
+  overflow: hidden;
+  padding: 0 5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .board-head {
@@ -601,20 +601,10 @@ body[data-content-kind="article"] .cell-source {
   color: var(--color-ink);
 }
 
-.feedback-toolbar {
-  display: grid;
-  grid-template-columns: repeat(5, 28px);
-  justify-content: center;
-  gap: var(--space-1);
-}
-
-.feedback-button {
-  display: inline-flex;
-  width: 28px;
-  height: 28px;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
+.feedback-open-button {
+  min-width: 38px;
+  height: 24px;
+  padding: 0 var(--space-1);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-control);
   background: var(--color-surface);
@@ -622,12 +612,53 @@ body[data-content-kind="article"] .cell-source {
   font-size: 0.6875rem;
   font-weight: 700;
   line-height: 1;
+}
+
+.feedback-open-button:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-subtle);
+  color: var(--color-ink);
+}
+
+.feedback-open-button.is-rated {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.feedback-open-button:disabled {
+  opacity: 0.5;
+}
+
+.feedback-toolbar {
+  display: grid;
+  width: 100%;
+  max-width: 360px;
+  grid-template-columns: repeat(5, minmax(48px, 1fr));
+  justify-content: center;
+  gap: var(--space-2);
+  margin: 0 auto;
+}
+
+.feedback-button {
+  display: inline-flex;
+  width: 100%;
+  height: 52px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface);
+  color: var(--color-ink-muted);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  line-height: 1;
   white-space: nowrap;
 }
 
 .feedback-button[data-rating="2"],
 .feedback-button[data-rating="-2"] {
-  font-size: 0.5rem;
+  font-size: 0.6875rem;
   letter-spacing: -2px;
 }
 
@@ -668,6 +699,17 @@ body[data-content-kind="article"] .cell-source {
   background: var(--color-surface);
   color: var(--color-ink);
   box-shadow: 0 20px 64px var(--color-shadow);
+}
+
+.feedback-dialog {
+  width: min(520px, calc(100% - var(--space-6)));
+}
+
+.feedback-article-title {
+  max-width: 44ch;
+  color: var(--color-ink);
+  font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .management-dialog::backdrop {
@@ -1138,35 +1180,20 @@ body[data-content-kind="article"] .cell-source {
 
   body[data-content-kind="article"] .board-head .board-row,
   body[data-content-kind="article"] .post-row {
-    grid-template-columns: 60px 40px minmax(0, 1fr) 104px;
-  }
-
-  body[data-content-kind="article"] .board-head .cell-feedback {
-    display: none;
+    grid-template-columns: 60px 40px minmax(0, 1fr) 92px 56px;
   }
 
   body[data-content-kind="article"] .board-body {
-    min-height: calc(96px * var(--reserved-row-count, 30));
-  }
-
-  body[data-content-kind="article"] .post-row .cell-feedback {
-    display: flex;
-    min-height: 52px;
-    grid-column: 1 / -1;
-    align-items: center;
-    justify-content: center;
-    border-top: 1px solid var(--color-border);
-    border-left: 0;
-    padding: var(--space-1) var(--space-2);
+    min-height: calc(var(--board-row-height) * var(--reserved-row-count, 30));
   }
 
   .feedback-toolbar {
-    grid-template-columns: repeat(5, 44px);
-    gap: 6px;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: var(--space-1);
   }
 
   .feedback-button {
-    width: 44px;
+    width: 100%;
     height: 44px;
     font-size: var(--text-xs);
   }
@@ -1268,7 +1295,7 @@ body[data-content-kind="article"] .cell-source {
 
   body[data-content-kind="article"] .board-head .board-row,
   body[data-content-kind="article"] .post-row {
-    grid-template-columns: 60px 40px minmax(0, 1fr);
+    grid-template-columns: 60px 40px minmax(0, 1fr) 48px;
   }
 
   .game-news-tools {

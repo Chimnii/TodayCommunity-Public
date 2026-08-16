@@ -223,6 +223,38 @@
       </div>
     </dialog>
 
+    <dialog
+      class="management-dialog feedback-dialog"
+      id="feedback-dialog"
+      aria-labelledby="feedback-dialog-title"
+      aria-describedby="feedback-article-title"
+    >
+      <div class="management-dialog-content">
+        <header class="drawer-header">
+          <div>
+            <h2 id="feedback-dialog-title">기사 평가</h2>
+            <p class="feedback-article-title" id="feedback-article-title"></p>
+          </div>
+          <button
+            class="icon-button"
+            id="feedback-dialog-close"
+            type="button"
+            aria-label="기사 평가 닫기"
+          >
+            <span aria-hidden="true">×</span>
+          </button>
+        </header>
+        <div
+          class="feedback-toolbar feedback-dialog-toolbar"
+          id="feedback-dialog-toolbar"
+          role="toolbar"
+        ></div>
+        <p class="management-hint">
+          같은 평가를 다시 선택하면 평가가 지워집니다. X는 글을 숨기며 숨긴 글 창에서 복구할 수 있습니다.
+        </p>
+      </div>
+    </dialog>
+
     <dialog class="management-dialog" id="rules-dialog" aria-labelledby="rules-title">
       <div class="management-dialog-content">
         <header class="drawer-header">
