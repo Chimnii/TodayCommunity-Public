@@ -24,6 +24,13 @@ MULTI_ARCHIVE_MIGRATION_PATH = (
     / "002_multi_archive.sql"
 )
 MULTI_ARCHIVE_MIGRATION = MULTI_ARCHIVE_MIGRATION_PATH.read_text(encoding="utf-8")
+AUTH_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "cloudflare"
+    / "migrations"
+    / "007_owner_auth.sql"
+)
+AUTH_MIGRATION = AUTH_MIGRATION_PATH.read_text(encoding="utf-8")
 
 
 class SqliteClient:
@@ -41,6 +48,41 @@ class SqliteClient:
 
 
 class SchemaPreflightTests(unittest.TestCase):
+    def test_owner_auth_schema_stores_only_hashed_link_credentials(self) -> None:
+        client = SqliteClient()
+        columns = {
+            row["name"] for row in client.query("PRAGMA table_info(auth_secret_links)")
+        }
+
+        self.assertIn("token_hash", columns)
+        self.assertNotIn("token", columns)
+        self.assertNotIn("password", columns)
+        with self.assertRaises(sqlite3.IntegrityError):
+            client.query(
+                """
+                INSERT INTO auth_secret_links (label, token_hash, created_at)
+                VALUES ('invalid', 'raw-secret-token', CURRENT_TIMESTAMP)
+                """
+            )
+
+    def test_owner_auth_migration_applies_to_the_previous_schema(self) -> None:
+        marker = "CREATE TABLE IF NOT EXISTS auth_secret_links"
+        self.assertIn(marker, SCHEMA)
+        client = SqliteClient(SCHEMA.split(marker, 1)[0])
+
+        client.connection.executescript(AUTH_MIGRATION)
+
+        tables = {
+            row["name"]
+            for row in client.query(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name LIKE 'auth_%'
+                """
+            )
+        }
+        self.assertEqual({"auth_login_limits", "auth_secret_links"}, tables)
+
     def test_current_schema_has_required_columns_and_keys(self) -> None:
         client = SqliteClient()
         report = validate_schema(client)

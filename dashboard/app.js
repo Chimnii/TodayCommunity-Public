@@ -167,13 +167,28 @@ const dateTimeFormatter = new Intl.DateTimeFormat("ko-KR", {
   hour12: false,
 });
 
-function initialize() {
+async function initialize() {
   hydrateStateFromUrl();
   normalizeArticleState();
   applyContentKindMode();
   writeStateToControls();
   setMobileFiltersExpanded(hasActiveFilterState());
   bindEvents();
+  try {
+    await ensureFeedbackSession();
+  } catch {
+    state.feedbackSession = {
+      authentication: "guest",
+      actor: null,
+      capabilities: {
+        rate: false,
+        hide: false,
+        manage_rules: false,
+        manage_auth: false,
+      },
+    };
+  }
+  applyContentKindMode();
   loadArchive();
 }
 
@@ -330,12 +345,19 @@ function normalizeArticleState() {
 
 function applyContentKindMode() {
   const articleMode = isArticleArchive();
+  const authentication = ["authenticated", "admin"].includes(
+    state.feedbackSession?.authentication
+  )
+    ? state.feedbackSession.authentication
+    : "guest";
+  const canUseFeedback = Boolean(state.feedbackSession?.capabilities?.rate);
   document.body.dataset.contentKind = articleMode ? "article" : "community";
+  document.body.dataset.authState = authentication;
   elements.board.setAttribute(
     "aria-label",
     articleMode ? "저장된 게임 기사" : "저장된 커뮤니티 글"
   );
-  elements.gameNewsTools.hidden = !articleMode;
+  elements.gameNewsTools.hidden = !articleMode || !canUseFeedback;
 
   if (elements.subjectFilterLabel) {
     elements.subjectFilterLabel.textContent = articleMode ? "주제" : "말머리";
@@ -474,7 +496,7 @@ function render() {
   renderNotice();
   renderRuns();
   renderPosts(view.posts);
-  if (isArticleArchive()) {
+  if (isArticleArchive() && state.feedbackSession?.capabilities?.rate) {
     void loadFeedbackState(view.posts);
   }
   renderResultStatus(view);
@@ -828,7 +850,7 @@ function createFeedbackCell(post) {
   cell.className = "board-cell cell-feedback";
   cell.setAttribute("role", "cell");
 
-  if (!isArticleArchive()) {
+  if (!isArticleArchive() || !state.feedbackSession?.capabilities?.rate) {
     return cell;
   }
 
@@ -907,6 +929,13 @@ function normalizeFeedbackKey(value) {
 }
 
 async function loadFeedbackState(posts) {
+  const session = await ensureFeedbackSession();
+  if (!session?.capabilities?.rate) {
+    state.feedbackByPost.clear();
+    state.feedbackReady = false;
+    syncRenderedFeedbackControls();
+    return;
+  }
   const postKeys = [...new Set(
     posts.map((post) => normalizeFeedbackKey(post?.feedback_key)).filter(Boolean)
   )];
@@ -917,10 +946,6 @@ async function loadFeedbackState(posts) {
   }
 
   try {
-    const session = await ensureFeedbackSession();
-    if (!session?.capabilities?.rate) {
-      throw new Error("평가 기능을 사용할 수 없습니다.");
-    }
     const params = new URLSearchParams();
     for (const postKey of postKeys) {
       params.append("post_key", postKey);

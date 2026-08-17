@@ -315,6 +315,10 @@ a {
   gap: var(--space-2);
 }
 
+.game-news-tools[hidden] {
+  display: none;
+}
+
 .archive-heading h2,
 .drawer-header h2 {
   font-size: var(--text-lg);
@@ -448,6 +452,14 @@ body[data-content-kind="article"] .cell-feedback {
   align-items: center;
   justify-content: center;
   padding: 0 var(--space-1);
+}
+
+body[data-content-kind="article"][data-auth-state="guest"] .board-row {
+  grid-template-columns: 68px 40px minmax(0, 1fr) 92px;
+}
+
+body[data-content-kind="article"][data-auth-state="guest"] .cell-feedback {
+  display: none;
 }
 
 body[data-content-kind="article"] .cell-subject {
@@ -1185,6 +1197,14 @@ body[data-content-kind="article"] .cell-source {
 
   body[data-content-kind="article"] .board-body {
     min-height: calc(var(--board-row-height) * var(--reserved-row-count, 30));
+  }
+
+  body[data-content-kind="article"][data-auth-state="guest"] .board-body {
+    min-height: calc(var(--board-row-height) * var(--reserved-row-count, 30));
+  }
+
+  body[data-content-kind="article"][data-auth-state="guest"] .post-row .cell-feedback {
+    display: none;
   }
 
   .feedback-toolbar {

@@ -1,0 +1,68 @@
+:root {
+  color-scheme: light;
+  font-family: Inter, Pretendard, "Noto Sans KR", system-ui, sans-serif;
+  background: #f4f6f8;
+  color: #17202a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background: #f4f6f8;
+}
+
+.owner-shell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  padding: 20px;
+}
+
+.owner-card {
+  width: min(460px, 100%);
+  padding: 30px;
+  border: 1px solid #d9e0e7;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 12px 36px rgb(24 39 58 / 8%);
+}
+
+.eyebrow {
+  margin: 0 0 5px;
+  color: #1f6feb;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0 0 12px;
+  font-size: 26px;
+}
+
+p {
+  margin: 0;
+  color: #66717d;
+  line-height: 1.6;
+}
+
+p[data-kind="error"] {
+  color: #b42318;
+}
+
+a {
+  display: inline-block;
+  margin-top: 18px;
+  color: #1f6feb;
+  font-weight: 750;
+}
+
+[hidden] {
+  display: none !important;
+}

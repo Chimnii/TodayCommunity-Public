@@ -8,6 +8,7 @@
 # Local Cloudflare tooling state
 .wrangler/
 .runtime/
+_worker.bundle
 
 # Installed Node dependencies (recreated from package-lock.json)
 node_modules/

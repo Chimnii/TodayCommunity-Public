@@ -1,4 +1,8 @@
-const OPEN_OWNER_ACTOR = "owner:open-v1";
+import {
+  AuthConfigurationError,
+  resolveAuthIdentity,
+} from "../_auth.js";
+
 const POST_KEY_PATTERN = /^[a-f0-9]{32}$/;
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{16,100}$/;
 const RULE_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,99}$/;
@@ -17,30 +21,22 @@ const MAX_HIDDEN_ITEMS = 200;
 const MAX_RULES = 100;
 const MAX_BODY_BYTES = 4096;
 
-function jsonResponse(body, status = 200) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      "Content-Type": "application/json; charset=utf-8",
-      "Cache-Control": "private, no-store",
-      "X-Content-Type-Options": "nosniff",
-    },
+function jsonResponse(body, status = 200, cookies = []) {
+  const headers = new Headers({
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "private, no-store",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    Vary: "Cookie",
   });
+  for (const cookie of cookies) {
+    headers.append("Set-Cookie", cookie);
+  }
+  return new Response(JSON.stringify(body), { status, headers });
 }
 
-export function resolveActor(_request, _env) {
-  // Authentication is intentionally replaceable at this single boundary.
-  // The current personal deployment treats every same-origin writer as the
-  // one owner; a later auth implementation can return the same actor key and
-  // capabilities without changing event storage or UI contracts.
-  return {
-    actor: OPEN_OWNER_ACTOR,
-    capabilities: {
-      rate: true,
-      hide: true,
-      manage_rules: true,
-    },
-  };
+export async function resolveActor(request, env) {
+  return resolveAuthIdentity(request, env);
 }
 
 function resourceFromRequest(request) {
@@ -122,10 +118,37 @@ async function readJsonBody(request) {
 }
 
 class RequestError extends Error {
-  constructor(status, message) {
+  constructor(status, message, cookies = []) {
     super(message);
     this.status = status;
+    this.cookies = cookies;
   }
+}
+
+function requireCapability(identity, capability) {
+  if (!identity.capabilities?.[capability]) {
+    throw new RequestError(
+      401,
+      "시크릿 링크 인증이 필요한 기능입니다.",
+      identity.cookies_to_clear
+    );
+  }
+}
+
+function withIdentityCookies(response, identity) {
+  const cookies = identity?.cookies_to_clear || [];
+  if (!cookies.length) {
+    return response;
+  }
+  const headers = new Headers(response.headers);
+  for (const cookie of cookies) {
+    headers.append("Set-Cookie", cookie);
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 async function findPost(db, postKey) {
@@ -515,30 +538,44 @@ export async function onRequestGet(context) {
   try {
     const resource = resourceFromRequest(context.request);
     const db = context.env.DB;
-    const identity = resolveActor(context.request, context.env);
+    const identity = await resolveActor(context.request, context.env);
     if (resource === "session") {
       return jsonResponse({
         actor: identity.actor,
         capabilities: identity.capabilities,
-        authentication: "open-owner",
-      });
+        authentication: identity.state,
+      }, 200, identity.cookies_to_clear);
     }
-    if (!db) {
-      throw new Error("D1 binding is unavailable");
-    }
+    let response;
     if (resource === "feedback") {
-      return await getFeedback(context.request, db, identity.actor);
+      requireCapability(identity, "rate");
+      if (!db) {
+        throw new Error("D1 binding is unavailable");
+      }
+      response = await getFeedback(context.request, db, identity.actor);
+    } else if (resource === "hidden") {
+      requireCapability(identity, "hide");
+      if (!db) {
+        throw new Error("D1 binding is unavailable");
+      }
+      response = await getHidden(db);
+    } else if (resource === "rules") {
+      requireCapability(identity, "manage_rules");
+      if (!db) {
+        throw new Error("D1 binding is unavailable");
+      }
+      response = await getRules(db, identity.actor);
+    } else {
+      return jsonResponse({ error: "지원하지 않는 경로입니다." }, 404);
     }
-    if (resource === "hidden") {
-      return await getHidden(db);
-    }
-    if (resource === "rules") {
-      return await getRules(db, identity.actor);
-    }
-    return jsonResponse({ error: "지원하지 않는 경로입니다." }, 404);
+    return withIdentityCookies(response, identity);
   } catch (error) {
     if (error instanceof RequestError) {
-      return jsonResponse({ error: error.message }, error.status);
+      return jsonResponse({ error: error.message }, error.status, error.cookies);
+    }
+    if (error instanceof AuthConfigurationError) {
+      console.error("Authentication configuration failed", error.message);
+      return jsonResponse({ error: "인증 서비스를 사용할 수 없습니다." }, 503);
     }
     console.error("Game-news owner API failed", error);
     return jsonResponse({ error: "요청을 처리하지 못했습니다." }, 500);
@@ -551,24 +588,38 @@ export async function onRequestPost(context) {
       throw new RequestError(403, "허용되지 않은 쓰기 요청입니다.");
     }
     const resource = resourceFromRequest(context.request);
+    const identity = await resolveActor(context.request, context.env);
     const db = context.env.DB;
-    if (!db) {
-      throw new Error("D1 binding is unavailable");
+    let response;
+    if (resource === "feedback") {
+      requireCapability(identity, "rate");
+      if (!db) {
+        throw new Error("D1 binding is unavailable");
+      }
+      response = await postFeedback(context.request, db, identity.actor);
+    } else if (resource === "visibility") {
+      requireCapability(identity, "hide");
+      if (!db) {
+        throw new Error("D1 binding is unavailable");
+      }
+      response = await postVisibility(context.request, db, identity.actor);
+    } else if (resource === "rules") {
+      requireCapability(identity, "manage_rules");
+      if (!db) {
+        throw new Error("D1 binding is unavailable");
+      }
+      response = await postRule(context.request, db, identity.actor);
+    } else {
+      return jsonResponse({ error: "지원하지 않는 경로입니다." }, 404);
     }
-    const identity = resolveActor(context.request, context.env);
-    if (resource === "feedback" && identity.capabilities.rate) {
-      return await postFeedback(context.request, db, identity.actor);
-    }
-    if (resource === "visibility" && identity.capabilities.hide) {
-      return await postVisibility(context.request, db, identity.actor);
-    }
-    if (resource === "rules" && identity.capabilities.manage_rules) {
-      return await postRule(context.request, db, identity.actor);
-    }
-    return jsonResponse({ error: "지원하지 않는 경로입니다." }, 404);
+    return withIdentityCookies(response, identity);
   } catch (error) {
     if (error instanceof RequestError) {
-      return jsonResponse({ error: error.message }, error.status);
+      return jsonResponse({ error: error.message }, error.status, error.cookies);
+    }
+    if (error instanceof AuthConfigurationError) {
+      console.error("Authentication configuration failed", error.message);
+      return jsonResponse({ error: "인증 서비스를 사용할 수 없습니다." }, 503);
     }
     console.error("Game-news owner API failed", error);
     return jsonResponse({ error: "요청을 처리하지 못했습니다." }, 500);

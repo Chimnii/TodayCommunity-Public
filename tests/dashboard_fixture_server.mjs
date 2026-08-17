@@ -7,6 +7,9 @@ import { fileURLToPath } from "node:url";
 const dashboardRoot = resolve(fileURLToPath(new URL("../dashboard/", import.meta.url)));
 const port = Number.parseInt(process.env.TC_FIXTURE_PORT || "4173", 10);
 const requestedPostCount = Number.parseInt(process.env.TC_FIXTURE_POST_COUNT || "73", 10);
+const fixtureAuthState = process.env.TC_FIXTURE_AUTH_STATE === "guest"
+  ? "guest"
+  : "authenticated";
 const postCount = Number.isInteger(requestedPostCount) && requestedPostCount > 0
   ? Math.min(requestedPostCount, 1000)
   : 73;
@@ -301,6 +304,22 @@ function handleArchive(requestUrl, response) {
   });
 }
 
+function sendFixtureSession(response) {
+  const authenticated = fixtureAuthState === "authenticated";
+  sendJson(response, {
+    actor: authenticated ? "owner:primary-v1" : null,
+    authentication: fixtureAuthState,
+    state: fixtureAuthState,
+    authenticated,
+    capabilities: {
+      rate: authenticated,
+      hide: authenticated,
+      manage_rules: authenticated,
+      manage_auth: false,
+    },
+  });
+}
+
 function feedbackKeyForIndex(index) {
   return (index + 1).toString(16).padStart(32, "0");
 }
@@ -333,11 +352,7 @@ function fixtureArticle(postKey) {
 async function handleGameNewsApi(request, requestUrl, response) {
   const resource = requestUrl.pathname.split("/").at(-1);
   if (request.method === "GET" && resource === "session") {
-    sendJson(response, {
-      actor: "owner:open-v1",
-      authentication: "open-owner",
-      capabilities: { rate: true, hide: true, manage_rules: true },
-    });
+    sendFixtureSession(response);
     return;
   }
   if (request.method === "GET" && resource === "feedback") {
@@ -472,6 +487,10 @@ const server = createServer(async (request, response) => {
   }
   if (requestUrl.pathname.startsWith("/api/game-news/")) {
     await handleGameNewsApi(request, requestUrl, response);
+    return;
+  }
+  if (requestUrl.pathname === "/api/auth/session" && request.method === "GET") {
+    sendFixtureSession(response);
     return;
   }
   await serveStatic(requestUrl, response);

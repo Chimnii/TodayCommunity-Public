@@ -3,12 +3,23 @@ import { Buffer } from "node:buffer";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const source = await readFile(
-  new URL("../functions/api/game-news/[[path]].js", import.meta.url),
+const authSource = await readFile(
+  new URL("../functions/api/_auth.js", import.meta.url),
   "utf8"
 );
+const authDataUrl = `data:text/javascript;base64,${Buffer.from(authSource).toString("base64")}`;
+const auth = await import(authDataUrl);
+const source = (await readFile(
+  new URL("../functions/api/game-news/[[path]].js", import.meta.url),
+  "utf8"
+)).replace('"../_auth.js"', `"${authDataUrl}"`);
 const api = await import(
   `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`
+);
+const sessionSecret = auth.encodeBase64Url(new Uint8Array(32).fill(7));
+const adminToken = await auth.createSessionToken(
+  { TC_AUTH_SESSION_SECRET: sessionSecret },
+  auth.AUTH_STATE_ADMIN
 );
 
 function compact(sql) {
@@ -186,8 +197,17 @@ class MockDatabase {
   }
 }
 
-function request(resource, { method = "GET", body, headers = {}, db } = {}) {
+function request(resource, {
+  method = "GET",
+  body,
+  headers = {},
+  db,
+  authenticated = true,
+} = {}) {
   const requestHeaders = new Headers({ accept: "application/json", ...headers });
+  if (authenticated) {
+    requestHeaders.set("Cookie", `${auth.ADMIN_COOKIE}=${adminToken}`);
+  }
   if (body !== undefined) {
     requestHeaders.set("Content-Type", "application/json");
   }
@@ -198,7 +218,7 @@ function request(resource, { method = "GET", body, headers = {}, db } = {}) {
   });
   return (method === "POST" ? api.onRequestPost : api.onRequestGet)({
     request: req,
-    env: { DB: db },
+    env: { DB: db, TC_AUTH_SESSION_SECRET: sessionSecret },
   });
 }
 
@@ -212,13 +232,46 @@ const writeHeaders = {
   "X-TodayCommunity-Write": "1",
 };
 
-test("exposes one replaceable open-owner session boundary", async () => {
+test("exposes guest and admin states through one authentication boundary", async () => {
+  const guestResponse = await request("session", { authenticated: false });
+  assert.equal(guestResponse.status, 200);
+  const guest = await body(guestResponse);
+  assert.equal(guest.authentication, "guest");
+  assert.equal(guest.actor, null);
+  assert.equal(guest.capabilities.rate, false);
+
   const response = await request("session");
   assert.equal(response.status, 200);
   const payload = await body(response);
-  assert.equal(payload.authentication, "open-owner");
-  assert.deepEqual(payload.capabilities, { rate: true, hide: true, manage_rules: true });
+  assert.equal(payload.authentication, "admin");
+  assert.equal(payload.actor, "owner:primary-v1");
+  assert.deepEqual(payload.capabilities, {
+    rate: true,
+    hide: true,
+    manage_rules: true,
+    manage_auth: true,
+  });
   assert.match(response.headers.get("cache-control"), /no-store/);
+});
+
+test("denies owner reads and writes to guests", async () => {
+  const db = new MockDatabase();
+  const readResponse = await request("feedback", { db, authenticated: false });
+  assert.equal(readResponse.status, 401);
+
+  const writeResponse = await request("feedback", {
+    method: "POST",
+    body: {
+      post_key: db.postKey,
+      rating_level: 1,
+      idempotency_key: "feedback:guest-denied",
+    },
+    headers: writeHeaders,
+    db,
+    authenticated: false,
+  });
+  assert.equal(writeResponse.status, 401);
+  assert.equal(db.feedback.length, 0);
 });
 
 test("records four-level feedback and handles exact idempotent retries", async () => {
@@ -235,7 +288,7 @@ test("records four-level feedback and handles exact idempotent retries", async (
   });
   assert.equal(first.status, 201);
   assert.equal((await body(first)).item.rating_level, -2);
-  assert.equal(db.feedback[0].actor, "owner:open-v1");
+  assert.equal(db.feedback[0].actor, "owner:primary-v1");
   const retry = await request("feedback", {
     method: "POST", body: feedbackBody, headers: writeHeaders, db,
   });
