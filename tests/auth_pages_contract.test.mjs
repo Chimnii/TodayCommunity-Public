@@ -55,9 +55,16 @@ test("gates existing owner controls with guest, authenticated, and admin state",
 });
 
 test("serves a password-only admin manager at the unlinked admin route", () => {
+  const loginPanel = /<section class="login-panel" id="login-panel"[\s\S]*?<\/section>/u
+    .exec(adminHtml)?.[0];
+  assert.ok(loginPanel);
   assert.match(adminHtml, /id="login-form"/u);
   assert.match(adminHtml, /id="admin-password"[^>]*type="password"/su);
   assert.doesNotMatch(adminHtml, /(?:name|id)="(?:user|username|email)"/iu);
+  assert.match(loginPanel, /href="\/">돌아가기<\/a>/u);
+  assert.match(loginPanel, /placeholder="비밀번호"/u);
+  assert.doesNotMatch(loginPanel, /<h[1-6]|TodayCommunity|시크릿 링크|공개 페이지/u);
+  assert.doesNotMatch(adminHtml, /class="admin-header"/u);
   assert.match(adminHtml, /id="management-panel"[^>]*hidden/u);
   assert.match(adminHtml, /id="create-form"/u);
   assert.match(adminHtml, /id="link-list"/u);

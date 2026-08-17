@@ -39,8 +39,8 @@ select {
   padding: 40px 0 72px;
 }
 
-.admin-header,
 .management-heading,
+.management-actions,
 .links-heading,
 .secret-copy-row,
 .link-card,
@@ -49,7 +49,6 @@ select {
   align-items: center;
 }
 
-.admin-header,
 .management-heading {
   justify-content: space-between;
   gap: 24px;
@@ -83,25 +82,6 @@ p {
   line-height: 1.55;
 }
 
-.eyebrow {
-  margin-bottom: 4px;
-  color: var(--primary);
-  font-size: 13px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.home-link {
-  color: var(--primary);
-  font-weight: 700;
-  text-decoration: none;
-}
-
-.home-link:hover {
-  text-decoration: underline;
-}
-
 .panel {
   margin-bottom: 20px;
   padding: 24px;
@@ -111,13 +91,40 @@ p {
   box-shadow: 0 8px 24px rgb(24 39 58 / 5%);
 }
 
-#login-panel {
-  width: min(480px, 100%);
+.login-panel {
+  display: grid;
+  width: min(420px, 100%);
+  gap: 14px;
+  margin: max(24px, 12vh) auto 0;
+  padding: 22px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgb(24 39 58 / 5%);
+}
+
+.back-link {
+  justify-self: start;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 form {
   display: grid;
   gap: 16px;
+}
+
+#login-form {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
 }
 
 .create-form {
@@ -153,12 +160,16 @@ a:focus-visible {
 }
 
 .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-height: 42px;
   padding: 9px 15px;
   border: 1px solid transparent;
   border-radius: 8px;
   cursor: pointer;
   font-weight: 750;
+  text-decoration: none;
 }
 
 .button:disabled {
@@ -192,6 +203,15 @@ a:focus-visible {
   margin: 12px 0 0;
   color: var(--muted);
   font-size: 14px;
+}
+
+.status:empty {
+  display: none;
+}
+
+.management-actions {
+  flex: 0 0 auto;
+  gap: 8px;
 }
 
 .status[data-kind="error"] {
@@ -293,9 +313,12 @@ a:focus-visible {
     padding-top: 24px;
   }
 
-  .admin-header,
   .management-heading {
     align-items: flex-start;
+  }
+
+  #login-form {
+    grid-template-columns: 1fr;
   }
 
   .create-form {
