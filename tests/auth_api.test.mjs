@@ -256,6 +256,30 @@ test("logs in the single admin and enforces the same-origin write contract", asy
   assert.equal((await session.json()).state, "admin");
 });
 
+test("rejects verifier costs above the Cloudflare Pages PBKDF2 limit", async () => {
+  const db = new MockDatabase();
+  const originalConsoleError = console.error;
+  console.error = () => {};
+  try {
+    const response = await request("admin/login", {
+      method: "POST",
+      body: { password: ADMIN_PASSWORD },
+      db,
+      env: {
+        ...testEnv(db),
+        TC_AUTH_ADMIN_VERIFIER: ADMIN_VERIFIER.replace("$100000$", "$600000$"),
+      },
+    });
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), {
+      error: "인증 서비스를 사용할 수 없습니다.",
+    });
+    assert.equal(db.loginLimits.size, 0);
+  } finally {
+    console.error = originalConsoleError;
+  }
+});
+
 test("issues, exchanges, lists, and revokes one-time secret links", async () => {
   const db = new MockDatabase();
   const login = await request("admin/login", {

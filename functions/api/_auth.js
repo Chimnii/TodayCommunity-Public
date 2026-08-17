@@ -14,6 +14,7 @@ const SESSION_AUDIENCE = "todaycommunity";
 const SECRET_LINK_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/u;
 const SESSION_TOKEN_PATTERN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/u;
 const VERIFIER_PATTERN = /^pbkdf2-sha256\$(\d{6,7})\$([A-Za-z0-9_-]{22})\$([A-Za-z0-9_-]{43})$/u;
+const ADMIN_PASSWORD_PBKDF2_ITERATIONS = 100000;
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
@@ -324,7 +325,7 @@ export async function verifyAdminPassword(password, verifier) {
   const iterations = Number(match[1]);
   const salt = decodeBase64Url(match[2], 16);
   const expected = decodeBase64Url(match[3], 32);
-  if (!salt || !expected || iterations < 100000 || iterations > 1000000) {
+  if (!salt || !expected || iterations !== ADMIN_PASSWORD_PBKDF2_ITERATIONS) {
     throw new AuthConfigurationError("TC_AUTH_ADMIN_VERIFIER is invalid");
   }
   const key = await runtimeCrypto().subtle.importKey(
