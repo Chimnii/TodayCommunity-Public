@@ -626,6 +626,31 @@ class CrawlCycleTests(unittest.TestCase):
         )
         self.assertFalse(snapshot.coverage_ordered)
 
+    def test_malformed_numeric_row_keeps_valid_posts_but_blocks_coverage(self) -> None:
+        pages = {
+            1: page_html(
+                row(110, "2026-07-16 20:59:00", upvotes=4),
+                row(109, "", upvotes=4),
+                row(108, "2026-07-16 20:58:00", upvotes=4),
+            )
+        }
+        settings = config()
+        cycle = CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=settings,
+            runtime=runtime(settings),
+            fetcher=MappingFetcher(pages),
+            cycle_started_at=FIXED_NOW,
+        )
+
+        snapshot = cycle._fetch_page(1, HOT_PHASE)
+
+        self.assertEqual(
+            [post.external_post_id for post in snapshot.posts],
+            ["110", "108"],
+        )
+        self.assertFalse(snapshot.coverage_ordered)
+
     def test_unknown_non_numeric_row_cannot_stop_hot_scan_early(self) -> None:
         unknown_row = """
         <tr class="ub-content" data-no="" data-type="">

@@ -7,6 +7,7 @@ const GAME_NEWS_WORKFLOW = "scan-game-news.yml";
 
 export const GITHUB_API_VERSION = "2022-11-28";
 export const RECENT_DISPATCH_WINDOW_MS = 10 * 60 * 1000;
+export const STALE_QUEUED_RUN_MS = 45 * 60 * 1000;
 
 export const SCHEDULES = Object.freeze({
   "7,22,37,52 * * * *": Object.freeze({
@@ -79,12 +80,31 @@ function isRecentSameDispatch(run, workflow, ref, nowMs, windowMs) {
   return ageMs >= 0 && ageMs <= windowMs;
 }
 
+function isStaleQueuedRun(run, ref, nowMs, staleQueuedMs) {
+  if (
+    run?.status !== "queued" ||
+    run?.head_branch !== ref ||
+    run?.id === undefined ||
+    run?.id === null
+  ) {
+    return false;
+  }
+
+  const createdAtMs = Date.parse(run.created_at);
+  if (!Number.isFinite(createdAtMs)) {
+    return false;
+  }
+  const ageMs = nowMs - createdAtMs;
+  return ageMs >= staleQueuedMs;
+}
+
 export function decideDispatch({
   runs,
   schedule,
   ref,
   nowMs,
   recentWindowMs = RECENT_DISPATCH_WINDOW_MS,
+  staleQueuedMs = STALE_QUEUED_RUN_MS,
   managedWorkflows = PUBLIC_MANAGED_WORKFLOWS,
 }) {
   const recentSameDispatch = runs.find((run) =>
@@ -108,25 +128,30 @@ export function decideDispatch({
     (run) =>
       isActiveRun(run) && managedWorkflows.has(workflowFileForRun(run)),
   );
-  if (schedule.kind !== "backfill" && activeManagedRuns.length > 0) {
-    return {
-      action: "skip",
-      reason: "managed_workflow_active",
-      runId: activeManagedRuns[0].id,
-    };
-  }
-
-  if (schedule.kind === "backfill") {
-    const activeBackfill = activeManagedRuns.find(
-      (run) => workflowFileForRun(run) === schedule.workflow,
+  const blockingRuns = schedule.kind === "backfill"
+    ? activeManagedRuns.filter(
+        (run) => workflowFileForRun(run) === schedule.workflow,
+      )
+    : activeManagedRuns;
+  if (blockingRuns.length > 0) {
+    const protectedRun = blockingRuns.find(
+      (run) => !isStaleQueuedRun(run, ref, nowMs, staleQueuedMs),
     );
-    if (activeBackfill) {
+    if (protectedRun) {
       return {
         action: "skip",
-        reason: "backfill_active",
-        runId: activeBackfill.id,
+        reason:
+          schedule.kind === "backfill"
+            ? "backfill_active"
+            : "managed_workflow_active",
+        runId: protectedRun.id,
       };
     }
+    return {
+      action: "replace",
+      reason: "stale_queued_run",
+      runIds: blockingRuns.map((run) => run.id),
+    };
   }
 
   return { action: "dispatch" };
@@ -235,7 +260,8 @@ async function githubRequest(fetchImpl, url, options) {
   if (response.status === 204) {
     return null;
   }
-  return response.json();
+  const responseBody = await response.text();
+  return responseBody.trim() ? JSON.parse(responseBody) : null;
 }
 
 async function dispatchDestination({
@@ -247,6 +273,7 @@ async function dispatchDestination({
   fetchImpl,
   nowMs,
   recentWindowMs,
+  staleQueuedMs,
   inputs,
   configurationError,
 }) {
@@ -277,6 +304,7 @@ async function dispatchDestination({
     ref,
     nowMs,
     recentWindowMs,
+    staleQueuedMs,
     managedWorkflows,
   });
   if (decision.action === "skip") {
@@ -289,6 +317,18 @@ async function dispatchDestination({
       reason: decision.reason,
       runId: decision.runId,
     };
+  }
+
+  if (decision.action === "replace") {
+    for (const runId of decision.runIds) {
+      const cancelUrl =
+        `${GITHUB_API_ROOT}/repos/${repositoryPath}/actions/runs/` +
+        `${encodeURIComponent(runId)}/cancel`;
+      await githubRequest(fetchImpl, cancelUrl, {
+        method: "POST",
+        headers: githubHeaders(token),
+      });
+    }
   }
 
   const dispatchUrl =
@@ -304,14 +344,22 @@ async function dispatchDestination({
     body: JSON.stringify(body),
   });
 
-  return {
+  const result = {
     destination,
     repository,
-    status: "dispatched",
+    status:
+      decision.action === "replace"
+        ? "replaced_stale_queued"
+        : "dispatched",
     kind: schedule.kind,
     workflow: schedule.workflow,
     ref,
   };
+  if (decision.action === "replace") {
+    result.reason = decision.reason;
+    result.canceledRunIds = decision.runIds;
+  }
+  return result;
 }
 
 export class ScheduledDispatchError extends AggregateError {
@@ -335,6 +383,7 @@ export async function dispatchScheduledWorkflow({
   fetchImpl = fetch,
   now = () => Date.now(),
   recentWindowMs = RECENT_DISPATCH_WINDOW_MS,
+  staleQueuedMs = STALE_QUEUED_RUN_MS,
 }) {
   const schedule = workflowForCron(cron);
   const nowMs = now();
@@ -352,6 +401,7 @@ export async function dispatchScheduledWorkflow({
         fetchImpl,
         nowMs,
         recentWindowMs,
+        staleQueuedMs,
       }),
     ),
   );

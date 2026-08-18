@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   GITHUB_API_VERSION,
   SCHEDULES,
+  STALE_QUEUED_RUN_MS,
   ScheduledDispatchError,
   default as worker,
   decideDispatch,
@@ -416,7 +417,7 @@ test("FM and game-news managed runs remain independent in the same private repos
   assert.equal(hotResult.destinations[1].status, "dispatched");
 });
 
-test("an active game-news run suppresses only a new game-news dispatch", async () => {
+test("a fresh queued game-news run suppresses only a new game-news dispatch", async () => {
   const calls = [];
   const result = await dispatchScheduledWorkflow({
     cron: "17 * * * *",
@@ -435,7 +436,7 @@ test("an active game-news run suppresses only a new game-news dispatch", async (
             status: "queued",
             head_branch: "main",
             path: ".github/workflows/scan-game-news.yml",
-            created_at: "2026-07-19T00:00:00Z",
+            created_at: "2026-07-20T00:00:00Z",
           },
         ],
       });
@@ -455,7 +456,87 @@ test("an active game-news run suppresses only a new game-news dispatch", async (
   });
 });
 
-test("an offline queued FM run does not suppress an eligible public DC dispatch", async () => {
+test("a stale queued run is canceled before its replacement is dispatched", async () => {
+  const calls = [];
+  const result = await dispatchScheduledWorkflow({
+    cron: "7,22,37,52 * * * *",
+    env: ENV,
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      if (options.method === "GET") {
+        return jsonResponse({
+          workflow_runs: [
+            {
+              id: 704,
+              event: "workflow_dispatch",
+              status: "queued",
+              head_branch: "main",
+              path: ".github/workflows/scan-dcinside.yml",
+              created_at: new Date(NOW - STALE_QUEUED_RUN_MS).toISOString(),
+            },
+          ],
+        });
+      }
+      if (url.endsWith("/actions/runs/704/cancel")) {
+        return new Response(null, { status: 202 });
+      }
+      return noContentResponse();
+    },
+    now: () => NOW,
+  });
+
+  assert.equal(calls.length, 3);
+  assert.equal(calls[1].options.method, "POST");
+  assert.match(calls[1].url, /\/actions\/runs\/704\/cancel$/);
+  assert.equal(calls[2].options.method, "POST");
+  assert.match(calls[2].url, /scan-dcinside\.yml\/dispatches$/);
+  assert.deepEqual(result.destinations[0], {
+    destination: "dcinside",
+    repository: "TodayCommunity-Public",
+    status: "replaced_stale_queued",
+    kind: "hot",
+    workflow: "scan-dcinside.yml",
+    ref: "main",
+    reason: "stale_queued_run",
+    canceledRunIds: [704],
+  });
+});
+
+test("a failed stale-run cancellation does not create a replacement", async () => {
+  const calls = [];
+  await assert.rejects(
+    dispatchScheduledWorkflow({
+      cron: "7,22,37,52 * * * *",
+      env: ENV,
+      fetchImpl: async (url, options) => {
+        calls.push({ url, options });
+        if (options.method === "GET") {
+          return jsonResponse({
+            workflow_runs: [
+              {
+                id: 705,
+                event: "workflow_dispatch",
+                status: "queued",
+                head_branch: "main",
+                path: ".github/workflows/scan-dcinside.yml",
+                created_at: "2026-07-19T00:00:00Z",
+              },
+            ],
+          });
+        }
+        return new Response("cancel unavailable", { status: 500 });
+      },
+      now: () => NOW,
+    }),
+    ScheduledDispatchError,
+  );
+
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].url, /\/actions\/runs\/705\/cancel$/);
+  assert.ok(calls.every(({ url }) => !url.includes("/actions/workflows/")));
+});
+
+test("a fresh queued FM run does not suppress an eligible public DC dispatch", async () => {
   const calls = [];
   const result = await dispatchScheduledWorkflow({
     cron: "7,22,37,52 * * * *",
@@ -480,7 +561,7 @@ test("an offline queued FM run does not suppress an eligible public DC dispatch"
             status: "queued",
             head_branch: "main",
             path: ".github/workflows/scan-fmkorea.yml",
-            created_at: "2026-07-19T00:00:00Z",
+            created_at: "2026-07-20T00:00:00Z",
           },
         ],
       });
@@ -583,9 +664,10 @@ test("a public active run does not suppress an eligible private FM dispatch", as
         workflow_runs: [
           {
             id: 505,
-            event: "schedule",
-            status: "in_progress",
-            path: ".github/workflows/scan-dcinside-backfill.yml",
+          event: "schedule",
+          status: "in_progress",
+          path: ".github/workflows/scan-dcinside-backfill.yml",
+          created_at: "2026-07-19T00:00:00Z",
           },
         ],
       });
@@ -625,6 +707,31 @@ test("Hot skips while another managed workflow is active", () => {
     action: "skip",
     reason: "managed_workflow_active",
     runId: 202,
+  });
+});
+
+test("a stale queued run on another ref is never canceled", () => {
+  const schedule = SCHEDULES["7,22,37,52 * * * *"];
+  const decision = decideDispatch({
+    runs: [
+      {
+        id: 203,
+        event: "workflow_dispatch",
+        status: "queued",
+        head_branch: "feature/parser-check",
+        path: ".github/workflows/scan-dcinside.yml",
+        created_at: "2026-07-19T00:00:00Z",
+      },
+    ],
+    schedule: { kind: schedule.kind, workflow: schedule.workflow },
+    ref: "main",
+    nowMs: NOW,
+  });
+
+  assert.deepEqual(decision, {
+    action: "skip",
+    reason: "managed_workflow_active",
+    runId: 203,
   });
 });
 

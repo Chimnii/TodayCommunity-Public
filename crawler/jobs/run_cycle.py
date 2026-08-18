@@ -1223,7 +1223,7 @@ class CrawlCycle:
         if not parser.diagnostics.is_collection_safe:
             details = "; ".join(error.message for error in parser.diagnostics.errors[:3])
             raise CrawlSourceError(
-                "Page could not be completely parsed for collection "
+                "Page had no safely isolatable collection result "
                 f"(page={page}, candidates={parser.diagnostics.candidate_rows}, "
                 f"parsed={parser.diagnostics.parsed_rows}, "
                 f"unique_canonical_ids={parser.diagnostics.has_unique_canonical_ids}, "

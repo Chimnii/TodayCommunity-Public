@@ -309,7 +309,45 @@ class DcinsideListParserTests(unittest.TestCase):
         self.assertEqual(diagnostics.errors[0].external_post_id, "105")
         self.assertEqual(diagnostics.errors[0].code, "missing_datetime")
         self.assertFalse(diagnostics.is_complete)
+        self.assertFalse(diagnostics.is_collection_safe)
         self.assertFalse(diagnostics.is_coverage_safe)
+
+    def test_malformed_numeric_candidate_is_isolated_from_valid_rows(self) -> None:
+        parser = DcinsideListParser(BASE_URL, now=FIXED_NOW)
+        parser.feed(
+            regular_row("105")
+            + regular_row("104", date_text="", date_title="")
+            + regular_row("103")
+        )
+
+        diagnostics = parser.diagnostics
+        self.assertEqual(
+            [post.external_post_id for post in parser.posts],
+            ["105", "103"],
+        )
+        self.assertEqual(diagnostics.candidate_rows, 3)
+        self.assertEqual(diagnostics.parsed_rows, 2)
+        self.assertEqual(diagnostics.failed_rows, 1)
+        self.assertEqual(
+            [(error.external_post_id, error.code) for error in diagnostics.errors],
+            [("104", "missing_datetime")],
+        )
+        self.assertTrue(diagnostics.is_collection_safe)
+        self.assertFalse(diagnostics.is_coverage_safe)
+
+    def test_unclosed_numeric_candidate_cannot_use_row_isolation(self) -> None:
+        parser = DcinsideListParser(BASE_URL, now=FIXED_NOW)
+        parser.feed(regular_row("105") + regular_row("104").rsplit("</tr>", 1)[0])
+        parser.close()
+
+        self.assertEqual(
+            [post.external_post_id for post in parser.posts],
+            ["105"],
+        )
+        self.assertEqual(parser.diagnostics.failed_rows, 1)
+        self.assertEqual(parser.diagnostics.errors, [])
+        self.assertFalse(parser.diagnostics.is_collection_safe)
+        self.assertFalse(parser.diagnostics.is_coverage_safe)
 
     def test_invalid_datetime_is_diagnostic_instead_of_parser_failure(self) -> None:
         parser = DcinsideListParser(BASE_URL, now=FIXED_NOW)

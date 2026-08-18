@@ -95,14 +95,22 @@ class DcinsideParseDiagnostics:
 
     @property
     def is_collection_safe(self) -> bool:
-        # Preserve every fully parsed canonical post even when an unfamiliar
-        # non-numeric table row is present. Such rows remain diagnostics errors
-        # and therefore cannot make the page authoritative coverage evidence.
+        # Preserve independently validated canonical posts when another numeric
+        # row fails with exactly one row-local diagnostic. An unclosed/truncated
+        # row has no such diagnostic and remains fail-closed. Any partial page is
+        # still forbidden from becoming authoritative coverage evidence.
+        candidate_ids = set(self.candidate_post_ids)
+        numeric_row_error_ids = [
+            error.external_post_id
+            for error in self.errors
+            if error.code != "non_numeric_post_id"
+        ]
         return (
-            self.candidate_rows > 0
-            and self.failed_rows == 0
+            self.parsed_rows > 0
             and self.has_unique_canonical_ids
-            and all(error.code == "non_numeric_post_id" for error in self.errors)
+            and len(numeric_row_error_ids) == self.failed_rows
+            and len(set(numeric_row_error_ids)) == len(numeric_row_error_ids)
+            and all(post_id in candidate_ids for post_id in numeric_row_error_ids)
         )
 
     @property

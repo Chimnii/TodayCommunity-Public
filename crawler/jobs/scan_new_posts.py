@@ -138,7 +138,7 @@ def scan_target(target: TargetBoard, pages: int, page_delay_seconds: float) -> D
         parser.feed(html)
         if not parser.diagnostics.is_collection_safe:
             raise CrawlSourceError(
-                f"Page {page} could not be parsed completely for collection."
+                f"Page {page} had no safely isolatable collection result."
             )
 
         scanned_posts += len(parser.posts)
