@@ -99,6 +99,14 @@ const state = {
   pendingFeedback: new Set(),
   feedbackDialogPost: null,
   feedbackDialogTrigger: null,
+  preferenceDocument: {
+    content: "",
+    version: 0,
+    updatedAt: null,
+    maxLength: 1000,
+    loaded: false,
+  },
+  preferenceSaving: false,
   undoAction: null,
   toastTimer: null,
 };
@@ -138,11 +146,14 @@ const elements = {
   rulesOpen: document.querySelector("#rules-open"),
   rulesDialog: document.querySelector("#rules-dialog"),
   rulesClose: document.querySelector("#rules-close"),
-  ruleForm: document.querySelector("#rule-form"),
-  ruleText: document.querySelector("#rule-text"),
-  ruleStrength: document.querySelector("#rule-strength"),
+  preferenceForm: document.querySelector("#preference-form"),
+  preferenceDocument: document.querySelector("#preference-document"),
+  preferenceUpdated: document.querySelector("#preference-updated"),
+  preferenceCount: document.querySelector("#preference-count"),
+  preferenceClear: document.querySelector("#preference-clear"),
+  preferenceReset: document.querySelector("#preference-reset"),
+  preferenceSave: document.querySelector("#preference-save"),
   rulesStatus: document.querySelector("#rules-status"),
-  rulesList: document.querySelector("#rules-list"),
   hiddenOpen: document.querySelector("#hidden-open"),
   hiddenCount: document.querySelector("#hidden-count"),
   hiddenDialog: document.querySelector("#hidden-dialog"),
@@ -1189,7 +1200,9 @@ async function fetchGameNewsJson(url, options = {}) {
     payload = null;
   }
   if (!response.ok) {
-    throw new Error(payload?.error || `HTTP ${response.status}`);
+    const error = new Error(payload?.error || `HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
   }
   return payload;
 }
@@ -1680,16 +1693,26 @@ function bindEvents() {
     elements.runsOpen.focus();
   });
   elements.rulesOpen.addEventListener("click", openRulesDialog);
-  elements.rulesClose.addEventListener("click", () => elements.rulesDialog.close());
+  elements.rulesClose.addEventListener("click", requestCloseRulesDialog);
   elements.rulesDialog.addEventListener("click", (event) => {
     if (event.target === elements.rulesDialog) {
-      elements.rulesDialog.close();
+      requestCloseRulesDialog();
     }
   });
-  elements.ruleForm.addEventListener("submit", (event) => {
+  elements.rulesDialog.addEventListener("cancel", (event) => {
     event.preventDefault();
-    void addManualRule();
+    requestCloseRulesDialog();
   });
+  elements.rulesDialog.addEventListener("close", () => {
+    elements.rulesOpen.focus({ preventScroll: true });
+  });
+  elements.preferenceForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    void savePreferenceDocument();
+  });
+  elements.preferenceDocument.addEventListener("input", syncPreferenceEditor);
+  elements.preferenceClear.addEventListener("click", clearPreferenceDocumentDraft);
+  elements.preferenceReset.addEventListener("click", resetPreferenceDocumentDraft);
   elements.hiddenOpen.addEventListener("click", openHiddenDialog);
   elements.hiddenClose.addEventListener("click", () => elements.hiddenDialog.close());
   elements.hiddenDialog.addEventListener("click", (event) => {
@@ -1734,7 +1757,6 @@ function bindEvents() {
       for (const dialog of [
         elements.runsDrawer,
         elements.feedbackDialog,
-        elements.rulesDialog,
         elements.hiddenDialog,
       ]) {
         if (dialog.open) {
@@ -1805,91 +1827,112 @@ function openRulesDialog() {
     return;
   }
   elements.rulesDialog.showModal();
-  elements.rulesStatus.textContent = "규칙을 불러오는 중입니다.";
-  elements.ruleText.focus();
-  void refreshRules();
+  elements.rulesStatus.textContent = "선호 전문을 불러오는 중입니다.";
+  state.preferenceDocument.loaded = false;
+  syncPreferenceEditor();
+  void refreshPreferenceDocument();
 }
 
-async function refreshRules() {
-  try {
-    const payload = await fetchGameNewsJson("/api/game-news/rules");
-    renderRules(Array.isArray(payload?.items) ? payload.items : []);
-    elements.rulesStatus.textContent = payload?.items?.length
-      ? "현재 적용 중인 규칙입니다."
-      : "아직 페이지에서 추가한 규칙이 없습니다.";
-  } catch (error) {
-    elements.rulesStatus.textContent = `규칙을 불러오지 못했습니다: ${error.message}`;
-    elements.rulesList.replaceChildren();
-  }
-}
-
-function renderRules(rules) {
-  elements.rulesList.replaceChildren();
-  for (const rule of rules) {
-    const item = document.createElement("div");
-    item.className = "management-item";
-    const copy = document.createElement("div");
-    copy.className = "management-item-copy";
-    const text = document.createElement("p");
-    text.textContent = String(rule.rule_text || "");
-    const meta = document.createElement("p");
-    meta.className = "management-item-meta";
-    meta.textContent = rule.strength === "strong" ? "강하게 반영" : "경향으로 참고";
-    copy.append(text, meta);
-    const retract = document.createElement("button");
-    retract.className = "button button-secondary";
-    retract.type = "button";
-    retract.textContent = "해제";
-    retract.addEventListener("click", () => {
-      void retractManualRule(String(rule.rule_key || ""), retract);
-    });
-    item.append(copy, retract);
-    elements.rulesList.append(item);
-  }
-}
-
-async function addManualRule() {
-  const ruleText = String(elements.ruleText.value || "").trim();
-  if (!ruleText) {
-    elements.ruleText.focus();
+function requestCloseRulesDialog() {
+  if (
+    isPreferenceDocumentDirty()
+    && !window.confirm("저장하지 않은 선호 전문 변경을 버리고 닫을까요?")
+  ) {
     return;
   }
-  const submit = elements.ruleForm.querySelector('button[type="submit"]');
-  submit.disabled = true;
-  elements.rulesStatus.textContent = "규칙을 저장하는 중입니다.";
+  elements.rulesDialog.close();
+}
+
+function isPreferenceDocumentDirty() {
+  return state.preferenceDocument.loaded
+    && elements.preferenceDocument.value !== state.preferenceDocument.content;
+}
+
+function syncPreferenceEditor() {
+  const value = String(elements.preferenceDocument.value || "");
+  const loaded = state.preferenceDocument.loaded;
+  const dirty = isPreferenceDocumentDirty();
+  const disabled = !loaded || state.preferenceSaving;
+  elements.preferenceCount.textContent = numberFormatter.format(value.length);
+  elements.preferenceDocument.disabled = disabled;
+  elements.preferenceSave.disabled = disabled || !dirty;
+  elements.preferenceReset.disabled = disabled || !dirty;
+  elements.preferenceClear.disabled = disabled || !value;
+}
+
+function renderPreferenceDocument(document) {
+  const content = typeof document?.content === "string" ? document.content : "";
+  const version = Number(document?.version);
+  const maxLength = Number(document?.max_length);
+  state.preferenceDocument = {
+    content,
+    version: Number.isSafeInteger(version) && version >= 0 ? version : 0,
+    updatedAt: document?.updated_at || null,
+    maxLength: Number.isSafeInteger(maxLength) && maxLength > 0 ? maxLength : 1000,
+    loaded: true,
+  };
+  elements.preferenceDocument.maxLength = state.preferenceDocument.maxLength;
+  elements.preferenceDocument.value = content;
+  const savedAt = getDateTime(state.preferenceDocument.updatedAt);
+  elements.preferenceUpdated.textContent = state.preferenceDocument.version
+    ? `마지막 저장 ${dateTimeFormatter.format(savedAt)} · 버전 ${numberFormatter.format(state.preferenceDocument.version)}`
+    : "아직 저장된 선호 전문이 없습니다.";
+  syncPreferenceEditor();
+}
+
+async function refreshPreferenceDocument() {
   try {
-    const payload = await postGameNewsJson("/api/game-news/rules", {
-      rule_key: createRequestKey("owner-rule"),
-      action: "set",
-      rule_text: ruleText,
-      strength: elements.ruleStrength.value,
-      idempotency_key: createRequestKey("rule-set"),
-    });
-    elements.ruleForm.reset();
-    renderRules(Array.isArray(payload?.items) ? payload.items : []);
-    elements.rulesStatus.textContent = "규칙을 추가했습니다. 다음 수집부터 참고합니다.";
-    elements.ruleText.focus();
+    const payload = await fetchGameNewsJson("/api/game-news/preferences");
+    renderPreferenceDocument(payload?.document);
+    elements.rulesStatus.textContent = state.preferenceDocument.content
+      ? "표시된 전문 전체가 현재 적용 중입니다."
+      : "현재 선호 전문이 비어 있습니다.";
+    elements.preferenceDocument.focus();
   } catch (error) {
-    elements.rulesStatus.textContent = `규칙을 저장하지 못했습니다: ${error.message}`;
-  } finally {
-    submit.disabled = false;
+    elements.rulesStatus.textContent = `선호 전문을 불러오지 못했습니다: ${error.message}`;
+    state.preferenceDocument.loaded = false;
+    syncPreferenceEditor();
+    elements.rulesClose.focus();
   }
 }
 
-async function retractManualRule(ruleKey, button) {
-  button.disabled = true;
-  elements.rulesStatus.textContent = "규칙을 해제하는 중입니다.";
+function clearPreferenceDocumentDraft() {
+  elements.preferenceDocument.value = "";
+  syncPreferenceEditor();
+  elements.rulesStatus.textContent = "저장을 누르면 선호 전문이 비워집니다.";
+  elements.preferenceDocument.focus();
+}
+
+function resetPreferenceDocumentDraft() {
+  elements.preferenceDocument.value = state.preferenceDocument.content;
+  syncPreferenceEditor();
+  elements.rulesStatus.textContent = "저장된 내용으로 되돌렸습니다.";
+  elements.preferenceDocument.focus();
+}
+
+async function savePreferenceDocument() {
+  if (!isPreferenceDocumentDirty() || state.preferenceSaving) {
+    return;
+  }
+  state.preferenceSaving = true;
+  syncPreferenceEditor();
+  elements.rulesStatus.textContent = "선호 전문을 저장하는 중입니다.";
   try {
-    const payload = await postGameNewsJson("/api/game-news/rules", {
-      rule_key: ruleKey,
-      action: "retract",
-      idempotency_key: createRequestKey("rule-retract"),
+    const payload = await postGameNewsJson("/api/game-news/preferences", {
+      content: elements.preferenceDocument.value,
+      base_version: state.preferenceDocument.version,
+      idempotency_key: createRequestKey("preference-document"),
     });
-    renderRules(Array.isArray(payload?.items) ? payload.items : []);
-    elements.rulesStatus.textContent = "규칙을 해제했습니다.";
+    renderPreferenceDocument(payload?.document);
+    elements.rulesStatus.textContent = state.preferenceDocument.content
+      ? "선호 전문을 저장했습니다. 다음 수집부터 적용합니다."
+      : "선호 전문을 비웠습니다. 다음 수집부터 명시 규칙 없이 판단합니다.";
+    elements.preferenceDocument.focus();
   } catch (error) {
-    elements.rulesStatus.textContent = `규칙을 해제하지 못했습니다: ${error.message}`;
-    button.disabled = false;
+    elements.rulesStatus.textContent = `선호 전문을 저장하지 못했습니다: ${error.message}`;
+  } finally {
+    state.preferenceSaving = false;
+    syncPreferenceEditor();
   }
 }
 

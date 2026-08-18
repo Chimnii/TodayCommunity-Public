@@ -259,38 +259,38 @@
       <div class="management-dialog-content">
         <header class="drawer-header">
           <div>
-            <h2 id="rules-title">수동 선호 규칙</h2>
-            <p>기사 하나의 평가로 설명하기 어려운 취향을 문장으로 남깁니다.</p>
+            <h2 id="rules-title">게임 뉴스 선호 전문</h2>
+            <p>다음 수집에서 필터가 참고할 소유자 선호를 한 문서로 관리합니다.</p>
           </div>
           <button class="icon-button" id="rules-close" type="button" aria-label="선호 규칙 닫기">
             <span aria-hidden="true">×</span>
           </button>
         </header>
-        <form class="rule-form" id="rule-form">
-          <label class="filter-control rule-text-control">
-            <span>추가할 규칙</span>
+        <form class="preference-form" id="preference-form">
+          <label class="filter-control preference-document-control">
+            <span>현재 적용 중인 전문</span>
             <textarea
-              id="rule-text"
+              id="preference-document"
               maxlength="1000"
-              rows="4"
-              required
-              placeholder="예: LCK 관련 기사는 역대급 이벤트가 아니라면 가급적 제외해줘."
+              rows="12"
+              disabled
+              placeholder="예: LCK 관련 기사는 역대급 이벤트가 아니라면 수집하지 않는다."
             ></textarea>
           </label>
-          <label class="filter-control">
-            <span>반영 강도</span>
-            <select id="rule-strength">
-              <option value="soft" selected>경향으로 참고</option>
-              <option value="strong">강하게 반영</option>
-            </select>
-          </label>
-          <button class="button button-primary" type="submit">규칙 추가</button>
+          <p class="preference-document-meta">
+            <span id="preference-updated">저장 정보를 불러오는 중입니다.</span>
+            <span><span id="preference-count">0</span>/1000자</span>
+          </p>
+          <div class="preference-actions">
+            <button class="button button-secondary" id="preference-clear" type="button" disabled>전문 비우기</button>
+            <button class="button button-secondary" id="preference-reset" type="button" disabled>변경 취소</button>
+            <button class="button button-primary" id="preference-save" type="submit" disabled>저장</button>
+          </div>
         </form>
         <p class="management-hint">
-          저장소의 기본 선호 파일과 여기에서 추가한 규칙이 함께 적용됩니다. 두 강도 모두 안전·중복 검사보다 우선하지 않습니다.
+          저장한 전문은 다음 수집부터 적용되며 기존 기사는 다시 분류하지 않습니다. 기사 평가와 숨김은 별도의 약한 참고 신호로 사용됩니다.
         </p>
         <p class="management-status" id="rules-status" role="status" aria-live="polite"></p>
-        <div class="management-list" id="rules-list"></div>
       </div>
     </dialog>
 

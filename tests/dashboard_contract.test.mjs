@@ -148,19 +148,26 @@ test("switches article archives to a five-column feedback presentation", () => {
   assert.doesNotMatch(css, /\.post-row \.cell-feedback\s*{[^}]*grid-column:\s*1 \/ -1/s);
 });
 
-test("ships reversible hiding and versioned manual preference controls", () => {
+test("ships reversible hiding and a versioned preference document editor", () => {
   assert.match(html, /id="rules-open"/);
   assert.match(html, /id="hidden-open"/);
   assert.match(html, /id="rules-dialog"/);
+  assert.match(html, /id="preference-document"/);
+  assert.match(html, /id="preference-save"/);
+  assert.match(html, /id="preference-reset"/);
+  assert.match(html, /id="preference-clear"/);
   assert.match(html, /id="hidden-dialog"/);
   assert.match(html, /id="feedback-undo"/);
   assert.match(app, /postGameNewsJson\("\/api\/game-news\/feedback"/);
   assert.match(app, /postGameNewsJson\("\/api\/game-news\/visibility"/);
-  assert.match(app, /postGameNewsJson\("\/api\/game-news\/rules"/);
+  assert.match(app, /fetchGameNewsJson\("\/api\/game-news\/preferences"/);
+  assert.match(app, /postGameNewsJson\("\/api\/game-news\/preferences"/);
+  assert.match(app, /base_version:\s*state\.preferenceDocument\.version/);
   assert.match(app, /action:\s*"restore"/);
-  assert.match(app, /strength:\s*elements\.ruleStrength\.value/);
   assert.match(app, /state\.feedbackByPost\.set/);
   assert.match(app, /"X-TodayCommunity-Write": "1"/);
+  assert.doesNotMatch(html, /id="rule-strength"|id="rules-list"/);
+  assert.doesNotMatch(app, /\/api\/game-news\/rules/);
   assert.doesNotMatch(app, /innerHTML\s*=/);
 });
 

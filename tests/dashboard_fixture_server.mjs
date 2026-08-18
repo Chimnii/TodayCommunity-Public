@@ -15,7 +15,12 @@ const postCount = Number.isInteger(requestedPostCount) && requestedPostCount > 0
   : 73;
 const feedbackByPost = new Map();
 const hiddenPostKeys = new Set();
-const manualRules = new Map();
+let preferenceDocument = {
+  content: "LCK를 포함한 e스포츠 관련 기사는 역대급 이벤트나 중대한 이슈가 아니라면 수집하지 않는다.",
+  version: 1,
+  updated_at: "2026-08-17T16:09:27.289Z",
+  max_length: 1000,
+};
 const ARTICLE_SUBJECTS = Object.freeze([
   "business",
   "development",
@@ -372,8 +377,8 @@ async function handleGameNewsApi(request, requestUrl, response) {
     });
     return;
   }
-  if (request.method === "GET" && resource === "rules") {
-    sendJson(response, { items: [...manualRules.values()] });
+  if (request.method === "GET" && resource === "preferences") {
+    sendJson(response, { document: preferenceDocument });
     return;
   }
   if (request.method !== "POST") {
@@ -400,19 +405,20 @@ async function handleGameNewsApi(request, requestUrl, response) {
     sendJson(response, { item: { post_key: body.post_key, hidden: body.action === "hide" } }, 201);
     return;
   }
-  if (resource === "rules") {
-    if (body.action === "set") {
-      manualRules.set(body.rule_key, {
-        rule_event_id: manualRules.size + 1,
-        rule_key: body.rule_key,
-        rule_text: body.rule_text,
-        strength: body.strength,
-        created_at: new Date().toISOString(),
-      });
-    } else if (body.action === "retract") {
-      manualRules.delete(body.rule_key);
+  if (resource === "preferences") {
+    if (body.base_version !== preferenceDocument.version) {
+      sendJson(response, {
+        error: "다른 기기에서 선호 전문이 변경되었습니다. 최신 내용을 다시 불러와 주세요.",
+      }, 409);
+      return;
     }
-    sendJson(response, { items: [...manualRules.values()] }, 201);
+    preferenceDocument = {
+      content: String(body.content || "").trim(),
+      version: preferenceDocument.version + 1,
+      updated_at: new Date().toISOString(),
+      max_length: 1000,
+    };
+    sendJson(response, { document: preferenceDocument }, 201);
     return;
   }
   sendJson(response, { error: "Unsupported fixture route" }, 404);

@@ -153,24 +153,23 @@ class MockDatabase {
       return [{ id: row.id }];
     }
     if (sql.includes("FROM game_news_manual_rule_events AS r")) {
-      const actor = values[0];
-      const latestByKey = new Map();
-      for (const row of this.rules.filter((entry) => entry.actor === actor)) {
-        latestByKey.set(row.rule_key, row);
-      }
-      return [...latestByKey.values()].filter((row) => row.action === "set").map((row) => ({
-        rule_event_id: row.id,
-        rule_key: row.rule_key,
-        rule_text: row.rule_text,
-        strength: row.strength,
-        created_at: row.created_at,
-      }));
+      const latest = this.rules.filter((entry) => entry.rule_key === values[0]).at(-1);
+      return latest ? [{
+        rule_event_id: latest.id,
+        action: latest.action,
+        rule_text: latest.rule_text,
+        created_at: latest.created_at,
+      }] : [];
     }
     if (sql.includes("FROM game_news_manual_rule_events WHERE idempotency_key")) {
       return this.rules.filter((entry) => entry.idempotency_key === values[0]);
     }
     if (sql.startsWith("INSERT INTO game_news_manual_rule_events")) {
       if (this.rules.some((entry) => entry.idempotency_key === values[5])) return [];
+      const currentVersion = this.rules
+        .filter((entry) => entry.rule_key === values[7])
+        .at(-1)?.id ?? 0;
+      if (currentVersion !== values[8]) return [];
       const row = {
         id: this.rules.length + 1,
         rule_key: values[0],
@@ -272,6 +271,22 @@ test("denies owner reads and writes to guests", async () => {
   });
   assert.equal(writeResponse.status, 401);
   assert.equal(db.feedback.length, 0);
+
+  const preferenceRead = await request("preferences", { db, authenticated: false });
+  assert.equal(preferenceRead.status, 401);
+  const preferenceWrite = await request("preferences", {
+    method: "POST",
+    body: {
+      content: "LCK 기사는 큰 사건만 수집한다.",
+      base_version: 0,
+      idempotency_key: "preference:guest-denied",
+    },
+    headers: writeHeaders,
+    db,
+    authenticated: false,
+  });
+  assert.equal(preferenceWrite.status, 401);
+  assert.equal(db.rules.length, 0);
 });
 
 test("records four-level feedback and handles exact idempotent retries", async () => {
@@ -351,33 +366,96 @@ test("keeps X visibility separate, reversible, and globally projected", async ()
   assert.equal((await body(await request("hidden", { db }))).items.length, 0);
 });
 
-test("sets and retracts versioned manual preference rules", async () => {
+test("loads, versions, clears, and conflict-checks one preference document", async () => {
   const db = new MockDatabase();
-  const ruleKey = "owner-rule:12345678";
-  const setResponse = await request("rules", {
+  const emptyResponse = await request("preferences", { db });
+  assert.equal(emptyResponse.status, 200);
+  assert.deepEqual((await body(emptyResponse)).document, {
+    content: "",
+    version: 0,
+    updated_at: null,
+    max_length: 1000,
+  });
+
+  const setBody = {
+    content: "LCK 기사는 큰 사건만 수집해줘.",
+    base_version: 0,
+    idempotency_key: "preference:set:1234567890",
+  };
+  const setResponse = await request("preferences", {
     method: "POST",
-    body: {
-      rule_key: ruleKey,
-      action: "set",
-      rule_text: "LCK 기사는 큰 사건만 수집해줘.",
-      strength: "strong",
-      idempotency_key: "rule:set:1234567890",
-    },
+    body: setBody,
     headers: writeHeaders,
     db,
   });
   assert.equal(setResponse.status, 201);
-  assert.equal((await body(setResponse)).items.length, 1);
-  const retractResponse = await request("rules", {
+  const setDocument = (await body(setResponse)).document;
+  assert.equal(setDocument.content, "LCK 기사는 큰 사건만 수집해줘.");
+  assert.equal(setDocument.version, 1);
+  assert.equal(db.rules[0].rule_key, "owner-preferences-document-v1");
+  assert.equal(db.rules[0].actor, "owner:primary-v1");
+
+  const retryResponse = await request("preferences", {
+    method: "POST",
+    body: setBody,
+    headers: writeHeaders,
+    db,
+  });
+  assert.equal(retryResponse.status, 201);
+  assert.equal((await body(retryResponse)).document.version, 1);
+  assert.equal(db.rules.length, 1);
+
+  const oversizedResponse = await request("preferences", {
     method: "POST",
     body: {
-      rule_key: ruleKey,
-      action: "retract",
-      idempotency_key: "rule:retract:123456",
+      content: "가".repeat(1001),
+      base_version: 1,
+      idempotency_key: "preference:oversized:1234",
     },
     headers: writeHeaders,
     db,
   });
-  assert.equal(retractResponse.status, 201);
-  assert.equal((await body(retractResponse)).items.length, 0);
+  assert.equal(oversizedResponse.status, 400);
+  assert.equal(db.rules.length, 1);
+
+  const editResponse = await request("preferences", {
+    method: "POST",
+    body: {
+      content: "LCK를 포함한 e스포츠 기사는 큰 사건만 수집해줘.",
+      base_version: 1,
+      idempotency_key: "preference:edit:12345678",
+    },
+    headers: writeHeaders,
+    db,
+  });
+  assert.equal(editResponse.status, 201);
+  assert.equal((await body(editResponse)).document.version, 2);
+
+  const conflictResponse = await request("preferences", {
+    method: "POST",
+    body: {
+      content: "오래된 화면의 덮어쓰기",
+      base_version: 1,
+      idempotency_key: "preference:stale:1234567",
+    },
+    headers: writeHeaders,
+    db,
+  });
+  assert.equal(conflictResponse.status, 409);
+  assert.match((await body(conflictResponse)).error, /다른 기기/);
+  assert.equal(db.rules.length, 2);
+
+  const clearResponse = await request("preferences", {
+    method: "POST",
+    body: {
+      content: "   ",
+      base_version: 2,
+      idempotency_key: "preference:clear:123456",
+    },
+    headers: writeHeaders,
+    db,
+  });
+  assert.equal(clearResponse.status, 201);
+  assert.equal((await body(clearResponse)).document.content, "");
+  assert.equal((await body(await request("preferences", { db }))).document.version, 3);
 });

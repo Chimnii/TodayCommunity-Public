@@ -5,7 +5,7 @@ import {
 
 const POST_KEY_PATTERN = /^[a-f0-9]{32}$/;
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{16,100}$/;
-const RULE_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,99}$/;
+const PREFERENCE_DOCUMENT_RULE_KEY = "owner-preferences-document-v1";
 const RATING_LEVELS = new Set([-2, -1, 1, 2]);
 const FEEDBACK_REASON_CODES = new Set([
   "topic",
@@ -15,10 +15,9 @@ const FEEDBACK_REASON_CODES = new Set([
   "source",
   "other",
 ]);
-const RULE_STRENGTHS = new Set(["soft", "strong"]);
 const MAX_FEEDBACK_KEYS = 100;
 const MAX_HIDDEN_ITEMS = 200;
-const MAX_RULES = 100;
+const MAX_PREFERENCE_DOCUMENT_CHARS = 1000;
 const MAX_BODY_BYTES = 4096;
 
 function jsonResponse(body, status = 200, cookies = []) {
@@ -67,9 +66,12 @@ function normalizeIdempotencyKey(value) {
   return IDEMPOTENCY_KEY_PATTERN.test(key) ? key : null;
 }
 
-function normalizeRuleKey(value) {
-  const key = String(value ?? "").trim();
-  return RULE_KEY_PATTERN.test(key) ? key : null;
+function normalizePreferenceDocument(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const content = value.replace(/\r\n?/gu, "\n").trim();
+  return content.length <= MAX_PREFERENCE_DOCUMENT_CHARS ? content : null;
 }
 
 function normalizeReasonCode(value) {
@@ -431,58 +433,66 @@ async function postVisibility(request, db, actor) {
   }, 201);
 }
 
-async function listRules(db, actor) {
-  return queryAll(
+function preferenceDocumentFromRows(rows) {
+  const row = rows[0];
+  if (!row) {
+    return {
+      content: "",
+      version: 0,
+      updated_at: null,
+      max_length: MAX_PREFERENCE_DOCUMENT_CHARS,
+    };
+  }
+  return {
+    content: row.action === "set" ? String(row.rule_text || "") : "",
+    version: Number(row.rule_event_id),
+    updated_at: row.created_at || null,
+    max_length: MAX_PREFERENCE_DOCUMENT_CHARS,
+  };
+}
+
+async function loadPreferenceDocument(db) {
+  const rows = await queryAll(
     db,
     `
     SELECT
       r.id AS rule_event_id,
-      r.rule_key,
+      r.action,
       r.rule_text,
-      r.strength,
       r.created_at
     FROM game_news_manual_rule_events AS r
-    WHERE r.actor = ?
-      AND r.id = (
-        SELECT MAX(latest.id)
-        FROM game_news_manual_rule_events AS latest
-        WHERE latest.rule_key = r.rule_key
-          AND latest.actor = r.actor
-      )
-      AND r.action = 'set'
-    ORDER BY r.id ASC
-    LIMIT ${MAX_RULES}
+    WHERE r.rule_key = ?
+    ORDER BY r.id DESC
+    LIMIT 1
     `,
-    [actor]
+    [PREFERENCE_DOCUMENT_RULE_KEY]
   );
+  return preferenceDocumentFromRows(rows);
 }
 
-async function getRules(db, actor) {
-  return jsonResponse({ items: await listRules(db, actor) });
+async function getPreferenceDocument(db) {
+  return jsonResponse({ document: await loadPreferenceDocument(db) });
 }
 
-async function postRule(request, db, actor) {
+async function postPreferenceDocument(request, db, actor) {
   const body = await readJsonBody(request);
-  const ruleKey = normalizeRuleKey(body.rule_key);
   const idempotencyKey = normalizeIdempotencyKey(body.idempotency_key);
-  const action = body.action;
-  if (!ruleKey || !idempotencyKey || !["set", "retract"].includes(action)) {
-    throw new RequestError(400, "규칙 요청이 올바르지 않습니다.");
+  const content = normalizePreferenceDocument(body.content);
+  const baseVersion = body.base_version;
+  if (
+    content === null
+    || !idempotencyKey
+    || !Number.isSafeInteger(baseVersion)
+    || baseVersion < 0
+  ) {
+    throw new RequestError(400, "선호 전문 요청이 올바르지 않습니다.");
   }
-  let ruleText = null;
-  let strength = null;
-  if (action === "set") {
-    ruleText = typeof body.rule_text === "string" ? body.rule_text.trim() : "";
-    strength = String(body.strength || "").trim();
-    if (!ruleText || ruleText.length > 1000 || !RULE_STRENGTHS.has(strength)) {
-      throw new RequestError(400, "규칙 내용 또는 강도가 올바르지 않습니다.");
-    }
-  }
+  const action = content ? "set" : "retract";
   const values = [
-    ruleKey,
+    PREFERENCE_DOCUMENT_RULE_KEY,
     action,
-    ruleText,
-    strength,
+    content || null,
+    content ? "strong" : null,
     actor,
     idempotencyKey,
     new Date().toISOString(),
@@ -507,11 +517,17 @@ async function postRule(request, db, actor) {
       INSERT INTO game_news_manual_rule_events (
         rule_key, action, rule_text, strength, actor, idempotency_key,
         created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      )
+      SELECT ?, ?, ?, ?, ?, ?, ?
+      WHERE COALESCE((
+        SELECT MAX(id)
+        FROM game_news_manual_rule_events
+        WHERE rule_key = ?
+      ), 0) = ?
       ON CONFLICT(idempotency_key) DO NOTHING
       RETURNING id
       `,
-      values
+      [...values, PREFERENCE_DOCUMENT_RULE_KEY, baseVersion]
     );
     if (!inserted.length) {
       const raced = await queryAll(
@@ -519,8 +535,14 @@ async function postRule(request, db, actor) {
         "SELECT * FROM game_news_manual_rule_events WHERE idempotency_key = ?",
         [idempotencyKey]
       );
+      if (!raced.length) {
+        throw new RequestError(
+          409,
+          "다른 기기에서 선호 전문이 변경되었습니다. 최신 내용을 다시 불러와 주세요."
+        );
+      }
       if (raced.length !== 1) {
-        throw new Error("Manual rule idempotency lookup failed");
+        throw new Error("Preference document idempotency lookup failed");
       }
       assertIdempotentMatch(raced[0], [
         "rule_key",
@@ -531,7 +553,7 @@ async function postRule(request, db, actor) {
       ], values.slice(0, 5));
     }
   }
-  return jsonResponse({ items: await listRules(db, actor) }, 201);
+  return jsonResponse({ document: await loadPreferenceDocument(db) }, 201);
 }
 
 export async function onRequestGet(context) {
@@ -559,12 +581,12 @@ export async function onRequestGet(context) {
         throw new Error("D1 binding is unavailable");
       }
       response = await getHidden(db);
-    } else if (resource === "rules") {
+    } else if (resource === "preferences") {
       requireCapability(identity, "manage_rules");
       if (!db) {
         throw new Error("D1 binding is unavailable");
       }
-      response = await getRules(db, identity.actor);
+      response = await getPreferenceDocument(db);
     } else {
       return jsonResponse({ error: "지원하지 않는 경로입니다." }, 404);
     }
@@ -603,12 +625,12 @@ export async function onRequestPost(context) {
         throw new Error("D1 binding is unavailable");
       }
       response = await postVisibility(context.request, db, identity.actor);
-    } else if (resource === "rules") {
+    } else if (resource === "preferences") {
       requireCapability(identity, "manage_rules");
       if (!db) {
         throw new Error("D1 binding is unavailable");
       }
-      response = await postRule(context.request, db, identity.actor);
+      response = await postPreferenceDocument(context.request, db, identity.actor);
     } else {
       return jsonResponse({ error: "지원하지 않는 경로입니다." }, 404);
     }
