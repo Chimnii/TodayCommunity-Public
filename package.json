@@ -4,7 +4,15 @@
   "private": true,
   "description": "Locked deployment tooling for the TodayCommunity public mirror",
   "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "test": "node --test \"tests/*.test.mjs\"",
+    "verify:pages": "wrangler pages functions build functions --project-directory dashboard --outdir .wrangler/pages-functions-build",
+    "verify:scheduler": "wrangler deploy --dry-run --config scheduler/wrangler.jsonc"
+  },
   "devDependencies": {
-    "wrangler": "4.112.0"
+    "wrangler": "4.124.0"
   }
 }

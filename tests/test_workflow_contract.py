@@ -24,6 +24,9 @@ SETUP_PYTHON_PIN = (
 GITHUB_SCRIPT_PIN = (
     "actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0"
 )
+SETUP_NODE_PIN = (
+    "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0"
+)
 FAILURE_STREAK_SUCCESS_MARKER = "Failure streak: counted success"
 FAILURE_STREAK_IGNORED_MARKER = "Failure streak: ignored run"
 
@@ -206,9 +209,23 @@ class CrawlWorkflowContractTests(unittest.TestCase):
     def test_deployment_workflows_use_locked_wrangler_and_split_tokens(self) -> None:
         for workflow in (self.deploy_pages, self.deploy_scheduler):
             self.assertIn(CHECKOUT_PIN, workflow)
+            self.assertIn(SETUP_NODE_PIN, workflow)
+            self.assertIn('node-version: "24"', workflow)
+            self.assertIn("cache: npm", workflow)
             self.assertIn("npm ci --ignore-scripts", workflow)
+            self.assertIn("run: npm test", workflow)
             self.assertIn("./node_modules/.bin/wrangler", workflow)
             self.assertNotIn("npx ", workflow)
+            self.assertLess(
+                workflow.index("actions/setup-node@"),
+                workflow.index("npm ci --ignore-scripts"),
+            )
+            for action in re.findall(r"(?m)^\s*uses:\s*([^\s]+)", workflow):
+                self.assertRegex(
+                    action,
+                    r"^[^@]+@[0-9a-f]{40}$",
+                    msg=f"workflow action is not pinned to a full commit: {action}",
+                )
 
         self.assertIn("secrets.CLOUDFLARE_PAGES_API_TOKEN", self.deploy_pages)
         self.assertNotIn("secrets.CLOUDFLARE_WORKERS_API_TOKEN", self.deploy_pages)
@@ -220,8 +237,13 @@ class CrawlWorkflowContractTests(unittest.TestCase):
 
         package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
         lock = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))
-        self.assertEqual(package["devDependencies"]["wrangler"], "4.112.0")
-        self.assertEqual(lock["packages"][""]["devDependencies"]["wrangler"], "4.112.0")
+        self.assertEqual(package["engines"]["node"], ">=22.0.0")
+        self.assertEqual(package["scripts"]["test"], 'node --test "tests/*.test.mjs"')
+        self.assertIn("wrangler pages functions build", package["scripts"]["verify:pages"])
+        self.assertIn("wrangler deploy --dry-run", package["scripts"]["verify:scheduler"])
+        self.assertEqual(package["devDependencies"]["wrangler"], "4.124.0")
+        self.assertEqual(lock["packages"][""]["engines"]["node"], ">=22.0.0")
+        self.assertEqual(lock["packages"][""]["devDependencies"]["wrangler"], "4.124.0")
 
     def test_hot_dispatch_and_budget_contract(self) -> None:
         self.assertIn("workflow_dispatch:", self.hot)
@@ -320,6 +342,31 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertIn("[switch]$GameNewsPersist", script)
         self.assertIn('$isGameNewsWorkflow = $Workflow -eq "scan-game-news.yml"', script)
         self.assertIn("persist = $GameNewsPersist.IsPresent", script)
+
+    def test_pages_deploys_only_relevant_main_changes_after_verification(self) -> None:
+        self.assertIn("workflow_dispatch:", self.deploy_pages)
+        self.assertRegex(self.deploy_pages, r"(?m)^  push:\s*$")
+        self.assertRegex(self.deploy_pages, r"(?m)^    branches:\s*\n      - main\s*$")
+        for path in (
+            '"dashboard/**"',
+            '"functions/**"',
+            '"package.json"',
+            '"package-lock.json"',
+            '".github/workflows/deploy-pages.yml"',
+        ):
+            self.assertIn(path, self.deploy_pages)
+        self.assertNotRegex(self.deploy_pages, r"(?m)^\s*schedule:\s*$")
+        self.assertIn("if: github.ref == 'refs/heads/main'", self.deploy_pages)
+        self.assertIn("npm run verify:pages", self.deploy_pages)
+        self.assertLess(
+            self.deploy_pages.index("run: npm test"),
+            self.deploy_pages.index("wrangler pages deploy"),
+        )
+        self.assertLess(
+            self.deploy_pages.index("run: npm run verify:pages"),
+            self.deploy_pages.index("wrangler pages deploy"),
+        )
+
     def test_scheduler_deploys_only_relevant_main_changes_after_verification(self) -> None:
         self.assertIn("workflow_dispatch:", self.deploy_scheduler)
         self.assertRegex(self.deploy_scheduler, r"(?m)^  push:\s*$")
@@ -333,10 +380,14 @@ class CrawlWorkflowContractTests(unittest.TestCase):
             self.assertIn(path, self.deploy_scheduler)
         self.assertNotRegex(self.deploy_scheduler, r"(?m)^\s*schedule:\s*$")
         self.assertIn("if: github.ref == 'refs/heads/main'", self.deploy_scheduler)
-        self.assertIn("node --test tests/scheduler_worker.test.mjs", self.deploy_scheduler)
-        self.assertIn(
-            "wrangler deploy --dry-run --config scheduler/wrangler.jsonc",
-            self.deploy_scheduler,
+        self.assertIn("npm run verify:scheduler", self.deploy_scheduler)
+        self.assertLess(
+            self.deploy_scheduler.index("run: npm test"),
+            self.deploy_scheduler.index("wrangler deploy --config"),
+        )
+        self.assertLess(
+            self.deploy_scheduler.index("run: npm run verify:scheduler"),
+            self.deploy_scheduler.index("wrangler deploy --config"),
         )
 
     def test_no_scheduled_production_workflow_runs_the_combined_mode(self) -> None:

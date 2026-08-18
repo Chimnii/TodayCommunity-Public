@@ -8,6 +8,9 @@ on:
     paths:
       - "dashboard/**"
       - "functions/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/deploy-pages.yml"
 
 permissions:
   contents: read
@@ -18,6 +21,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 10
@@ -27,8 +31,20 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          cache: npm
+
       - name: Install locked deployment tooling
         run: npm ci --ignore-scripts
+
+      - name: Run Node tests
+        run: npm test
+
+      - name: Verify Pages Functions bundle
+        run: npm run verify:pages
 
       - name: Deploy Pages
         env:
