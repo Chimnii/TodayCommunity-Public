@@ -531,9 +531,154 @@ test("a failed stale-run cancellation does not create a replacement", async () =
     ScheduledDispatchError,
   );
 
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
   assert.match(calls[1].url, /\/actions\/runs\/705\/cancel$/);
+  assert.match(calls[2].url, /\/actions\/runs\/705\/force-cancel$/);
   assert.ok(calls.every(({ url }) => !url.includes("/actions/workflows/")));
+});
+
+test("a non-server cancellation failure stays fail-closed", async () => {
+  const calls = [];
+  await assert.rejects(
+    dispatchScheduledWorkflow({
+      cron: "7,22,37,52 * * * *",
+      env: ENV,
+      fetchImpl: async (url, options) => {
+        calls.push({ url, options });
+        if (options.method === "GET") {
+          return jsonResponse({
+            workflow_runs: [
+              {
+                id: 708,
+                event: "workflow_dispatch",
+                status: "queued",
+                head_branch: "main",
+                path: ".github/workflows/scan-dcinside.yml",
+                created_at: "2026-07-19T00:00:00Z",
+              },
+            ],
+          });
+        }
+        return new Response("cancel conflict", { status: 409 });
+      },
+      now: () => NOW,
+    }),
+    ScheduledDispatchError,
+  );
+
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].url, /\/actions\/runs\/708\/cancel$/);
+  assert.ok(calls.every(({ url }) => !url.includes("/force-cancel")));
+  assert.ok(calls.every(({ url }) => !url.includes("/actions/workflows/")));
+});
+
+test("a cancel server failure uses force-cancel before replacement", async () => {
+  const calls = [];
+  const result = await dispatchScheduledWorkflow({
+    cron: "7,22,37,52 * * * *",
+    env: ENV,
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      if (options.method === "GET") {
+        return jsonResponse({
+          workflow_runs: [
+            {
+              id: 706,
+              event: "workflow_dispatch",
+              status: "queued",
+              head_branch: "main",
+              path: ".github/workflows/scan-dcinside.yml",
+              created_at: "2026-07-19T00:00:00Z",
+            },
+          ],
+        });
+      }
+      if (url.endsWith("/actions/runs/706/cancel")) {
+        return new Response("cancel unavailable", { status: 500 });
+      }
+      if (url.endsWith("/actions/runs/706/force-cancel")) {
+        return new Response(null, { status: 202 });
+      }
+      return noContentResponse();
+    },
+    now: () => NOW,
+  });
+
+  assert.equal(calls.length, 4);
+  assert.match(calls[1].url, /\/actions\/runs\/706\/cancel$/);
+  assert.match(calls[2].url, /\/actions\/runs\/706\/force-cancel$/);
+  assert.match(calls[3].url, /scan-dcinside\.yml\/dispatches$/);
+  assert.deepEqual(result.destinations[0], {
+    destination: "dcinside",
+    repository: "TodayCommunity-Public",
+    status: "replaced_stale_queued",
+    kind: "hot",
+    workflow: "scan-dcinside.yml",
+    ref: "main",
+    reason: "stale_queued_run",
+    canceledRunIds: [706],
+    forceCanceledRunIds: [706],
+  });
+});
+
+test("game news dispatches around a stale run when both cancel APIs return 5xx", async () => {
+  const calls = [];
+  const result = await dispatchScheduledWorkflow({
+    cron: "17 * * * *",
+    env: {
+      ...ENV,
+      GAME_NEWS_DISPATCH_ENABLED: "1",
+      GAME_NEWS_GITHUB_REPOSITORY: "TodayCommunity",
+    },
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      if (options.method === "GET") {
+        return jsonResponse({
+          workflow_runs: [
+            {
+              id: 707,
+              event: "workflow_dispatch",
+              status: "queued",
+              head_branch: "main",
+              path: ".github/workflows/scan-game-news.yml",
+              created_at: "2026-07-19T00:00:00Z",
+            },
+          ],
+        });
+      }
+      if (
+        url.endsWith("/actions/runs/707/cancel") ||
+        url.endsWith("/actions/runs/707/force-cancel")
+      ) {
+        return new Response("cancel unavailable", { status: 500 });
+      }
+      return noContentResponse();
+    },
+    now: () => NOW,
+  });
+
+  assert.equal(calls.length, 4);
+  assert.match(calls[1].url, /\/actions\/runs\/707\/cancel$/);
+  assert.match(calls[2].url, /\/actions\/runs\/707\/force-cancel$/);
+  assert.match(calls[3].url, /scan-game-news\.yml\/dispatches$/);
+  assert.deepEqual(JSON.parse(calls[3].options.body), {
+    ref: "main",
+    inputs: {
+      dispatched_at: new Date(NOW).toISOString(),
+      persist: "true",
+    },
+  });
+  assert.deepEqual(result.destinations[0], {
+    destination: "game-news",
+    repository: "TodayCommunity",
+    status: "dispatched_with_uncanceled_stale_queued",
+    kind: "game-news",
+    workflow: "scan-game-news.yml",
+    ref: "main",
+    reason: "stale_queued_run",
+    canceledRunIds: [],
+    uncanceledRunIds: [707],
+  });
 });
 
 test("a fresh queued FM run does not suppress an eligible public DC dispatch", async () => {

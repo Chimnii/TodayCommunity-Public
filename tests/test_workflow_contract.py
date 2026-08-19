@@ -620,6 +620,10 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertIn('"CHIMNII-MAIN"', workflow)
         self.assertNotIn("$env:USERNAME", workflow)
         self.assertNotIn(">> $env:GITHUB_OUTPUT", workflow)
+        self.assertGreaterEqual(
+            workflow.count("steps.freshness.outputs.should_run == 'true'"),
+            9,
+        )
 
     def test_private_game_news_workflow_uses_only_dedicated_oauth_runtime(self) -> None:
         if self.game_news is None:

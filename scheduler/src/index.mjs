@@ -219,6 +219,7 @@ function destinationsForSchedule(schedule, env, nowMs) {
           repositoryBinding: "GAME_NEWS_GITHUB_REPOSITORY",
           schedule: { kind: "game-news", workflow: GAME_NEWS_WORKFLOW },
           managedWorkflows: GAME_NEWS_MANAGED_WORKFLOWS,
+          allowUncanceledStaleReplacement: true,
           inputs: {
             dispatched_at: new Date(nowMs).toISOString(),
             persist: "true",
@@ -252,9 +253,11 @@ async function githubRequest(fetchImpl, url, options) {
   if (!response.ok) {
     const responseBody = (await response.text()).replace(/\s+/g, " ").trim();
     const detail = responseBody ? `: ${responseBody.slice(0, 500)}` : "";
-    throw new Error(
+    const error = new Error(
       `GitHub API ${options.method} ${url} failed with HTTP ${response.status}${detail}`,
     );
+    error.status = response.status;
+    throw error;
   }
 
   if (response.status === 204) {
@@ -276,6 +279,7 @@ async function dispatchDestination({
   staleQueuedMs,
   inputs,
   configurationError,
+  allowUncanceledStaleReplacement = false,
 }) {
   if (configurationError) {
     throw configurationError;
@@ -319,15 +323,50 @@ async function dispatchDestination({
     };
   }
 
+  const canceledRunIds = [];
+  const forceCanceledRunIds = [];
+  const uncanceledRunIds = [];
   if (decision.action === "replace") {
     for (const runId of decision.runIds) {
       const cancelUrl =
         `${GITHUB_API_ROOT}/repos/${repositoryPath}/actions/runs/` +
         `${encodeURIComponent(runId)}/cancel`;
-      await githubRequest(fetchImpl, cancelUrl, {
-        method: "POST",
-        headers: githubHeaders(token),
-      });
+      try {
+        await githubRequest(fetchImpl, cancelUrl, {
+          method: "POST",
+          headers: githubHeaders(token),
+        });
+        canceledRunIds.push(runId);
+      } catch (error) {
+        const cancelFailedServerSide =
+          error?.status >= 500 && error?.status <= 599;
+        if (!cancelFailedServerSide) {
+          throw error;
+        }
+
+        const forceCancelUrl =
+          `${GITHUB_API_ROOT}/repos/${repositoryPath}/actions/runs/` +
+          `${encodeURIComponent(runId)}/force-cancel`;
+        try {
+          await githubRequest(fetchImpl, forceCancelUrl, {
+            method: "POST",
+            headers: githubHeaders(token),
+          });
+          canceledRunIds.push(runId);
+          forceCanceledRunIds.push(runId);
+        } catch (forceCancelError) {
+          const forceCancelFailedServerSide =
+            forceCancelError?.status >= 500 &&
+            forceCancelError?.status <= 599;
+          if (
+            !allowUncanceledStaleReplacement ||
+            !forceCancelFailedServerSide
+          ) {
+            throw forceCancelError;
+          }
+          uncanceledRunIds.push(runId);
+        }
+      }
     }
   }
 
@@ -344,20 +383,29 @@ async function dispatchDestination({
     body: JSON.stringify(body),
   });
 
+  let status = "dispatched";
+  if (decision.action === "replace") {
+    status = uncanceledRunIds.length > 0
+      ? "dispatched_with_uncanceled_stale_queued"
+      : "replaced_stale_queued";
+  }
   const result = {
     destination,
     repository,
-    status:
-      decision.action === "replace"
-        ? "replaced_stale_queued"
-        : "dispatched",
+    status,
     kind: schedule.kind,
     workflow: schedule.workflow,
     ref,
   };
   if (decision.action === "replace") {
     result.reason = decision.reason;
-    result.canceledRunIds = decision.runIds;
+    result.canceledRunIds = canceledRunIds;
+    if (forceCanceledRunIds.length > 0) {
+      result.forceCanceledRunIds = forceCanceledRunIds;
+    }
+    if (uncanceledRunIds.length > 0) {
+      result.uncanceledRunIds = uncanceledRunIds;
+    }
   }
   return result;
 }
