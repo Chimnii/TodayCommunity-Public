@@ -78,6 +78,35 @@ test("ships four accessible archive tabs and replaces them from the API catalog"
   assert.match(css, /\.archive-tab\[aria-selected="true"\]/);
 });
 
+test("ships a stored hot-topic rail with URL-backed filtering and a compact accordion", () => {
+  assert.match(html, /<aside[^>]*id="topic-panel"[^>]*aria-labelledby="topic-panel-title"[^>]*hidden/);
+  assert.match(html, /id="topic-panel-title"[^>]*tabindex="-1"[^>]*>지금 화제/);
+  assert.match(html, /id="topic-summary"[^>]*aria-live="polite"/);
+  assert.match(
+    html,
+    /id="topic-panel-toggle"[\s\S]*aria-controls="topic-panel-content"[\s\S]*aria-expanded="true"/
+  );
+  assert.match(app, /topicId:\s*0/);
+  assert.match(app, /params\.set\("topic", String\(state\.topicId\)\)/);
+  assert.match(app, /state\.topicId = normalizePositiveNumber\(params\.get\("topic"\), 0\)/);
+  assert.match(app, /topic:\s*state\.topicId \|\| null/);
+  assert.match(app, /const trends = state\.archive\?\.topic_trends/);
+  assert.match(app, /const selectedTopic = state\.archive\?\.selected_topic/);
+  assert.match(app, /button\.setAttribute\("aria-pressed", String\(topicId === state\.topicId\)\)/);
+  assert.match(app, /applyTopicFilter\(topicId === state\.topicId \? 0 : topicId\)/);
+  assert.match(app, /elements\.topicPanel\.hidden = !communityArchive/);
+  assert.match(app, /getSafeHttpUrl\(representative\?\.post_url\)/);
+  assert.match(css, /\.archive-layout\s*{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) 272px/s);
+  assert.match(css, /\.topic-panel\s*{[^}]*position:\s*sticky/s);
+  assert.match(css, /\.topic-item\[aria-pressed="true"\]/);
+  assert.match(
+    css,
+    /@media \(max-width:\s*1010px\)[\s\S]*\.archive-layout\s*{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)[\s\S]*\.topic-panel\s*{[^}]*order:\s*-1[\s\S]*\.topic-panel-toggle\s*{[^}]*display:\s*inline-flex/
+  );
+  assert.match(fixtureServer, /COMMUNITY_TOPIC_FIXTURES/);
+  assert.match(fixtureServer, /!topicId \|\| post\.topic_ids\.includes\(topicId\)/);
+});
+
 test("switches article archives to a five-column feedback presentation", () => {
   assert.match(app, /getCurrentArchive\(\)\?\.content_kind === "article"/);
   assert.match(app, /document\.body\.dataset\.contentKind = articleMode \? "article" : "community"/);
@@ -200,6 +229,7 @@ test("requests globally filtered, sorted, and paginated archive data", () => {
     "sort",
     "q",
     "subject",
+    "topic",
   ]) {
     assert.match(app, new RegExp(`params\\.(?:set|toString)|${parameter}`));
     assert.ok(app.includes(parameter), `Expected ${parameter} in the dashboard request contract`);

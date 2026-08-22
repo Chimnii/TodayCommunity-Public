@@ -100,110 +100,158 @@
           </div>
         </div>
 
-        <div class="filter-shell" id="filter-shell">
-          <button
-            class="filter-toggle"
-            id="filter-toggle"
-            type="button"
-            aria-controls="filter-form"
-            aria-expanded="false"
-          >
-            <span>검색·필터</span>
-            <span class="filter-toggle-state">펼치기</span>
-          </button>
+        <div class="archive-layout">
+          <div class="archive-main">
+            <div class="filter-shell" id="filter-shell">
+              <button
+                class="filter-toggle"
+                id="filter-toggle"
+                type="button"
+                aria-controls="filter-form"
+                aria-expanded="false"
+              >
+                <span>검색·필터</span>
+                <span class="filter-toggle-state">펼치기</span>
+              </button>
 
-          <form class="filter-form" id="filter-form">
-            <label class="filter-control filter-search">
-              <span>제목 검색</span>
-              <input
-                id="search-input"
-                name="q"
-                type="search"
-                maxlength="100"
-                placeholder="찾을 제목을 입력하세요"
-                autocomplete="off"
-              />
-            </label>
+              <form class="filter-form" id="filter-form">
+                <label class="filter-control filter-search">
+                  <span>제목 검색</span>
+                  <input
+                    id="search-input"
+                    name="q"
+                    type="search"
+                    maxlength="100"
+                    placeholder="찾을 제목을 입력하세요"
+                    autocomplete="off"
+                  />
+                </label>
 
-            <label class="filter-control">
-              <span id="subject-filter-label">말머리</span>
-              <select id="subject-select" name="subject">
-                <option value="">전체 말머리</option>
-              </select>
-            </label>
+                <label class="filter-control">
+                  <span id="subject-filter-label">말머리</span>
+                  <select id="subject-select" name="subject">
+                    <option value="">전체 말머리</option>
+                  </select>
+                </label>
 
-            <label class="filter-control filter-upvotes">
-              <span>최소 추천</span>
-              <input id="upvotes-input" name="min_upvotes" type="number" min="0" value="0" />
-            </label>
+                <label class="filter-control filter-upvotes">
+                  <span>최소 추천</span>
+                  <input
+                    id="upvotes-input"
+                    name="min_upvotes"
+                    type="number"
+                    min="0"
+                    value="0"
+                  />
+                </label>
 
-            <label class="filter-control filter-comments">
-              <span>최소 댓글</span>
-              <input id="comments-input" name="min_comments" type="number" min="0" value="0" />
-            </label>
+                <label class="filter-control filter-comments">
+                  <span>최소 댓글</span>
+                  <input
+                    id="comments-input"
+                    name="min_comments"
+                    type="number"
+                    min="0"
+                    value="0"
+                  />
+                </label>
 
-            <label class="filter-control">
-              <span>정렬</span>
-              <select id="sort-select" name="sort">
-                <option value="created_at">최신순</option>
-                <option value="upvotes">추천순</option>
-                <option value="comments">댓글순</option>
-              </select>
-            </label>
+                <label class="filter-control">
+                  <span>정렬</span>
+                  <select id="sort-select" name="sort">
+                    <option value="created_at">최신순</option>
+                    <option value="upvotes">추천순</option>
+                    <option value="comments">댓글순</option>
+                  </select>
+                </label>
 
-            <label class="filter-control">
-              <span>한 페이지</span>
-              <select id="page-size-select" name="page_size">
-                <option value="20">20개</option>
-                <option value="30" selected>30개</option>
-                <option value="50">50개</option>
-                <option value="100">100개</option>
-              </select>
-            </label>
+                <label class="filter-control">
+                  <span>한 페이지</span>
+                  <select id="page-size-select" name="page_size">
+                    <option value="20">20개</option>
+                    <option value="30" selected>30개</option>
+                    <option value="50">50개</option>
+                    <option value="100">100개</option>
+                  </select>
+                </label>
 
-            <button class="button button-secondary filter-reset" id="filter-reset" type="reset">
-              초기화
-            </button>
-          </form>
+                <button
+                  class="button button-secondary filter-reset"
+                  id="filter-reset"
+                  type="reset"
+                >
+                  초기화
+                </button>
+              </form>
 
-          <p class="data-notice" id="data-notice" role="status" hidden></p>
-        </div>
-
-        <div class="board-shell">
-          <div
-            class="board-table"
-            id="archive-board"
-            role="table"
-            aria-label="저장된 커뮤니티 글"
-            aria-busy="true"
-          >
-            <div class="board-head" role="rowgroup">
-              <div class="board-row" role="row">
-                <span class="board-cell cell-number" role="columnheader">번호</span>
-                <span
-                  class="board-cell cell-subject"
-                  id="subject-column-label"
-                  role="columnheader"
-                >말머리</span>
-                <span class="board-cell cell-source" role="columnheader">출처</span>
-                <span class="board-cell cell-title" role="columnheader">제목</span>
-                <span class="board-cell cell-upvotes" role="columnheader">추천</span>
-                <span class="board-cell cell-date" role="columnheader">작성일</span>
-                <span class="board-cell cell-feedback" role="columnheader">평가</span>
-              </div>
+              <p class="data-notice" id="data-notice" role="status" hidden></p>
             </div>
 
-            <div class="board-body" id="posts" role="rowgroup" style="--reserved-row-count: 30">
-              <div class="board-state" role="row">
-                <span role="cell">게시글을 불러오는 중입니다.</span>
+            <div class="board-shell">
+              <div
+                class="board-table"
+                id="archive-board"
+                role="table"
+                aria-label="저장된 커뮤니티 글"
+                aria-busy="true"
+              >
+                <div class="board-head" role="rowgroup">
+                  <div class="board-row" role="row">
+                    <span class="board-cell cell-number" role="columnheader">번호</span>
+                    <span
+                      class="board-cell cell-subject"
+                      id="subject-column-label"
+                      role="columnheader"
+                    >말머리</span>
+                    <span class="board-cell cell-source" role="columnheader">출처</span>
+                    <span class="board-cell cell-title" role="columnheader">제목</span>
+                    <span class="board-cell cell-upvotes" role="columnheader">추천</span>
+                    <span class="board-cell cell-date" role="columnheader">작성일</span>
+                    <span class="board-cell cell-feedback" role="columnheader">평가</span>
+                  </div>
+                </div>
+
+                <div class="board-body" id="posts" role="rowgroup" style="--reserved-row-count: 30">
+                  <div class="board-state" role="row">
+                    <span role="cell">게시글을 불러오는 중입니다.</span>
+                  </div>
+                </div>
               </div>
+
+              <footer class="board-footer">
+                <p id="range-summary">표시 범위를 계산하는 중입니다.</p>
+                <nav class="pagination" id="pagination" aria-label="게시글 페이지"></nav>
+              </footer>
             </div>
           </div>
 
-          <footer class="board-footer">
-            <p id="range-summary">표시 범위를 계산하는 중입니다.</p>
-            <nav class="pagination" id="pagination" aria-label="게시글 페이지"></nav>
-          </footer>
+          <aside class="topic-panel" id="topic-panel" aria-labelledby="topic-panel-title" hidden>
+            <header class="topic-panel-header">
+              <div>
+                <p class="topic-panel-eyebrow">AI TOPICS</p>
+                <h3 id="topic-panel-title" tabindex="-1">지금 화제</h3>
+              </div>
+              <button
+                class="topic-panel-toggle"
+                id="topic-panel-toggle"
+                type="button"
+                aria-controls="topic-panel-content"
+                aria-expanded="true"
+              >
+                <span id="topic-panel-toggle-state">접기</span>
+              </button>
+            </header>
+
+            <div class="topic-panel-content" id="topic-panel-content">
+              <p class="topic-summary" id="topic-summary" aria-live="polite"></p>
+              <button class="topic-clear" id="topic-clear" type="button" hidden>
+                전체 글 보기
+              </button>
+              <div class="topic-list" id="topic-list"></div>
+              <p class="topic-empty" id="topic-empty" hidden></p>
+              <p class="topic-panel-meta" id="topic-panel-meta"></p>
+            </div>
+          </aside>
         </div>
       </section>
     </main>

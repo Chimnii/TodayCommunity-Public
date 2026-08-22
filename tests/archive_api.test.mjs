@@ -51,6 +51,20 @@ class MockStatement {
     if (this.sql.includes("FROM crawl_runs")) {
       return { results: this.database.runs };
     }
+    if (this.sql.includes("SELECT id AS topic_id, label")) {
+      const topic = this.database.topics.find(
+        (candidate) =>
+          candidate.topic_id === this.values[0] &&
+          candidate.archive_key === this.values[1]
+      );
+      return { results: topic ? [topic] : [] };
+    }
+    if (this.sql.includes("SELECT window_start, window_end, window_hours")) {
+      return { results: this.database.topicSnapshot ? [this.database.topicSnapshot] : [] };
+    }
+    if (this.sql.includes("FROM community_topic_snapshot_items")) {
+      return { results: this.database.topicItems };
+    }
     if (this.sql.includes("FROM posts")) {
       return { results: this.database.posts };
     }
@@ -83,6 +97,9 @@ class MockDatabase {
     runs = [],
     archives,
     sources,
+    topicSnapshot = null,
+    topicItems = [],
+    topics = [],
   } = {}) {
     this.calls = [];
     this.batchRequests = [];
@@ -136,6 +153,9 @@ class MockDatabase {
     this.filteredPosts = filteredPosts;
     this.posts = posts;
     this.runs = runs;
+    this.topicSnapshot = topicSnapshot;
+    this.topicItems = topicItems;
+    this.topics = topics;
   }
 
   prepare(sql) {
@@ -235,8 +255,8 @@ test("defaults to the first 30 globally counted posts and preserves recent runs"
   assert.equal(body.runs.length, 10);
 
   assert.equal(database.batchRequests.length, 1);
-  assert.equal(database.batchRequests[0].length, 6);
-  assert.equal(database.calls.filter((call) => call.method === "batch").length, 6);
+  assert.equal(database.batchRequests[0].length, 9);
+  assert.equal(database.calls.filter((call) => call.method === "batch").length, 9);
   assert.equal(database.calls.filter((call) => call.method === "first").length, 1);
   assert.equal(database.calls.filter((call) => call.method === "all").length, 0);
 
@@ -342,7 +362,7 @@ test("applies escaped title and numeric filters before paginating with a stable 
     has_next: true,
   });
   assert.equal(database.batchRequests.length, 1);
-  assert.equal(database.batchRequests[0].length, 5);
+  assert.equal(database.batchRequests[0].length, 8);
 
   const selectedSubject = "AI 소식' OR 1=1 --";
   const expectedFilterBindings = [target, 4, 15, selectedSubject, "%100\\%\\_\\\\%"];
@@ -358,6 +378,79 @@ test("applies escaped title and numeric filters before paginating with a stable 
   assert.deepEqual(postCall.values, [...expectedFilterBindings, 20, 20]);
   assert.ok(!postCall.sql.includes(target));
   assert.ok(!postCall.sql.includes("100%_"));
+});
+
+test("returns the latest topic snapshot and filters every matching archived post by topic", async () => {
+  const target = "dcinside-singularity";
+  const topicId = 17;
+  const database = new MockDatabase({
+    totalPosts: 12,
+    filteredPosts: 4,
+    posts: makeRows(4),
+    topics: [{ topic_id: topicId, archive_key: target, label: "GPT-5.6 공개" }],
+    topicSnapshot: {
+      window_start: "2026-08-21T12:00:00Z",
+      window_end: "2026-08-22T00:00:00Z",
+      window_hours: 12,
+      generated_at: "2026-08-22T00:01:00Z",
+      summary_text: "최근 12시간에는 ‘GPT-5.6 공개’ 관련 글이 많이 다뤄졌습니다.",
+      eligible_post_count: 12,
+      analyzed_post_count: 11,
+    },
+    topicItems: [
+      {
+        topic_id: topicId,
+        label: "GPT-5.6 공개",
+        topic_rank: 1,
+        post_count: 4,
+        previous_post_count: 1,
+        hotness_score: 61.5,
+        trend_state: "rising",
+        representative_posts_json: JSON.stringify([
+          {
+            external_post_id: "1000",
+            title: "새 모델 공개",
+            post_url: "https://example.com/post/1000",
+            created_at: "2026-08-21T23:00:00Z",
+          },
+        ]),
+      },
+    ],
+  });
+
+  const { response, body } = await requestArchive(database, `?topic=${topicId}`);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(body.selected_topic, {
+    topic_id: topicId,
+    label: "GPT-5.6 공개",
+  });
+  assert.equal(body.topic_trends.window_hours, 12);
+  assert.equal(body.topic_trends.analyzed_post_count, 11);
+  assert.equal(body.topic_trends.topics[0].trend_state, "rising");
+  assert.equal(
+    body.topic_trends.topics[0].representative_posts[0].title,
+    "새 모델 공개"
+  );
+
+  const filteredCountCall = findCall(database, "AS filtered_posts", "batch");
+  assert.match(filteredCountCall.sql, /FROM community_post_topics AS selected_post_topic/);
+  assert.match(filteredCountCall.sql, /selected_topic\.archive_key = posts\.archive_key/);
+  assert.deepEqual(filteredCountCall.values, [target, topicId]);
+  const postCall = findCall(database, "SELECT archive_key, source_key, external_post_id", "batch");
+  assert.deepEqual(postCall.values, [target, topicId, 30, 0]);
+});
+
+test("rejects malformed and cross-archive topic filters", async () => {
+  const malformedDatabase = new MockDatabase();
+  const malformed = await requestArchive(malformedDatabase, "?topic=1%20OR%201=1");
+  assert.equal(malformed.response.status, 400);
+  assert.deepEqual(malformedDatabase.calls, []);
+
+  const unknownDatabase = new MockDatabase();
+  const unknown = await requestArchive(unknownDatabase, "?topic=999");
+  assert.equal(unknown.response.status, 400);
+  assert.equal(unknown.body.error, "Unknown topic filter.");
 });
 
 test("rejects an unsupported target before querying D1", async () => {
@@ -532,7 +625,7 @@ test("clamps an out-of-range page to the last filtered page before querying rows
   const { body } = await requestArchive(database, "?page=999&page_size=30");
 
   assert.equal(database.batchRequests.length, 1);
-  assert.equal(database.batchRequests[0].length, 5);
+  assert.equal(database.batchRequests[0].length, 8);
   assert.equal(body.summary.filtered_posts, 65);
   assert.deepEqual(body.pagination, {
     page: 3,

@@ -675,10 +675,25 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         )
         self.assertLess(schema_index, persist_index)
         self.assertEqual(workflow.count("-m game_news.runner"), 2)
-        self.assertEqual(workflow.count("--run-root"), 2)
+        topic_index = workflow.index("-m community_topics.runner", persist_index)
+        self.assertGreater(topic_index, persist_index)
+        self.assertEqual(workflow.count("-m community_topics.runner"), 1)
+        self.assertEqual(workflow.count("--run-root"), 3)
         self.assertIn('--run-root "${{ steps.run_root.outputs.path }}" --persist', workflow)
+        self.assertIn('"${{ steps.run_root.outputs.path }}" "community-topics"', workflow)
+        self.assertIn("--run-root $topicRunRoot --persist", workflow)
         self.assertIn("inputs.persist == true", workflow)
         self.assertIn("inputs.persist != true", workflow)
+
+        topic_step = workflow.split(
+            "- name: Refresh stored community topic snapshots",
+            maxsplit=1,
+        )[1].split("- name: Remove non-persisting run root", maxsplit=1)[0]
+        self.assertIn("always()", topic_step)
+        self.assertIn("steps.run_root.outcome == 'success'", topic_step)
+        self.assertIn("$env:OPENAI_API_KEY = $null", topic_step)
+        self.assertIn("$env:CODEX_API_KEY = $null", topic_step)
+        self.assertIn("$env:CODEX_HOME = $env:TC_GAME_NEWS_CODEX_HOME", topic_step)
 
     def test_private_game_news_workflow_limits_d1_secrets_and_runtime_retention(self) -> None:
         if self.game_news is None:
@@ -695,7 +710,7 @@ class CrawlWorkflowContractTests(unittest.TestCase):
             "TC_CF_DATABASE_ID",
             "TC_CF_API_TOKEN",
         ):
-            self.assertEqual(workflow.count(f"secrets.{secret_name}"), 2)
+            self.assertEqual(workflow.count(f"secrets.{secret_name}"), 3)
         self.assertIn("Apply 30-day dedicated runtime retention", workflow)
         self.assertIn("[DateTime]::UtcNow.AddDays(-30)", workflow)
         self.assertIn('.todaycommunity-game-news-owned', workflow)
@@ -968,6 +983,9 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         )
         self.assertIn('"AGENTS.md"', script)
         self.assertIn('$path -match "^game_news/"', script)
+        self.assertIn('$path -match "^community_topics/"', script)
+        self.assertIn('"tests/test_community_topics.py"', script)
+        self.assertIn('$path -ne "tests/test_community_topics.py"', script)
 
     def test_local_secret_and_cloudflare_state_patterns_are_ignored(self) -> None:
         ignore_lines = {

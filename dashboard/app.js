@@ -49,6 +49,7 @@ const FALLBACK_ARCHIVES = Object.freeze([
 const DEFAULT_STATE = Object.freeze({
   search: "",
   subject: "",
+  topicId: 0,
   minUpvotes: 0,
   minComments: 0,
   sortBy: "created_at",
@@ -92,6 +93,8 @@ const state = {
   filterTimer: null,
   focusPageContentAfterLoad: false,
   focusArchiveTabAfterLoad: false,
+  focusTopicAfterLoad: false,
+  topicPanelExpanded: true,
   feedbackSession: null,
   feedbackSessionPromise: null,
   feedbackByPost: new Map(),
@@ -142,6 +145,16 @@ const elements = {
   sortCommentsOption: document.querySelector('#sort-select option[value="comments"]'),
   pageSizeSelect: document.querySelector("#page-size-select"),
   filterForm: document.querySelector("#filter-form"),
+  topicPanel: document.querySelector("#topic-panel"),
+  topicPanelTitle: document.querySelector("#topic-panel-title"),
+  topicPanelToggle: document.querySelector("#topic-panel-toggle"),
+  topicPanelToggleState: document.querySelector("#topic-panel-toggle-state"),
+  topicPanelContent: document.querySelector("#topic-panel-content"),
+  topicSummary: document.querySelector("#topic-summary"),
+  topicClear: document.querySelector("#topic-clear"),
+  topicList: document.querySelector("#topic-list"),
+  topicEmpty: document.querySelector("#topic-empty"),
+  topicPanelMeta: document.querySelector("#topic-panel-meta"),
   gameNewsTools: document.querySelector("#game-news-tools"),
   rulesOpen: document.querySelector("#rules-open"),
   rulesDialog: document.querySelector("#rules-dialog"),
@@ -184,6 +197,7 @@ async function initialize() {
   applyContentKindMode();
   writeStateToControls();
   setMobileFiltersExpanded(hasActiveFilterState());
+  syncTopicPanelForViewport();
   bindEvents();
   try {
     await ensureFeedbackSession();
@@ -291,6 +305,9 @@ function buildApiUrl() {
   if (state.subject) {
     params.set("subject", state.subject);
   }
+  if (state.topicId > 0) {
+    params.set("topic", String(state.topicId));
+  }
 
   return `/api/archive?${params.toString()}`;
 }
@@ -352,6 +369,7 @@ function normalizeArticleState() {
   state.minUpvotes = 0;
   state.minComments = 0;
   state.sortBy = "created_at";
+  state.topicId = 0;
 }
 
 function applyContentKindMode() {
@@ -490,6 +508,7 @@ function selectArchive(target) {
   state.feedbackReady = false;
   state.focusPageContentAfterLoad = false;
   state.focusArchiveTabAfterLoad = true;
+  state.focusTopicAfterLoad = false;
   writeStateToControls();
   syncStateToUrl({ replace: false });
   renderArchiveTabs();
@@ -504,6 +523,7 @@ function render() {
   renderArchiveTabs();
   renderSubjectOptions();
   renderSummary(view);
+  renderTopicPanel();
   renderNotice();
   renderRuns();
   renderPosts(view.posts);
@@ -552,6 +572,16 @@ function getLocalViewModel() {
       }
 
       if (state.subject && normalizeSubject(post.subject) !== state.subject) {
+        return false;
+      }
+
+      if (
+        state.topicId > 0 &&
+        !(
+          Array.isArray(post.topic_ids) &&
+          post.topic_ids.some((topicId) => Number(topicId) === state.topicId)
+        )
+      ) {
         return false;
       }
 
@@ -693,6 +723,187 @@ function renderSummary(view) {
 
   const runs = Array.isArray(state.archive?.runs) ? state.archive.runs : [];
   elements.runCount.textContent = numberFormatter.format(runs.length);
+}
+
+function renderTopicPanel() {
+  const communityArchive = !isArticleArchive();
+  elements.topicPanel.hidden = !communityArchive;
+  if (!communityArchive) {
+    elements.topicList.replaceChildren();
+    return;
+  }
+
+  const trends = state.archive?.topic_trends;
+  const topics = Array.isArray(trends?.topics) ? trends.topics : [];
+  const selectedTopic = state.archive?.selected_topic;
+  const selectedTopicId = normalizePositiveNumber(selectedTopic?.topic_id, 0);
+  const selectedLabel = selectedTopicId === state.topicId
+    ? String(selectedTopic?.label || "").trim()
+    : "";
+
+  elements.topicSummary.textContent = trends?.summary ||
+    "아직 저장된 토픽 분석 결과가 없습니다.";
+  elements.topicClear.hidden = state.topicId === 0;
+  elements.topicClear.textContent = selectedLabel
+    ? `‘${selectedLabel}’ 필터 해제`
+    : "전체 글 보기";
+  elements.topicList.replaceChildren();
+
+  for (const topic of topics) {
+    const topicId = normalizePositiveNumber(topic?.topic_id, 0);
+    const label = String(topic?.label || "").trim();
+    if (!topicId || !label) {
+      continue;
+    }
+    const count = normalizeNonNegativeNumber(topic?.post_count, 0);
+    const previousCount = normalizeNonNegativeNumber(
+      topic?.previous_post_count,
+      0
+    );
+    const trendState = ["new", "rising", "active"].includes(topic?.trend_state)
+      ? topic.trend_state
+      : "active";
+    const trendLabel = getTopicTrendLabel(trendState, previousCount);
+    const entry = document.createElement("article");
+    entry.className = "topic-entry";
+
+    const button = document.createElement("button");
+    button.className = "topic-item";
+    button.type = "button";
+    button.dataset.topicId = String(topicId);
+    button.setAttribute("aria-pressed", String(topicId === state.topicId));
+    button.setAttribute(
+      "aria-label",
+      `${label}, 최근 ${normalizeNonNegativeNumber(trends?.window_hours, 0)}시간 ` +
+        `${count}개, ${trendLabel}`
+    );
+
+    const labelElement = document.createElement("span");
+    labelElement.className = "topic-label";
+    labelElement.textContent = label;
+    const countElement = document.createElement("span");
+    countElement.className = "topic-count";
+    countElement.textContent = `${numberFormatter.format(count)}개`;
+    const trendElement = document.createElement("span");
+    trendElement.className = "topic-trend";
+    trendElement.dataset.trend = trendState;
+    trendElement.textContent = trendLabel;
+    button.append(labelElement, countElement, trendElement);
+    button.addEventListener("click", () => {
+      applyTopicFilter(topicId === state.topicId ? 0 : topicId);
+    });
+    entry.append(button);
+
+    const representative = Array.isArray(topic?.representative_posts)
+      ? topic.representative_posts[0]
+      : null;
+    const representativeUrl = getSafeHttpUrl(representative?.post_url);
+    const representativeTitle = String(representative?.title || "").trim();
+    if (representativeUrl && representativeTitle) {
+      const representativeLine = document.createElement("p");
+      representativeLine.className = "topic-representative";
+      const link = document.createElement("a");
+      link.href = representativeUrl;
+      link.target = "_blank";
+      link.rel = "noreferrer noopener";
+      link.textContent = `대표 글 · ${representativeTitle}`;
+      representativeLine.append(link);
+      entry.append(representativeLine);
+    }
+    elements.topicList.append(entry);
+  }
+
+  const hasTopics = elements.topicList.childElementCount > 0;
+  elements.topicEmpty.hidden = hasTopics;
+  elements.topicEmpty.textContent = trends
+    ? "반복해서 다뤄진 토픽이 아직 없습니다."
+    : state.dataSource === "fallback"
+      ? "로컬 스냅샷에는 토픽 정보가 없습니다."
+      : "첫 토픽 분석이 완료되면 여기에 표시됩니다.";
+
+  if (trends) {
+    const windowHours = normalizeNonNegativeNumber(trends.window_hours, 0);
+    const eligible = normalizeNonNegativeNumber(trends.eligible_post_count, 0);
+    const analyzed = normalizeNonNegativeNumber(trends.analyzed_post_count, 0);
+    elements.topicPanelMeta.textContent =
+      `최근 ${numberFormatter.format(windowHours)}시간 · ` +
+      `${numberFormatter.format(analyzed)}/${numberFormatter.format(eligible)}개 분석 · ` +
+      `${formatDateTime(trends.generated_at)} 갱신`;
+  } else {
+    elements.topicPanelMeta.textContent = "제목·말머리 기준";
+  }
+
+  if (state.topicId > 0 && isCompactTopicPanel()) {
+    setTopicPanelExpanded(true);
+  }
+  restoreTopicFocus();
+}
+
+function getTopicTrendLabel(trendState, previousCount) {
+  if (trendState === "new") {
+    return "새로 등장";
+  }
+  if (trendState === "rising") {
+    return `급상승 · 직전 ${numberFormatter.format(previousCount)}개`;
+  }
+  return `지속 · 직전 ${numberFormatter.format(previousCount)}개`;
+}
+
+function applyTopicFilter(topicId) {
+  const normalized = normalizePositiveNumber(topicId, 0);
+  if (normalized === state.topicId) {
+    return;
+  }
+  window.clearTimeout(state.filterTimer);
+  state.topicId = normalized;
+  state.page = 1;
+  state.focusPageContentAfterLoad = false;
+  state.focusTopicAfterLoad = true;
+  syncStateToUrl({ replace: false });
+  loadArchive();
+}
+
+function restoreTopicFocus() {
+  if (!state.focusTopicAfterLoad) {
+    return;
+  }
+  state.focusTopicAfterLoad = false;
+  window.requestAnimationFrame(() => {
+    const selectedButton = state.topicId > 0
+      ? elements.topicList.querySelector(`[data-topic-id="${state.topicId}"]`)
+      : null;
+    const target = selectedButton ||
+      (state.topicId > 0 && !elements.topicClear.hidden
+        ? elements.topicClear
+        : elements.topicPanelTitle);
+    target?.focus({ preventScroll: true });
+  });
+}
+
+function isCompactTopicPanel() {
+  return typeof window.matchMedia === "function"
+    ? window.matchMedia("(max-width: 1010px)").matches
+    : false;
+}
+
+function setTopicPanelExpanded(expanded) {
+  state.topicPanelExpanded = Boolean(expanded);
+  elements.topicPanelToggle.setAttribute(
+    "aria-expanded",
+    String(state.topicPanelExpanded)
+  );
+  elements.topicPanelToggleState.textContent = state.topicPanelExpanded
+    ? "접기"
+    : "펼치기";
+  elements.topicPanelContent.hidden = !state.topicPanelExpanded;
+}
+
+function syncTopicPanelForViewport() {
+  if (!isCompactTopicPanel()) {
+    setTopicPanelExpanded(true);
+    return;
+  }
+  setTopicPanelExpanded(state.topicId > 0);
 }
 
 function renderNotice() {
@@ -1434,8 +1645,14 @@ function renderResultStatus(view) {
   const filtered = numberFormatter.format(view.filteredPosts);
   const total = numberFormatter.format(view.totalPosts);
   const { visible_from: from, visible_to: to } = view.pagination;
+  const selectedLabel = state.topicId > 0
+    ? String(state.archive?.selected_topic?.label || "").trim()
+    : "";
 
-  if (view.filteredPosts === view.totalPosts) {
+  if (selectedLabel) {
+    elements.resultCount.textContent =
+      `‘${selectedLabel}’ 관련 글 ${filtered}개 · 전체 ${total}개`;
+  } else if (view.filteredPosts === view.totalPosts) {
     elements.resultCount.textContent = `저장된 글 ${total}개`;
   } else {
     elements.resultCount.textContent = `전체 ${total}개 중 조건에 맞는 글 ${filtered}개`;
@@ -1692,6 +1909,16 @@ function bindEvents() {
     elements.runsOpen.setAttribute("aria-expanded", "false");
     elements.runsOpen.focus();
   });
+  elements.topicPanelToggle.addEventListener("click", () => {
+    if (isCompactTopicPanel()) {
+      setTopicPanelExpanded(!state.topicPanelExpanded);
+    }
+  });
+  elements.topicClear.addEventListener("click", () => applyTopicFilter(0));
+  if (typeof window.matchMedia === "function") {
+    const topicPanelMedia = window.matchMedia("(max-width: 1010px)");
+    topicPanelMedia.addEventListener?.("change", syncTopicPanelForViewport);
+  }
   elements.rulesOpen.addEventListener("click", openRulesDialog);
   elements.rulesClose.addEventListener("click", requestCloseRulesDialog);
   elements.rulesDialog.addEventListener("click", (event) => {
@@ -2050,6 +2277,7 @@ function hydrateStateFromUrl() {
   state.target = target || DEFAULT_TARGET;
   state.search = String(params.get("q") || "").trim().slice(0, 100);
   state.subject = normalizeSubject(params.get("subject"));
+  state.topicId = normalizePositiveNumber(params.get("topic"), 0);
   state.minUpvotes =
     minUpvotes === null
       ? DEFAULT_STATE.minUpvotes
@@ -2067,6 +2295,7 @@ function syncStateToUrl({ replace = true } = {}) {
     target: state.target,
     q: state.search || null,
     subject: state.subject || null,
+    topic: state.topicId || null,
     min_upvotes:
       state.minUpvotes === DEFAULT_STATE.minUpvotes ? null : state.minUpvotes,
     min_comments: state.minComments || null,

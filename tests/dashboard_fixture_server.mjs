@@ -31,6 +31,21 @@ const ARTICLE_SUBJECTS = Object.freeze([
   "release",
   "other",
 ]);
+const COMMUNITY_TOPIC_FIXTURES = Object.freeze({
+  "dcinside-singularity": Object.freeze([
+    { topic_id: 101, label: "GPT-5.6 공개", post_count: 12, previous_post_count: 4, trend_state: "rising" },
+    { topic_id: 102, label: "휴머노이드 로봇", post_count: 8, previous_post_count: 0, trend_state: "new" },
+    { topic_id: 103, label: "AI 에이전트", post_count: 6, previous_post_count: 5, trend_state: "active" },
+  ]),
+  "dcinside-agent-stack": Object.freeze([
+    { topic_id: 201, label: "로컬 에이전트", post_count: 9, previous_post_count: 3, trend_state: "rising" },
+    { topic_id: 202, label: "브라우저 자동화", post_count: 5, previous_post_count: 0, trend_state: "new" },
+  ]),
+  "fmkorea-munich": Object.freeze([
+    { topic_id: 301, label: "분데스리가 개막", post_count: 7, previous_post_count: 2, trend_state: "rising" },
+    { topic_id: 302, label: "이적시장", post_count: 5, previous_post_count: 5, trend_state: "active" },
+  ]),
+});
 
 const archives = [
   {
@@ -228,6 +243,7 @@ function handleArchive(requestUrl, response) {
   }
   const sources = sourcesByArchive[target];
   const articleMode = archive.content_kind === "article";
+  const topicFixtures = COMMUNITY_TOPIC_FIXTURES[target] || [];
   const archivePosts = posts.map((post, index) => ({
     ...post,
     archive_key: target,
@@ -245,6 +261,9 @@ function handleArchive(requestUrl, response) {
     comments: articleMode ? 0 : post.comments,
     qualifies_by: articleMode ? "llm-include" : post.qualifies_by,
     feedback_key: articleMode ? feedbackKeyForIndex(index) : undefined,
+    topic_ids: articleMode || topicFixtures.length === 0
+      ? []
+      : [topicFixtures[index % topicFixtures.length].topic_id],
   })).filter((post) => !articleMode || !hiddenPostKeys.has(post.feedback_key));
   const archiveSubjectOptions = [
     ...new Set(archivePosts.map((post) => normalizeSubject(post.subject)).filter(Boolean)),
@@ -260,6 +279,7 @@ function handleArchive(requestUrl, response) {
     : "created_at";
   const pageSize = Math.min(normalizePositive(requestUrl.searchParams.get("page_size"), 30), 100);
   const requestedPage = normalizePositive(requestUrl.searchParams.get("page"), 1);
+  const topicId = normalizePositive(requestUrl.searchParams.get("topic"), 0);
 
   const filtered = archivePosts
     .filter((post) => {
@@ -267,6 +287,7 @@ function handleArchive(requestUrl, response) {
         post.upvotes >= minUpvotes &&
         post.comments >= minComments &&
         (!subject || post.subject === subject) &&
+        (!topicId || post.topic_ids.includes(topicId)) &&
         (!search || post.title.toLocaleLowerCase("ko-KR").includes(search))
       );
     })
@@ -276,6 +297,35 @@ function handleArchive(requestUrl, response) {
   const page = totalPages === 0 ? 1 : Math.min(requestedPage, totalPages);
   const offset = (page - 1) * pageSize;
   const visiblePosts = filtered.slice(offset, offset + pageSize);
+  const selectedTopic = topicFixtures.find((topic) => topic.topic_id === topicId) || null;
+  const topicTrends = articleMode
+    ? null
+    : {
+        window_hours: 12,
+        window_start: "2026-07-16T12:30:00.000Z",
+        window_end: "2026-07-17T00:30:00.000Z",
+        generated_at: "2026-07-17T00:31:00.000Z",
+        summary: topicFixtures.length
+          ? `최근 12시간에는 ‘${topicFixtures[0].label}’ 관련 글이 많이 다뤄졌습니다.`
+          : "최근 12시간에는 반복해서 다뤄진 주요 토픽이 아직 없습니다.",
+        eligible_post_count: archivePosts.length,
+        analyzed_post_count: archivePosts.length,
+        topics: topicFixtures.map((topic) => {
+          const representative = archivePosts.find((post) => post.topic_ids.includes(topic.topic_id));
+          return {
+            ...topic,
+            hotness_score: topic.post_count * 10,
+            representative_posts: representative
+              ? [{
+                  external_post_id: representative.external_post_id,
+                  title: representative.title,
+                  post_url: representative.post_url,
+                  created_at: representative.created_at,
+                }]
+              : [],
+          };
+        }),
+      };
 
   sendJson(response, {
     target,
@@ -283,6 +333,8 @@ function handleArchive(requestUrl, response) {
     archive,
     sources,
     source: sources[0],
+    selected_topic: selectedTopic,
+    topic_trends: topicTrends,
     summary: {
       total_posts: archivePosts.length,
       filtered_posts: filtered.length,
