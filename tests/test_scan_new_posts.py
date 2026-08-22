@@ -415,7 +415,7 @@ class BatchedPostUpsertTests(unittest.TestCase):
         self.assertNotIn("1", insert_calls[0][1])
 
     def test_multi_row_upserts_stay_within_the_d1_parameter_limit(self) -> None:
-        client = RecordingClient()
+        client = BatchRecordingClient()
         posts = [sample_post(post_id) for post_id in range(1, POSTS_PER_UPSERT + 2)]
 
         upsert_posts(
@@ -426,9 +426,16 @@ class BatchedPostUpsertTests(unittest.TestCase):
         )
 
         self.assertEqual(post_upsert_query_count(len(posts)), 2)
-        self.assertEqual(len(client.calls), 2)
-        self.assertEqual([len(params) for _, params in client.calls], [99, 15])
-        self.assertTrue(all("INSERT INTO posts" in sql for sql, _ in client.calls))
+        self.assertEqual(len(client.batches), 2)
+        self.assertEqual([len(batch) for batch in client.batches], [2, 2])
+        upserts = [batch[0] for batch in client.batches]
+        heartbeats = [batch[1] for batch in client.batches]
+        self.assertEqual([len(params) for _, params in upserts], [99, 15])
+        self.assertEqual([len(params) for _, params in heartbeats], [12, 6])
+        self.assertTrue(all("INSERT INTO posts" in sql for sql, _ in upserts))
+        self.assertTrue(
+            all("SET fetched_at = ?" in sql for sql, _ in heartbeats)
+        )
 
     def test_subject_is_inserted_but_not_backfilled_on_conflict(self) -> None:
         client = RecordingClient()
@@ -448,6 +455,122 @@ class BatchedPostUpsertTests(unittest.TestCase):
         self.assertIn("subject", insert_clause)
         self.assertNotIn("subject", update_clause)
         self.assertIn("일반", params)
+
+    def test_unchanged_rescan_updates_only_observation_times(self) -> None:
+        client = SqliteClient()
+        target = get_target("dcinside-singularity")
+        first_checked_at = "2026-07-16T00:00:00+00:00"
+        next_checked_at = "2026-07-16T00:15:00+00:00"
+        upsert_source(client, target, first_checked_at)
+        upsert_posts(client, target, [sample_post(1)], first_checked_at)
+        client.connection.executescript(
+            """
+            CREATE TABLE post_update_audit (kind TEXT NOT NULL);
+            CREATE TRIGGER audit_any_post_update
+            AFTER UPDATE ON posts
+            BEGIN
+              INSERT INTO post_update_audit (kind) VALUES ('any');
+            END;
+            CREATE TRIGGER audit_material_post_update
+            AFTER UPDATE OF
+              archive_key, canonical_post_key, post_url, title, created_at,
+              created_at_raw, upvotes, comments, qualifies_by, status
+            ON posts
+            BEGIN
+              INSERT INTO post_update_audit (kind) VALUES ('material');
+            END;
+            """
+        )
+
+        upsert_posts(client, target, [sample_post(1)], next_checked_at)
+
+        self.assertEqual(
+            client.query(
+                """
+                SELECT title, upvotes, comments, fetched_at, last_seen_at, status
+                FROM posts
+                WHERE source_key = ? AND external_post_id = ?
+                """,
+                [target.key, "1"],
+            ),
+            [
+                {
+                    "title": "post 1",
+                    "upvotes": 4,
+                    "comments": 0,
+                    "fetched_at": next_checked_at,
+                    "last_seen_at": next_checked_at,
+                    "status": "active",
+                }
+            ],
+        )
+        self.assertEqual(
+            client.query(
+                "SELECT kind, COUNT(*) AS updates "
+                "FROM post_update_audit GROUP BY kind ORDER BY kind"
+            ),
+            [{"kind": "any", "updates": 1}],
+        )
+
+        client.query("DELETE FROM post_update_audit")
+        upsert_posts(client, target, [sample_post(1)], next_checked_at)
+        self.assertEqual(client.query("SELECT kind FROM post_update_audit"), [])
+
+    def test_changed_rescan_uses_one_material_update(self) -> None:
+        client = SqliteClient()
+        target = get_target("dcinside-singularity")
+        first_checked_at = "2026-07-16T00:00:00+00:00"
+        next_checked_at = "2026-07-16T00:15:00+00:00"
+        upsert_source(client, target, first_checked_at)
+        upsert_posts(client, target, [sample_post(1)], first_checked_at)
+        client.connection.executescript(
+            """
+            CREATE TABLE post_update_audit (kind TEXT NOT NULL);
+            CREATE TRIGGER audit_any_post_update
+            AFTER UPDATE ON posts
+            BEGIN
+              INSERT INTO post_update_audit (kind) VALUES ('any');
+            END;
+            CREATE TRIGGER audit_material_post_update
+            AFTER UPDATE OF
+              archive_key, canonical_post_key, post_url, title, created_at,
+              created_at_raw, upvotes, comments, qualifies_by, status
+            ON posts
+            BEGIN
+              INSERT INTO post_update_audit (kind) VALUES ('material');
+            END;
+            """
+        )
+
+        upsert_posts(
+            client,
+            target,
+            [{**sample_post(1), "upvotes": 7, "qualifies_by": "upvotes"}],
+            next_checked_at,
+        )
+
+        self.assertEqual(
+            client.query(
+                "SELECT upvotes, qualifies_by, last_seen_at FROM posts"
+            ),
+            [
+                {
+                    "upvotes": 7,
+                    "qualifies_by": "upvotes",
+                    "last_seen_at": next_checked_at,
+                }
+            ],
+        )
+        self.assertEqual(
+            client.query(
+                "SELECT kind, COUNT(*) AS updates "
+                "FROM post_update_audit GROUP BY kind ORDER BY kind"
+            ),
+            [
+                {"kind": "any", "updates": 1},
+                {"kind": "material", "updates": 1},
+            ],
+        )
 
     def test_blank_title_is_persisted_with_canonical_identity(self) -> None:
         client = SqliteClient()

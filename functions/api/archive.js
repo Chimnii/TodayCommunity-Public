@@ -410,6 +410,11 @@ export async function onRequestGet(context) {
       db
         .prepare(
           `
+          WITH archive_sources AS (
+            SELECT source_key, site_name, board_name
+            FROM sources
+            WHERE archive_key = ?
+          )
           SELECT runs.source_key, sources.site_name, sources.board_name,
                  runs.run_type, runs.status, runs.scanned_pages, runs.scanned_posts,
                  runs.matched_posts, runs.started_at, runs.finished_at,
@@ -420,9 +425,15 @@ export async function onRequestGet(context) {
                    THEN 1
                    ELSE 0
                  END AS had_error
-          FROM crawl_runs AS runs
-          INNER JOIN sources ON sources.source_key = runs.source_key
-          WHERE sources.archive_key = ?
+          FROM archive_sources AS sources
+          INNER JOIN crawl_runs AS runs
+            ON runs.id IN (
+              SELECT source_runs.id
+              FROM crawl_runs AS source_runs
+              WHERE source_runs.source_key = sources.source_key
+              ORDER BY source_runs.id DESC
+              LIMIT 10
+            )
           ORDER BY runs.id DESC
           LIMIT 10
           `

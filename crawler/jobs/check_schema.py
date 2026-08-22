@@ -118,6 +118,13 @@ REQUIRED_UNIQUE_KEYS: Dict[str, Tuple[Tuple[str, ...], ...]] = {
     ),
 }
 
+REQUIRED_INDEXES: Dict[str, Dict[str, Tuple[str, ...]]] = {
+    "crawl_runs": {
+        "idx_crawl_runs_source_status_id": ("source_key", "status", "id"),
+        "idx_crawl_runs_source_id": ("source_key", "id"),
+    },
+}
+
 REQUIRED_COLUMN_PROPERTIES = {
     "sources": {
         "archive_key": {
@@ -171,12 +178,24 @@ def inspect_schema(client: D1Client) -> dict:
         column_names = tuple(str(row.get("name") or "") for row in columns)
         missing_columns = sorted(set(REQUIRED_COLUMNS[table_name]) - set(column_names))
         primary_key = _primary_key(columns)
-        unique_keys = _unique_keys(client, table_name)
+        index_rows = client.query(
+            f"PRAGMA index_list({_quote_identifier(table_name)})"
+        )
+        unique_keys = _unique_keys(client, index_rows)
+        required_indexes = _required_index_details(
+            client,
+            index_rows,
+            REQUIRED_INDEXES.get(table_name, {}),
+        )
 
         details[table_name] = {
             "columns": list(column_names),
             "primary_key": list(primary_key),
             "unique_keys": [list(key) for key in unique_keys],
+            "required_indexes": {
+                name: list(index["columns"])
+                for name, index in required_indexes.items()
+            },
         }
 
         if missing_columns:
@@ -224,6 +243,24 @@ def inspect_schema(client: D1Client) -> dict:
                     f"found {found}"
                 )
 
+        for index_name, expected_columns in REQUIRED_INDEXES.get(
+            table_name, {}
+        ).items():
+            actual = required_indexes.get(index_name)
+            if actual is None:
+                errors.append(
+                    f"table {table_name!r} is missing required index "
+                    f"{index_name!r} on {_format_key(expected_columns)}"
+                )
+                continue
+            actual_columns = tuple(actual["columns"])
+            if actual_columns != expected_columns or actual["partial"] != 0:
+                errors.append(
+                    f"table {table_name!r} index {index_name!r} must be a "
+                    f"non-partial index on {_format_key(expected_columns)}; found "
+                    f"{_format_key(actual_columns)} (partial={actual['partial']})"
+                )
+
     return {
         "valid": not errors,
         "required_tables": list(REQUIRED_TABLES),
@@ -253,9 +290,11 @@ def _primary_key(columns: Sequence[dict]) -> Tuple[str, ...]:
     return tuple(name for _, name in sorted(primary_columns))
 
 
-def _unique_keys(client: D1Client, table_name: str) -> Tuple[Tuple[str, ...], ...]:
+def _unique_keys(
+    client: D1Client,
+    index_rows: Sequence[dict],
+) -> Tuple[Tuple[str, ...], ...]:
     keys = []
-    index_rows = client.query(f"PRAGMA index_list({_quote_identifier(table_name)})")
     for index_row in index_rows:
         if (
             _pragma_int(index_row.get("unique")) != 1
@@ -273,6 +312,32 @@ def _unique_keys(client: D1Client, table_name: str) -> Tuple[Tuple[str, ...], ..
         if key:
             keys.append(key)
     return tuple(sorted(set(keys)))
+
+
+def _required_index_details(
+    client: D1Client,
+    index_rows: Sequence[dict],
+    required: Dict[str, Tuple[str, ...]],
+) -> Dict[str, dict]:
+    by_name = {
+        str(row.get("name") or ""): row
+        for row in index_rows
+        if str(row.get("name") or "")
+    }
+    details = {}
+    for index_name in required:
+        index_row = by_name.get(index_name)
+        if index_row is None:
+            continue
+        column_rows = client.query(
+            f"PRAGMA index_info({_quote_identifier(index_name)})"
+        )
+        ordered = sorted(column_rows, key=lambda row: _pragma_int(row.get("seqno")))
+        details[index_name] = {
+            "columns": tuple(str(row.get("name") or "") for row in ordered),
+            "partial": _pragma_int(index_row.get("partial")),
+        }
+    return details
 
 
 def _pragma_int(value: object) -> int:

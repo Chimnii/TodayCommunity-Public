@@ -432,6 +432,12 @@ CREATE TABLE IF NOT EXISTS crawl_runs (
   FOREIGN KEY (source_key) REFERENCES sources(source_key)
 );
 
+CREATE INDEX IF NOT EXISTS idx_crawl_runs_source_status_id
+  ON crawl_runs (source_key, status, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_crawl_runs_source_id
+  ON crawl_runs (source_key, id DESC);
+
 CREATE TABLE IF NOT EXISTS source_state (
   source_key TEXT PRIMARY KEY,
   head_anchor_history TEXT NOT NULL DEFAULT '[]',

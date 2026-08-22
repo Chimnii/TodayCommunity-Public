@@ -31,6 +31,20 @@ AUTH_MIGRATION_PATH = (
     / "007_owner_auth.sql"
 )
 AUTH_MIGRATION = AUTH_MIGRATION_PATH.read_text(encoding="utf-8")
+D1_USAGE_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "cloudflare"
+    / "migrations"
+    / "009_d1_usage_optimization.sql"
+)
+D1_USAGE_MIGRATION = D1_USAGE_MIGRATION_PATH.read_text(encoding="utf-8")
+CRAWL_RUN_INDEX_DEFINITIONS = """CREATE INDEX IF NOT EXISTS idx_crawl_runs_source_status_id
+  ON crawl_runs (source_key, status, id DESC);
+
+CREATE INDEX IF NOT EXISTS idx_crawl_runs_source_id
+  ON crawl_runs (source_key, id DESC);
+
+"""
 
 
 class SqliteClient:
@@ -116,6 +130,13 @@ class SchemaPreflightTests(unittest.TestCase):
         self.assertEqual(
             ["source_key", "post_id"],
             report["tables"]["coverage_absences"]["primary_key"],
+        )
+        self.assertEqual(
+            {
+                "idx_crawl_runs_source_status_id": ["source_key", "status", "id"],
+                "idx_crawl_runs_source_id": ["source_key", "id"],
+            },
+            report["tables"]["crawl_runs"]["required_indexes"],
         )
         subject_column = next(
             row
@@ -360,6 +381,103 @@ class SchemaPreflightTests(unittest.TestCase):
                 in error
                 for error in caught.exception.report["errors"]
             )
+        )
+
+    def test_d1_usage_migration_adds_required_crawl_run_indexes(self) -> None:
+        self.assertIn(CRAWL_RUN_INDEX_DEFINITIONS, SCHEMA)
+        client = SqliteClient(SCHEMA.replace(CRAWL_RUN_INDEX_DEFINITIONS, "", 1))
+
+        with self.assertRaises(SchemaValidationError):
+            validate_schema(client)
+
+        client.connection.executescript(D1_USAGE_MIGRATION)
+        client.connection.executescript(D1_USAGE_MIGRATION)
+
+        self.assertTrue(validate_schema(client)["valid"])
+
+    def test_missing_crawl_run_performance_index_fails_preflight(self) -> None:
+        missing_definition = """CREATE INDEX IF NOT EXISTS idx_crawl_runs_source_status_id
+  ON crawl_runs (source_key, status, id DESC);
+
+"""
+        self.assertIn(missing_definition, SCHEMA)
+        client = SqliteClient(SCHEMA.replace(missing_definition, "", 1))
+
+        with self.assertRaises(SchemaValidationError) as caught:
+            validate_schema(client)
+
+        self.assertIn(
+            "table 'crawl_runs' is missing required index "
+            "'idx_crawl_runs_source_status_id' on (source_key, status, id)",
+            caught.exception.report["errors"],
+        )
+
+    def test_crawl_run_lookup_plans_use_required_indexes(self) -> None:
+        client = SqliteClient()
+
+        cooldown_plan = client.query(
+            """
+            EXPLAIN QUERY PLAN
+            SELECT started_at, finished_at
+            FROM crawl_runs
+            WHERE source_key = ? AND status = 'blocked'
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            ["dcinside-singularity"],
+        )
+        recent_plan = client.query(
+            """
+            EXPLAIN QUERY PLAN
+            SELECT id
+            FROM crawl_runs
+            WHERE source_key = ?
+            ORDER BY id DESC
+            LIMIT 10
+            """,
+            ["dcinside-singularity"],
+        )
+        archive_recent_plan = client.query(
+            """
+            EXPLAIN QUERY PLAN
+            WITH archive_sources AS (
+              SELECT source_key
+              FROM sources
+              WHERE archive_key = ?
+            )
+            SELECT runs.id
+            FROM archive_sources AS sources
+            INNER JOIN crawl_runs AS runs
+              ON runs.id IN (
+                SELECT source_runs.id
+                FROM crawl_runs AS source_runs
+                WHERE source_runs.source_key = sources.source_key
+                ORDER BY source_runs.id DESC
+                LIMIT 10
+              )
+            ORDER BY runs.id DESC
+            LIMIT 10
+            """,
+            ["dcinside-singularity"],
+        )
+
+        self.assertTrue(
+            any(
+                "idx_crawl_runs_source_status_id" in row["detail"]
+                for row in cooldown_plan
+            )
+        )
+        self.assertTrue(
+            any("idx_crawl_runs_source_id" in row["detail"] for row in recent_plan)
+        )
+        self.assertTrue(
+            any(
+                "idx_crawl_runs_source_id" in row["detail"]
+                for row in archive_recent_plan
+            )
+        )
+        self.assertFalse(
+            any("SCAN source_runs" in row["detail"] for row in archive_recent_plan)
         )
 
     def test_missing_archive_canonical_unique_constraint_fails(self) -> None:

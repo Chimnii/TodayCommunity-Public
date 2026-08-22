@@ -41,7 +41,11 @@ class MockStatement {
     if (this.sql.includes("AS filtered_posts")) {
       return { results: [{ filtered_posts: this.database.filteredPosts }] };
     }
-    if (this.sql.includes("FROM sources") && !this.sql.includes("JOIN sources")) {
+    if (
+      this.sql.includes("FROM sources") &&
+      !this.sql.includes("JOIN sources") &&
+      !this.sql.includes("FROM crawl_runs")
+    ) {
       return {
         results: this.database.sources.filter(
           (source) => source.archive_key === this.values[0]
@@ -281,8 +285,11 @@ test("defaults to the first 30 globally counted posts and preserves recent runs"
   assert.equal(body.posts[0].subject, "AI 소식");
 
   const runCall = findCall(database, "FROM crawl_runs", "batch");
-  assert.match(runCall.sql, /INNER JOIN sources ON sources\.source_key = runs\.source_key/);
-  assert.match(runCall.sql, /WHERE sources\.archive_key = \?/);
+  assert.match(runCall.sql, /WITH archive_sources AS/);
+  assert.match(runCall.sql, /FROM sources WHERE archive_key = \?/);
+  assert.match(runCall.sql, /FROM archive_sources AS sources INNER JOIN crawl_runs AS runs/);
+  assert.match(runCall.sql, /WHERE source_runs\.source_key = sources\.source_key/);
+  assert.match(runCall.sql, /ORDER BY source_runs\.id DESC LIMIT 10/);
   assert.match(runCall.sql, /ORDER BY runs\.id DESC LIMIT 10/);
   assert.match(runCall.sql, /WHEN runs\.status IN \('failed', 'blocked'\)/);
   assert.match(runCall.sql, /AND TRIM\(runs\.error_message\) <> ''/);

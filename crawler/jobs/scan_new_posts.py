@@ -12,7 +12,7 @@ from typing import Callable, Dict, Iterable, List, Optional
 from urllib import error, request
 
 from crawler.config import get_env, get_required_env, is_truthy
-from crawler.d1 import D1Client
+from crawler.d1 import D1Client, D1Statement
 from crawler.parsers.dcinside import (
     DcinsideListParser,
     is_qualifying_post,
@@ -156,6 +156,25 @@ def scan_target(target: TargetBoard, pages: int, page_delay_seconds: float) -> D
     }
 
 
+def _execute_statements(
+    client: D1Client,
+    statements: Iterable[D1Statement],
+) -> None:
+    prepared = list(statements)
+    if not prepared:
+        return
+
+    # D1 executes the ordered statements in one REST request. Query-only
+    # SQLite/local clients keep the same SQL path for tests and local tools.
+    batch = getattr(client, "batch", None)
+    if callable(batch):
+        batch(prepared)
+        return
+
+    for sql, params in prepared:
+        client.query(sql, params)
+
+
 def upsert_source(client: D1Client, target: TargetBoard, run_started_at: str) -> None:
     archive = target.archive
     source_state_statement = source_state_initialization_statement(
@@ -215,14 +234,7 @@ def upsert_source(client: D1Client, target: TargetBoard, run_started_at: str) ->
         source_state_statement,
     ]
 
-    # D1 uses one REST request; query-only SQLite/local clients keep the same SQL path.
-    batch = getattr(client, "batch", None)
-    if callable(batch):
-        batch(statements)
-        return
-
-    for sql, params in statements:
-        client.query(sql, params)
+    _execute_statements(client, statements)
 
 
 def record_run(
@@ -300,12 +312,15 @@ def upsert_posts(
             for _ in chunk
         )
         params = [target.archive_key]
+        canonical_keys = []
         for post in chunk:
             external_post_id = str(post["external_post_id"]).strip()
+            canonical_key = canonical_post_key(target, external_post_id)
+            canonical_keys.append(canonical_key)
             params.extend(
                 [
                     target.key,
-                    canonical_post_key(target, external_post_id),
+                    canonical_key,
                     external_post_id,
                     post["post_url"],
                     post["subject"],
@@ -323,8 +338,7 @@ def upsert_posts(
         # Subject is intentionally insert-only. Rows that existed before the
         # additive migration keep the empty default instead of being backfilled
         # by routine metric refreshes.
-        client.query(
-            f"""
+        upsert_sql = f"""
             WITH target_archive(archive_key) AS (VALUES (?))
             INSERT INTO posts (
               source_key, archive_key, canonical_post_key, external_post_id,
@@ -355,8 +369,47 @@ def upsert_posts(
               last_seen_at = excluded.last_seen_at,
               qualifies_by = excluded.qualifies_by,
               status = 'active'
-            """,
-            params,
+            WHERE posts.canonical_post_key IS NULL
+               OR TRIM(posts.canonical_post_key) = ''
+               OR posts.post_url IS NOT excluded.post_url
+               OR posts.title IS NOT excluded.title
+               OR posts.created_at IS NOT excluded.created_at
+               OR posts.created_at_raw IS NOT excluded.created_at_raw
+               OR posts.upvotes IS NOT excluded.upvotes
+               OR posts.comments IS NOT excluded.comments
+               OR posts.qualifies_by IS NOT excluded.qualifies_by
+               OR posts.status IS NOT 'active'
+            """
+        heartbeat_placeholders = ", ".join("?" for _ in canonical_keys)
+        heartbeat_sql = f"""
+            UPDATE posts
+            SET fetched_at = ?,
+                last_seen_at = ?
+            WHERE archive_key = ?
+              AND canonical_post_key IN ({heartbeat_placeholders})
+              AND (
+                fetched_at IS NOT ?
+                OR last_seen_at IS NOT ?
+              )
+            """
+        heartbeat_params = [
+            checked_at,
+            checked_at,
+            target.archive_key,
+            *canonical_keys,
+            checked_at,
+            checked_at,
+        ]
+
+        # Unchanged rescans update only the non-indexed observation times. New,
+        # changed, or restored rows still take the full UPSERT path. Both
+        # statements share one D1 request and persistence boundary per chunk.
+        _execute_statements(
+            client,
+            [
+                (upsert_sql, params),
+                (heartbeat_sql, heartbeat_params),
+            ],
         )
         if on_batch_persisted is not None:
             on_batch_persisted(len(chunk))
