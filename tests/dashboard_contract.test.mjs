@@ -96,12 +96,23 @@ test("ships a stored hot-topic rail with URL-backed filtering and a compact acco
   assert.match(app, /applyTopicFilter\(topicId === state\.topicId \? 0 : topicId\)/);
   assert.match(app, /elements\.topicPanel\.hidden = !communityArchive/);
   assert.match(app, /getSafeHttpUrl\(representative\?\.post_url\)/);
+  assert.match(app, /const COMPACT_TOPIC_PANEL_QUERY = "\(max-width: 1759px\)"/);
+  assert.match(app, /window\.matchMedia\(COMPACT_TOPIC_PANEL_QUERY\)\.matches/);
+  assert.match(css, /--layout-max:\s*1184px/);
+  assert.match(
+    css,
+    /\.page-shell\s*{[^}]*width:\s*min\(100%, var\(--layout-max\)\)[^}]*margin:\s*0 auto/s
+  );
   assert.match(css, /\.archive-layout\s*{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) 272px/s);
   assert.match(css, /\.topic-panel\s*{[^}]*position:\s*sticky/s);
   assert.match(css, /\.topic-item\[aria-pressed="true"\]/);
   assert.match(
     css,
-    /@media \(max-width:\s*1010px\)[\s\S]*\.archive-layout\s*{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)[\s\S]*\.topic-panel\s*{[^}]*order:\s*-1[\s\S]*\.topic-panel-toggle\s*{[^}]*display:\s*inline-flex/
+    /@media \(min-width:\s*1760px\)[\s\S]*\.archive-layout\s*{[^}]*width:\s*calc\(100% \+ 272px \+ var\(--space-4\)\)/
+  );
+  assert.match(
+    css,
+    /@media \(max-width:\s*1759px\)[\s\S]*\.archive-layout\s*{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)[\s\S]*\.topic-panel\s*{[^}]*order:\s*-1[\s\S]*\.topic-panel-toggle\s*{[^}]*display:\s*inline-flex/
   );
   assert.match(fixtureServer, /COMMUNITY_TOPIC_FIXTURES/);
   assert.match(fixtureServer, /!topicId \|\| post\.topic_ids\.includes\(topicId\)/);

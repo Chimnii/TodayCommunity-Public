@@ -73,6 +73,7 @@ const ARTICLE_SUBJECT_LABELS = Object.freeze({
   other: "etc",
 });
 const PAGE_WINDOW_RADIUS = 3;
+const COMPACT_TOPIC_PANEL_QUERY = "(max-width: 1759px)";
 const FEEDBACK_KEY_PATTERN = /^[a-f0-9]{32}$/;
 const FEEDBACK_RATINGS = Object.freeze([
   { level: 2, icon: "👍👍", label: "아주 흥미있음" },
@@ -882,7 +883,7 @@ function restoreTopicFocus() {
 
 function isCompactTopicPanel() {
   return typeof window.matchMedia === "function"
-    ? window.matchMedia("(max-width: 1010px)").matches
+    ? window.matchMedia(COMPACT_TOPIC_PANEL_QUERY).matches
     : false;
 }
 
@@ -1916,7 +1917,7 @@ function bindEvents() {
   });
   elements.topicClear.addEventListener("click", () => applyTopicFilter(0));
   if (typeof window.matchMedia === "function") {
-    const topicPanelMedia = window.matchMedia("(max-width: 1010px)");
+    const topicPanelMedia = window.matchMedia(COMPACT_TOPIC_PANEL_QUERY);
     topicPanelMedia.addEventListener?.("change", syncTopicPanelForViewport);
   }
   elements.rulesOpen.addEventListener("click", openRulesDialog);

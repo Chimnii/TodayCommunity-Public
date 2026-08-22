@@ -1317,7 +1317,13 @@ body[data-content-kind="article"] .cell-source {
   }
 }
 
-@media (max-width: 1010px) {
+@media (min-width: 1760px) {
+  .archive-layout {
+    width: calc(100% + 272px + var(--space-4));
+  }
+}
+
+@media (max-width: 1759px) {
   .archive-layout {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1331,6 +1337,9 @@ body[data-content-kind="article"] .cell-source {
     display: inline-flex;
     align-items: center;
   }
+}
+
+@media (max-width: 1010px) {
 
   .pagination {
     flex-wrap: nowrap;
