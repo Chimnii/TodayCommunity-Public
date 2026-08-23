@@ -151,7 +151,6 @@ const elements = {
   topicPanelToggle: document.querySelector("#topic-panel-toggle"),
   topicPanelToggleState: document.querySelector("#topic-panel-toggle-state"),
   topicPanelContent: document.querySelector("#topic-panel-content"),
-  topicSummary: document.querySelector("#topic-summary"),
   topicClear: document.querySelector("#topic-clear"),
   topicList: document.querySelector("#topic-list"),
   topicEmpty: document.querySelector("#topic-empty"),
@@ -742,8 +741,6 @@ function renderTopicPanel() {
     ? String(selectedTopic?.label || "").trim()
     : "";
 
-  elements.topicSummary.textContent = trends?.summary ||
-    "아직 저장된 토픽 분석 결과가 없습니다.";
   elements.topicClear.hidden = state.topicId === 0;
   elements.topicClear.textContent = selectedLabel
     ? `‘${selectedLabel}’ 필터 해제`
@@ -757,14 +754,6 @@ function renderTopicPanel() {
       continue;
     }
     const count = normalizeNonNegativeNumber(topic?.post_count, 0);
-    const previousCount = normalizeNonNegativeNumber(
-      topic?.previous_post_count,
-      0
-    );
-    const trendState = ["new", "rising", "active"].includes(topic?.trend_state)
-      ? topic.trend_state
-      : "active";
-    const trendLabel = getTopicTrendLabel(trendState, previousCount);
     const entry = document.createElement("article");
     entry.className = "topic-entry";
 
@@ -775,8 +764,7 @@ function renderTopicPanel() {
     button.setAttribute("aria-pressed", String(topicId === state.topicId));
     button.setAttribute(
       "aria-label",
-      `${label}, 최근 ${normalizeNonNegativeNumber(trends?.window_hours, 0)}시간 ` +
-        `${count}개, ${trendLabel}`
+      `${label}, ${numberFormatter.format(count)}개 글`
     );
 
     const labelElement = document.createElement("span");
@@ -785,32 +773,11 @@ function renderTopicPanel() {
     const countElement = document.createElement("span");
     countElement.className = "topic-count";
     countElement.textContent = `${numberFormatter.format(count)}개`;
-    const trendElement = document.createElement("span");
-    trendElement.className = "topic-trend";
-    trendElement.dataset.trend = trendState;
-    trendElement.textContent = trendLabel;
-    button.append(labelElement, countElement, trendElement);
+    button.append(labelElement, countElement);
     button.addEventListener("click", () => {
       applyTopicFilter(topicId === state.topicId ? 0 : topicId);
     });
     entry.append(button);
-
-    const representative = Array.isArray(topic?.representative_posts)
-      ? topic.representative_posts[0]
-      : null;
-    const representativeUrl = getSafeHttpUrl(representative?.post_url);
-    const representativeTitle = String(representative?.title || "").trim();
-    if (representativeUrl && representativeTitle) {
-      const representativeLine = document.createElement("p");
-      representativeLine.className = "topic-representative";
-      const link = document.createElement("a");
-      link.href = representativeUrl;
-      link.target = "_blank";
-      link.rel = "noreferrer noopener";
-      link.textContent = `대표 글 · ${representativeTitle}`;
-      representativeLine.append(link);
-      entry.append(representativeLine);
-    }
     elements.topicList.append(entry);
   }
 
@@ -824,11 +791,8 @@ function renderTopicPanel() {
 
   if (trends) {
     const windowHours = normalizeNonNegativeNumber(trends.window_hours, 0);
-    const eligible = normalizeNonNegativeNumber(trends.eligible_post_count, 0);
-    const analyzed = normalizeNonNegativeNumber(trends.analyzed_post_count, 0);
     elements.topicPanelMeta.textContent =
-      `최근 ${numberFormatter.format(windowHours)}시간 · ` +
-      `${numberFormatter.format(analyzed)}/${numberFormatter.format(eligible)}개 분석 · ` +
+      `${numberFormatter.format(windowHours)}시간 기준 · ` +
       `${formatDateTime(trends.generated_at)} 갱신`;
   } else {
     elements.topicPanelMeta.textContent = "제목·말머리 기준";
@@ -838,16 +802,6 @@ function renderTopicPanel() {
     setTopicPanelExpanded(true);
   }
   restoreTopicFocus();
-}
-
-function getTopicTrendLabel(trendState, previousCount) {
-  if (trendState === "new") {
-    return "새로 등장";
-  }
-  if (trendState === "rising") {
-    return `급상승 · 직전 ${numberFormatter.format(previousCount)}개`;
-  }
-  return `지속 · 직전 ${numberFormatter.format(previousCount)}개`;
 }
 
 function applyTopicFilter(topicId) {

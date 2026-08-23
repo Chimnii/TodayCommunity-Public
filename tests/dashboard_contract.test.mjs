@@ -80,8 +80,8 @@ test("ships four accessible archive tabs and replaces them from the API catalog"
 
 test("ships a stored hot-topic rail with URL-backed filtering and a compact accordion", () => {
   assert.match(html, /<aside[^>]*id="topic-panel"[^>]*aria-labelledby="topic-panel-title"[^>]*hidden/);
-  assert.match(html, /id="topic-panel-title"[^>]*tabindex="-1"[^>]*>지금 화제/);
-  assert.match(html, /id="topic-summary"[^>]*aria-live="polite"/);
+  assert.match(html, /id="topic-panel-title"[^>]*tabindex="-1"[^>]*>TOPICS/);
+  assert.doesNotMatch(html, /topic-panel-eyebrow|topic-summary/);
   assert.match(
     html,
     /id="topic-panel-toggle"[\s\S]*aria-controls="topic-panel-content"[\s\S]*aria-expanded="true"/
@@ -93,9 +93,12 @@ test("ships a stored hot-topic rail with URL-backed filtering and a compact acco
   assert.match(app, /const trends = state\.archive\?\.topic_trends/);
   assert.match(app, /const selectedTopic = state\.archive\?\.selected_topic/);
   assert.match(app, /button\.setAttribute\("aria-pressed", String\(topicId === state\.topicId\)\)/);
+  assert.match(app, /`\$\{label\}, \$\{numberFormatter\.format\(count\)\}개 글`/);
+  assert.match(app, /button\.append\(labelElement, countElement\)/);
   assert.match(app, /applyTopicFilter\(topicId === state\.topicId \? 0 : topicId\)/);
   assert.match(app, /elements\.topicPanel\.hidden = !communityArchive/);
-  assert.match(app, /getSafeHttpUrl\(representative\?\.post_url\)/);
+  assert.match(app, /`\$\{numberFormatter\.format\(windowHours\)\}시간 기준 · `/);
+  assert.doesNotMatch(app, /getTopicTrendLabel|representative_posts|topic-trend/);
   assert.match(app, /const COMPACT_TOPIC_PANEL_QUERY = "\(max-width: 1759px\)"/);
   assert.match(app, /window\.matchMedia\(COMPACT_TOPIC_PANEL_QUERY\)\.matches/);
   assert.match(css, /--layout-max:\s*1184px/);
@@ -106,6 +109,7 @@ test("ships a stored hot-topic rail with URL-backed filtering and a compact acco
   assert.match(css, /\.archive-layout\s*{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) 272px/s);
   assert.match(css, /\.topic-panel\s*{[^}]*position:\s*sticky/s);
   assert.match(css, /\.topic-item\[aria-pressed="true"\]/);
+  assert.doesNotMatch(css, /\.topic-panel-eyebrow|\.topic-summary|\.topic-trend|\.topic-representative/);
   assert.match(
     css,
     /@media \(min-width:\s*1760px\)[\s\S]*\.archive-layout\s*{[^}]*width:\s*calc\(100% \+ 272px \+ var\(--space-4\)\)/
@@ -115,6 +119,7 @@ test("ships a stored hot-topic rail with URL-backed filtering and a compact acco
     /@media \(max-width:\s*1759px\)[\s\S]*\.archive-layout\s*{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)[\s\S]*\.topic-panel\s*{[^}]*order:\s*-1[\s\S]*\.topic-panel-toggle\s*{[^}]*display:\s*inline-flex/
   );
   assert.match(fixtureServer, /COMMUNITY_TOPIC_FIXTURES/);
+  assert.match(fixtureServer, /window_hours:\s*24/);
   assert.match(fixtureServer, /!topicId \|\| post\.topic_ids\.includes\(topicId\)/);
 });
 

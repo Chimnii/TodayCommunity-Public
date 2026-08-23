@@ -301,13 +301,13 @@ function handleArchive(requestUrl, response) {
   const topicTrends = articleMode
     ? null
     : {
-        window_hours: 12,
-        window_start: "2026-07-16T12:30:00.000Z",
+        window_hours: 24,
+        window_start: "2026-07-16T00:30:00.000Z",
         window_end: "2026-07-17T00:30:00.000Z",
         generated_at: "2026-07-17T00:31:00.000Z",
         summary: topicFixtures.length
-          ? `최근 12시간에는 ‘${topicFixtures[0].label}’ 관련 글이 많이 다뤄졌습니다.`
-          : "최근 12시간에는 반복해서 다뤄진 주요 토픽이 아직 없습니다.",
+          ? `최근 24시간에는 ‘${topicFixtures[0].label}’ 관련 글이 많이 다뤄졌습니다.`
+          : "최근 24시간에는 반복해서 다뤄진 주요 토픽이 아직 없습니다.",
         eligible_post_count: archivePosts.length,
         analyzed_post_count: archivePosts.length,
         topics: topicFixtures.map((topic) => {
