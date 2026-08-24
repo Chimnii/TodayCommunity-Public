@@ -1391,6 +1391,28 @@ body[data-content-kind="article"] .cell-source {
 @media (min-width: 1760px) {
   .archive-layout {
     width: calc(100% + 272px + var(--space-4));
+    column-gap: var(--space-4);
+    row-gap: var(--space-3);
+  }
+
+  .archive-main {
+    display: contents;
+  }
+
+  .filter-shell {
+    grid-column: 1;
+    grid-row: 1;
+    margin-bottom: 0;
+  }
+
+  .board-shell {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .topic-panel {
+    grid-column: 2;
+    grid-row: 2;
   }
 }
 

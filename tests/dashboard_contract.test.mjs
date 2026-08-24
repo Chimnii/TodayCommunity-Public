@@ -120,6 +120,10 @@ test("ships a stored hot-topic rail with URL-backed filtering and a compact acco
   );
   assert.match(
     css,
+    /@media \(min-width:\s*1760px\)[\s\S]*\.archive-main\s*{[^}]*display:\s*contents[\s\S]*\.filter-shell\s*{[^}]*grid-row:\s*1[^}]*margin-bottom:\s*0[\s\S]*\.board-shell\s*{[^}]*grid-row:\s*2[\s\S]*\.topic-panel\s*{[^}]*grid-row:\s*2/
+  );
+  assert.match(
+    css,
     /@media \(max-width:\s*1759px\)[\s\S]*\.archive-layout\s*{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)[\s\S]*\.topic-panel\s*{[^}]*order:\s*-1[\s\S]*\.topic-panel-toggle\s*{[^}]*display:\s*inline-flex/
   );
   assert.match(fixtureServer, /COMMUNITY_TOPIC_FIXTURES/);
