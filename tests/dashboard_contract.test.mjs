@@ -94,6 +94,7 @@ test("ships a stored hot-topic rail with URL-backed filtering and a compact acco
   assert.match(app, /const selectedTopic = state\.archive\?\.selected_topic/);
   assert.match(app, /button\.setAttribute\("aria-pressed", String\(topicId === state\.topicId\)\)/);
   assert.match(app, /`\$\{label\}, \$\{numberFormatter\.format\(count\)\}개 글`/);
+  assert.match(app, /countElement\.textContent = `\(\$\{numberFormatter\.format\(count\)\}개\)`/);
   assert.match(app, /button\.append\(labelElement, countElement\)/);
   assert.match(app, /applyTopicFilter\(topicId === state\.topicId \? 0 : topicId\)/);
   assert.match(app, /elements\.topicPanel\.hidden = !communityArchive/);
@@ -108,6 +109,9 @@ test("ships a stored hot-topic rail with URL-backed filtering and a compact acco
   );
   assert.match(css, /\.archive-layout\s*{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) 272px/s);
   assert.match(css, /\.topic-panel\s*{[^}]*position:\s*sticky/s);
+  assert.match(css, /\.topic-panel-header\s*{[^}]*height:\s*var\(--board-head-height\)[^}]*padding:\s*0 var\(--space-3\)/s);
+  assert.match(css, /\.topic-list\s*{[^}]*display:\s*flex[^}]*flex-wrap:\s*wrap[^}]*gap:\s*0 var\(--space-3\)/s);
+  assert.match(css, /\.topic-item\s*{[^}]*display:\s*inline-flex[^}]*width:\s*auto[^}]*min-height:\s*28px/s);
   assert.match(css, /\.topic-item\[aria-pressed="true"\]/);
   assert.doesNotMatch(css, /\.topic-panel-eyebrow|\.topic-summary|\.topic-trend|\.topic-representative/);
   assert.match(

@@ -772,7 +772,7 @@ function renderTopicPanel() {
     labelElement.textContent = label;
     const countElement = document.createElement("span");
     countElement.className = "topic-count";
-    countElement.textContent = `${numberFormatter.format(count)}개`;
+    countElement.textContent = `(${numberFormatter.format(count)}개)`;
     button.append(labelElement, countElement);
     button.addEventListener("click", () => {
       applyTopicFilter(topicId === state.topicId ? 0 : topicId);
