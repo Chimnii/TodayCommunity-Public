@@ -14,6 +14,8 @@ import {
 } from "../scheduler/src/index.mjs";
 
 const NOW = Date.parse("2026-07-20T00:20:00Z");
+const UNQUEUED_CANCEL_CONFLICT_MESSAGE =
+  "Cannot cancel a workflow run that has not been queued yet.";
 const ENV = Object.freeze({
   GITHUB_DISPATCH_TOKEN: "test-token",
   GITHUB_OWNER: "Chimnii",
@@ -572,6 +574,58 @@ test("a non-server cancellation failure stays fail-closed", async () => {
   assert.ok(calls.every(({ url }) => !url.includes("/actions/workflows/")));
 });
 
+test("an exact not-yet-queued conflict dispatches around the orphaned run", async () => {
+  const calls = [];
+  const result = await dispatchScheduledWorkflow({
+    cron: "7,22,37,52 * * * *",
+    env: ENV,
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      if (options.method === "GET") {
+        return jsonResponse({
+          workflow_runs: [
+            {
+              id: 709,
+              event: "workflow_dispatch",
+              status: "queued",
+              head_branch: "main",
+              path: ".github/workflows/scan-dcinside.yml",
+              created_at: "2026-07-19T00:00:00Z",
+            },
+          ],
+        });
+      }
+      if (
+        url.endsWith("/actions/runs/709/cancel") ||
+        url.endsWith("/actions/runs/709/force-cancel")
+      ) {
+        return jsonResponse(
+          { message: UNQUEUED_CANCEL_CONFLICT_MESSAGE },
+          409,
+        );
+      }
+      return noContentResponse();
+    },
+    now: () => NOW,
+  });
+
+  assert.equal(calls.length, 4);
+  assert.match(calls[1].url, /\/actions\/runs\/709\/cancel$/);
+  assert.match(calls[2].url, /\/actions\/runs\/709\/force-cancel$/);
+  assert.match(calls[3].url, /scan-dcinside\.yml\/dispatches$/);
+  assert.deepEqual(result.destinations[0], {
+    destination: "dcinside",
+    repository: "TodayCommunity-Public",
+    status: "dispatched_with_uncanceled_stale_queued",
+    kind: "hot",
+    workflow: "scan-dcinside.yml",
+    ref: "main",
+    reason: "stale_queued_run",
+    canceledRunIds: [],
+    uncanceledRunIds: [709],
+  });
+});
+
 test("a cancel server failure uses force-cancel before replacement", async () => {
   const calls = [];
   const result = await dispatchScheduledWorkflow({
@@ -679,6 +733,77 @@ test("game news dispatches around a stale run when both cancel APIs return 5xx",
     canceledRunIds: [],
     uncanceledRunIds: [707],
   });
+});
+
+test("FM dispatches around server-side cancel failures using its freshness gate", async () => {
+  const calls = [];
+  const result = await dispatchScheduledWorkflow({
+    cron: "7,22,37,52 * * * *",
+    env: {
+      ...ENV,
+      FM_DISPATCH_ENABLED: "1",
+      FM_GITHUB_REPOSITORY: "TodayCommunity",
+    },
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      if (options.method === "GET" && url.includes("TodayCommunity-Public")) {
+        return jsonResponse({
+          workflow_runs: [
+            {
+              id: 710,
+              event: "workflow_dispatch",
+              status: "completed",
+              head_branch: "main",
+              path: ".github/workflows/scan-dcinside.yml",
+              created_at: new Date(NOW - 60_000).toISOString(),
+            },
+          ],
+        });
+      }
+      if (options.method === "GET") {
+        return jsonResponse({
+          workflow_runs: [
+            {
+              id: 711,
+              event: "workflow_dispatch",
+              status: "queued",
+              head_branch: "main",
+              path: ".github/workflows/scan-fmkorea.yml",
+              created_at: "2026-07-19T00:00:00Z",
+            },
+          ],
+        });
+      }
+      if (
+        url.endsWith("/actions/runs/711/cancel") ||
+        url.endsWith("/actions/runs/711/force-cancel")
+      ) {
+        return new Response("cancel unavailable", { status: 500 });
+      }
+      return noContentResponse();
+    },
+    now: () => NOW,
+  });
+
+  const fmResult = result.destinations.find(
+    ({ destination }) => destination === "fmkorea",
+  );
+  assert.deepEqual(fmResult, {
+    destination: "fmkorea",
+    repository: "TodayCommunity",
+    status: "dispatched_with_uncanceled_stale_queued",
+    kind: "hot",
+    workflow: "scan-fmkorea.yml",
+    ref: "main",
+    reason: "stale_queued_run",
+    canceledRunIds: [],
+    uncanceledRunIds: [711],
+  });
+  assert.ok(calls.some(({ url }) => url.endsWith("/actions/runs/711/cancel")));
+  assert.ok(
+    calls.some(({ url }) => url.endsWith("/actions/runs/711/force-cancel")),
+  );
+  assert.ok(calls.some(({ url }) => /scan-fmkorea\.yml\/dispatches$/.test(url)));
 });
 
 test("a fresh queued FM run does not suppress an eligible public DC dispatch", async () => {

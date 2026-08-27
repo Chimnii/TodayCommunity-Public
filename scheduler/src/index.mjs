@@ -1,4 +1,6 @@
 const GITHUB_API_ROOT = "https://api.github.com";
+const UNQUEUED_CANCEL_CONFLICT_MESSAGE =
+  "Cannot cancel a workflow run that has not been queued yet.";
 const PUBLIC_DESTINATION = "dcinside";
 const FMKOREA_DESTINATION = "fmkorea";
 const GAME_NEWS_DESTINATION = "game-news";
@@ -185,6 +187,7 @@ function destinationsForSchedule(schedule, env, nowMs) {
         repositoryBinding: "GITHUB_REPOSITORY",
         schedule: { kind: schedule.kind, workflow: schedule.workflow },
         managedWorkflows: PUBLIC_MANAGED_WORKFLOWS,
+        allowUnqueuedStaleReplacement: true,
       });
       continue;
     }
@@ -197,6 +200,8 @@ function destinationsForSchedule(schedule, env, nowMs) {
           repositoryBinding: "FM_GITHUB_REPOSITORY",
           schedule: { kind: "hot", workflow: FMKOREA_WORKFLOW },
           managedWorkflows: FMKOREA_MANAGED_WORKFLOWS,
+          allowUncanceledStaleReplacement: true,
+          allowUnqueuedStaleReplacement: true,
           inputs: {
             dispatched_at: new Date(nowMs).toISOString(),
             persist: "true",
@@ -220,6 +225,7 @@ function destinationsForSchedule(schedule, env, nowMs) {
           schedule: { kind: "game-news", workflow: GAME_NEWS_WORKFLOW },
           managedWorkflows: GAME_NEWS_MANAGED_WORKFLOWS,
           allowUncanceledStaleReplacement: true,
+          allowUnqueuedStaleReplacement: true,
           inputs: {
             dispatched_at: new Date(nowMs).toISOString(),
             persist: "true",
@@ -251,12 +257,21 @@ function githubHeaders(token, includeJsonBody = false) {
 async function githubRequest(fetchImpl, url, options) {
   const response = await fetchImpl(url, options);
   if (!response.ok) {
-    const responseBody = (await response.text()).replace(/\s+/g, " ").trim();
+    const rawResponseBody = await response.text();
+    const responseBody = rawResponseBody.replace(/\s+/g, " ").trim();
     const detail = responseBody ? `: ${responseBody.slice(0, 500)}` : "";
     const error = new Error(
       `GitHub API ${options.method} ${url} failed with HTTP ${response.status}${detail}`,
     );
     error.status = response.status;
+    try {
+      const responsePayload = JSON.parse(rawResponseBody);
+      if (typeof responsePayload?.message === "string") {
+        error.githubMessage = responsePayload.message;
+      }
+    } catch {
+      // Non-JSON GitHub or test responses have no structured message.
+    }
     throw error;
   }
 
@@ -265,6 +280,17 @@ async function githubRequest(fetchImpl, url, options) {
   }
   const responseBody = await response.text();
   return responseBody.trim() ? JSON.parse(responseBody) : null;
+}
+
+function isServerSideGithubError(error) {
+  return error?.status >= 500 && error?.status <= 599;
+}
+
+function isUnqueuedCancelConflict(error) {
+  return (
+    error?.status === 409 &&
+    error?.githubMessage === UNQUEUED_CANCEL_CONFLICT_MESSAGE
+  );
 }
 
 async function dispatchDestination({
@@ -280,6 +306,7 @@ async function dispatchDestination({
   inputs,
   configurationError,
   allowUncanceledStaleReplacement = false,
+  allowUnqueuedStaleReplacement = false,
 }) {
   if (configurationError) {
     throw configurationError;
@@ -338,9 +365,9 @@ async function dispatchDestination({
         });
         canceledRunIds.push(runId);
       } catch (error) {
-        const cancelFailedServerSide =
-          error?.status >= 500 && error?.status <= 599;
-        if (!cancelFailedServerSide) {
+        const cancelFailedServerSide = isServerSideGithubError(error);
+        const cancelFailedBeforeQueue = isUnqueuedCancelConflict(error);
+        if (!cancelFailedServerSide && !cancelFailedBeforeQueue) {
           throw error;
         }
 
@@ -356,12 +383,24 @@ async function dispatchDestination({
           forceCanceledRunIds.push(runId);
         } catch (forceCancelError) {
           const forceCancelFailedServerSide =
-            forceCancelError?.status >= 500 &&
-            forceCancelError?.status <= 599;
-          if (
-            !allowUncanceledStaleReplacement ||
-            !forceCancelFailedServerSide
-          ) {
+            isServerSideGithubError(forceCancelError);
+          const forceCancelFailedBeforeQueue =
+            isUnqueuedCancelConflict(forceCancelError);
+          const forceCancelFailureIsRetryable =
+            forceCancelFailedServerSide || forceCancelFailedBeforeQueue;
+          const unqueuedConflictConfirmed =
+            cancelFailedBeforeQueue || forceCancelFailedBeforeQueue;
+          const replacementAllowed =
+            (
+              allowUncanceledStaleReplacement &&
+              forceCancelFailedServerSide
+            ) ||
+            (
+              allowUnqueuedStaleReplacement &&
+              unqueuedConflictConfirmed &&
+              forceCancelFailureIsRetryable
+            );
+          if (!replacementAllowed) {
             throw forceCancelError;
           }
           uncanceledRunIds.push(runId);
