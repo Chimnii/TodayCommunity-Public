@@ -21,9 +21,9 @@ const ARCHIVE_MASTHEAD_DESCRIPTIONS = Object.freeze({
 });
 const ARCHIVE_ROW_LABELS = Object.freeze({
   "dcinside-singularity": "특이점",
-  "dcinside-agent-stack": "AI 활용",
+  "dcinside-agent-stack": "AI활용",
   "fmkorea-munich": "Bayern",
-  "game-news": "게임 뉴스",
+  "game-news": "게임뉴스",
 });
 const FALLBACK_ARCHIVES = Object.freeze([
   {
@@ -441,7 +441,7 @@ function applyContentKindMode() {
   }
   if (elements.subjectColumnLabel) {
     elements.subjectColumnLabel.textContent = mixedMode
-      ? "말머리 / 출처-주제"
+      ? "분류"
       : articleMode
         ? "주제"
         : "말머리";

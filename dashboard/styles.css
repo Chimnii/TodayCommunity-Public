@@ -588,7 +588,7 @@ body[data-content-kind="article"] .board-row {
 }
 
 body[data-content-kind="mixed"] .board-row {
-  grid-template-columns: 88px 116px minmax(0, 1fr) 64px 104px;
+  grid-template-columns: 60px 84px minmax(0, 1fr) 64px 104px;
 }
 
 body[data-content-kind="article"] .cell-number,
@@ -1539,7 +1539,7 @@ body[data-content-kind="mixed"] .cell-source {
 
   body[data-content-kind="mixed"] .board-head .board-row,
   body[data-content-kind="mixed"] .post-row {
-    grid-template-columns: 80px 108px minmax(0, 1fr) 56px 92px;
+    grid-template-columns: 60px 84px minmax(0, 1fr) 56px 92px;
   }
 
   body[data-content-kind="article"] .board-body {
@@ -1694,7 +1694,7 @@ body[data-content-kind="mixed"] .cell-source {
 
   body[data-content-kind="mixed"] .board-head .board-row,
   body[data-content-kind="mixed"] .post-row {
-    grid-template-columns: 60px 72px minmax(0, 1fr) 38px 62px;
+    grid-template-columns: 56px 72px minmax(0, 1fr) 38px 62px;
   }
 
   .game-news-tools {
@@ -1722,11 +1722,6 @@ body[data-content-kind="mixed"] .cell-source {
 
   body[data-content-kind="mixed"] .cell-date {
     display: block;
-  }
-
-  body[data-content-kind="mixed"] .board-head .cell-subject {
-    line-height: 1.2;
-    white-space: normal;
   }
 
   .board-cell {

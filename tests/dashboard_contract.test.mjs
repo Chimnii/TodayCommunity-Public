@@ -87,18 +87,20 @@ test("renders the all target as a mixed five-column archive without feedback", (
   assert.match(app, /function isMixedArchive\(\)/);
   assert.match(app, /document\.body\.dataset\.contentKind = mixedMode/);
   assert.match(app, /mixedMode \? "소속" : "출처"/);
-  assert.match(app, /mixedMode[\s\S]*"말머리 \/ 출처-주제"/);
+  assert.match(app, /mixedMode[\s\S]*"분류"/);
+  assert.match(app, /"dcinside-agent-stack": "AI활용"/);
+  assert.match(app, /"game-news": "게임뉴스"/);
   assert.match(app, /elements\.numberColumnLabel,[\s\S]*elements\.sourceColumnLabel,[\s\S]*elements\.subjectColumnLabel/);
   assert.match(app, /isMixedArchive\(\) && isGameNewsPost\(post\)[\s\S]*\? "-"/);
   assert.match(app, /cell\.textContent = `\$\{sourceLabel\}-\$\{subjectLabel\}`/);
   assert.match(app, /ARCHIVE_ROW_LABELS\[post\?\.archive_key\]/);
   assert.match(app, /const communityArchive = !isArticleArchive\(\) && !isMixedArchive\(\)/);
-  assert.match(css, /body\[data-content-kind="mixed"\] \.board-row\s*{[^}]*grid-template-columns:\s*88px 116px minmax\(0, 1fr\) 64px 104px/s);
+  assert.match(css, /body\[data-content-kind="mixed"\] \.board-row\s*{[^}]*grid-template-columns:\s*60px 84px minmax\(0, 1fr\) 64px 104px/s);
   assert.match(css, /body\[data-content-kind="mixed"\] \.cell-number,[\s\S]*body\[data-content-kind="mixed"\] \.cell-feedback\s*{[^}]*display:\s*none/s);
   assert.match(css, /body\[data-content-kind="mixed"\] \.cell-source\s*{[^}]*display:\s*block/s);
   assert.match(
     css,
-    /@media \(max-width:\s*520px\)[\s\S]*body\[data-content-kind="mixed"\] \.post-row\s*{[^}]*grid-template-columns:\s*60px 72px minmax\(0, 1fr\) 38px 62px/
+    /@media \(max-width:\s*520px\)[\s\S]*body\[data-content-kind="mixed"\] \.post-row\s*{[^}]*grid-template-columns:\s*56px 72px minmax\(0, 1fr\) 38px 62px/
   );
   assert.match(css, /body\[data-content-kind="mixed"\] \.cell-date\s*{[^}]*display:\s*block/s);
 });
