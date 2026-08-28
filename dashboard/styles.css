@@ -492,15 +492,40 @@ a {
 }
 
 .filter-toggle {
-  display: none;
+  display: flex;
+  width: 100%;
+  min-height: var(--control-height);
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-3);
+  border: 0;
+  background: var(--color-surface-subtle);
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.filter-toggle:hover {
+  background: var(--color-surface-hover);
+}
+
+.filter-toggle-state {
+  color: var(--color-ink-muted);
+  font-size: var(--text-xs);
+  font-weight: 400;
 }
 
 .filter-form {
-  display: grid;
+  display: none;
   grid-template-columns: minmax(220px, 1.7fr) repeat(5, minmax(116px, 0.7fr)) auto;
   gap: var(--space-3);
   align-items: end;
   padding: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+
+.filter-shell.is-filter-expanded .filter-form {
+  display: grid;
 }
 
 body[data-content-kind="article"] .filter-form {
@@ -604,6 +629,10 @@ body[data-content-kind="article"] .filter-comments {
   margin: 0;
   color: var(--color-ink-muted);
   font-size: var(--text-xs);
+}
+
+.archive-filter-status:empty {
+  display: none;
 }
 
 .archive-filter-status[data-state="error"] {
@@ -1707,38 +1736,8 @@ body[data-content-kind="mixed"] .cell-source {
     padding: var(--space-2) var(--space-3) var(--space-3);
   }
 
-  .filter-toggle {
-    display: flex;
-    width: 100%;
-    min-height: var(--control-height);
-    align-items: center;
-    justify-content: space-between;
-    padding: 0 var(--space-3);
-    border: 0;
-    background: var(--color-surface-subtle);
-    color: var(--color-ink);
-    font-size: var(--text-sm);
-    font-weight: 700;
-  }
-
-  .filter-toggle:hover {
-    background: var(--color-surface-hover);
-  }
-
-  .filter-toggle-state {
-    color: var(--color-ink-muted);
-    font-size: var(--text-xs);
-    font-weight: 400;
-  }
-
   .filter-form {
-    display: none;
     gap: var(--space-2);
-    border-top: 1px solid var(--color-border);
-  }
-
-  .filter-shell.is-filter-expanded .filter-form {
-    display: grid;
   }
 
   .board-row {

@@ -239,7 +239,7 @@ async function initialize() {
   normalizeContentState();
   applyContentKindMode();
   writeStateToControls();
-  setMobileFiltersExpanded(hasActiveFilterState());
+  setFiltersExpanded(false);
   syncTopicPanelForViewport();
   bindEvents();
   try {
@@ -261,7 +261,6 @@ async function initialize() {
   }
   applyContentKindMode();
   writeStateToControls();
-  setMobileFiltersExpanded(hasActiveFilterState());
   loadArchive();
 }
 
@@ -641,13 +640,12 @@ function renderArchiveFilterControls() {
 
 function renderArchiveFilterStatus() {
   const messages = {
-    idle: "이 시크릿 링크에 자동 저장됩니다.",
     saving: "탭 설정을 저장하는 중입니다.",
     saved: "이 시크릿 링크에 저장했습니다.",
     error: state.archiveFilterSaveMessage || "탭 설정을 저장하지 못했습니다.",
   };
   elements.archiveFilterStatus.textContent = messages[state.archiveFilterSaveState]
-    || messages.idle;
+    || "";
   if (state.archiveFilterSaveState === "error") {
     elements.archiveFilterStatus.dataset.state = "error";
   } else {
@@ -2241,7 +2239,7 @@ function bindEvents() {
   });
   elements.filterToggle.addEventListener("click", () => {
     const expanded = elements.filterToggle.getAttribute("aria-expanded") === "true";
-    setMobileFiltersExpanded(!expanded);
+    setFiltersExpanded(!expanded);
   });
 
   elements.runsOpen.addEventListener("click", openRunsDrawer);
@@ -2346,7 +2344,7 @@ function bindEvents() {
     state.focusPageContentAfterLoad = false;
     state.focusArchiveTabAfterLoad = false;
     writeStateToControls();
-    setMobileFiltersExpanded(hasActiveFilterState());
+    setFiltersExpanded(false);
     loadArchive();
   });
 }
@@ -2358,19 +2356,7 @@ function handleFilterControlUpdate(event) {
   scheduleFilterUpdate();
 }
 
-function hasActiveFilterState() {
-  return Boolean(
-    state.search ||
-    state.subject ||
-    state.minUpvotes !== DEFAULT_STATE.minUpvotes ||
-    state.minComments !== DEFAULT_STATE.minComments ||
-    state.sortBy !== DEFAULT_STATE.sortBy ||
-    state.pageSize !== DEFAULT_STATE.pageSize ||
-    (canUseArchiveFilter() && state.excludedArchiveKeys.size > 0)
-  );
-}
-
-function setMobileFiltersExpanded(expanded) {
+function setFiltersExpanded(expanded) {
   elements.filterShell.classList.toggle("is-filter-expanded", expanded);
   elements.filterToggle.setAttribute("aria-expanded", String(expanded));
   elements.filterToggleState.textContent = expanded ? "접기" : "펼치기";

@@ -138,8 +138,9 @@ test("offers link-specific archive checkboxes only inside the all-tab filter for
   assert.match(css, /\.archive-filter\[hidden\]\s*{[^}]*display:\s*none/s);
   assert.match(
     css,
-    /@media \(max-width:\s*520px\)[\s\S]*\.filter-form\s*{[^}]*display:\s*none[\s\S]*\.filter-shell\.is-filter-expanded \.filter-form\s*{[^}]*display:\s*grid/
+    /\.filter-form\s*{[^}]*display:\s*none[\s\S]*\.filter-shell\.is-filter-expanded \.filter-form\s*{[^}]*display:\s*grid/
   );
+  assert.doesNotMatch(app, /이 시크릿 링크에 자동 저장됩니다/);
   assert.match(fixtureServer, /searchParams\.getAll\("exclude_archive"\)/);
   assert.match(fixtureServer, /requestUrl\.pathname === "\/api\/auth\/archive-filters"/);
 });
@@ -519,14 +520,16 @@ test("moves comment counts beside ellipsized titles", () => {
   assert.match(css, /\.post-comment-count\s*{[^}]*flex:\s*0 0 auto[^}]*color:\s*var\(--color-primary\)/s);
 });
 
-test("collapses filters only on compact mobile screens", () => {
+test("collapses filters by default on every screen", () => {
   assert.match(html, /id="filter-toggle"[\s\S]*aria-controls="filter-form"[\s\S]*aria-expanded="false"/);
-  assert.match(app, /setMobileFiltersExpanded\(hasActiveFilterState\(\)\)/);
+  assert.match(app, /setFiltersExpanded\(false\)/);
+  assert.doesNotMatch(app, /setMobileFiltersExpanded|hasActiveFilterState/);
   assert.match(app, /filterToggle\.addEventListener\("click"/);
-  assert.match(css, /\.filter-toggle\s*{\s*display:\s*none/);
+  assert.match(css, /\.filter-toggle\s*{[^}]*display:\s*flex/);
+  assert.doesNotMatch(css, /\.filter-toggle\s*{\s*display:\s*none/);
   assert.match(
     css,
-    /@media \(max-width:\s*520px\)[\s\S]*\.filter-toggle\s*{[^}]*display:\s*flex[\s\S]*\.filter-form\s*{[^}]*display:\s*none[\s\S]*\.filter-shell\.is-filter-expanded \.filter-form\s*{[^}]*display:\s*grid/
+    /\.filter-form\s*{[^}]*display:\s*none[\s\S]*\.filter-shell\.is-filter-expanded \.filter-form\s*{[^}]*display:\s*grid/
   );
 });
 
