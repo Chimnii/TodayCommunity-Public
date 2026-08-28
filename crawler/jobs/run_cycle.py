@@ -340,6 +340,7 @@ class CrawlCycle:
                     post,
                     self.target.min_upvotes,
                     self.target.min_comments,
+                    policy=self.target.policy,
                 ):
                     deduped[post.external_post_id] = post
 
@@ -1215,6 +1216,8 @@ class CrawlCycle:
             now=self.cycle_started_at,
             min_upvotes=self.target.min_upvotes,
             min_comments=self.target.min_comments,
+            policy=self.target.policy,
+            subject_cell_mode=self.target.subject_cell_mode,
             requested_page=page,
             expected_board_id=self.target_board_id,
         )
@@ -1672,7 +1675,12 @@ def count_qualifying(posts: Sequence[DcinsidePost], target: TargetBoard) -> int:
     return sum(
         1
         for post in posts
-        if is_qualifying_post(post, target.min_upvotes, target.min_comments)
+        if is_qualifying_post(
+            post,
+            target.min_upvotes,
+            target.min_comments,
+            policy=target.policy,
+        )
     )
 
 

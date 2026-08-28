@@ -26,6 +26,16 @@ SHORT_DATE_PATTERN = re.compile(r"^(\d{2})[./](\d{1,2})[./](\d{1,2})$")
 FULL_DATE_PATTERN = re.compile(r"^(\d{4})[./-](\d{1,2})[./-](\d{1,2})$")
 DEFAULT_MIN_UPVOTES = 4
 DEFAULT_MIN_COMMENTS = 20
+WEIGHTED_ENGAGEMENT_POLICY = "weighted-engagement"
+UPVOTES_ONLY_POLICY = "upvotes-only"
+SUPPORTED_COLLECTION_POLICIES = frozenset(
+    {WEIGHTED_ENGAGEMENT_POLICY, UPVOTES_ONLY_POLICY}
+)
+SUBJECT_CELL_REQUIRED = "required"
+SUBJECT_CELL_ABSENT = "absent"
+SUPPORTED_SUBJECT_CELL_MODES = frozenset(
+    {SUBJECT_CELL_REQUIRED, SUBJECT_CELL_ABSENT}
+)
 PAGING_CONTAINER_CLASS = "bottom_paging_box"
 PAGE_NEXT_CLASS = "page_next"
 PAGE_END_CLASS = "page_end"
@@ -193,6 +203,8 @@ class DcinsideListParser(HTMLParser):
         min_comments: int = DEFAULT_MIN_COMMENTS,
         requested_page: Optional[int] = None,
         expected_board_id: Optional[str] = None,
+        policy: str = WEIGHTED_ENGAGEMENT_POLICY,
+        subject_cell_mode: str = SUBJECT_CELL_REQUIRED,
     ) -> None:
         super().__init__(convert_charrefs=True)
         self.base_url = base_url
@@ -200,6 +212,10 @@ class DcinsideListParser(HTMLParser):
         self.now = as_kst(now or datetime.now(KST))
         self.min_upvotes = min_upvotes
         self.min_comments = min_comments
+        validate_collection_policy(policy)
+        self.policy = policy
+        validate_subject_cell_mode(subject_cell_mode)
+        self.subject_cell_mode = subject_cell_mode
         self.posts: List[DcinsidePost] = []
         self.diagnostics = DcinsideParseDiagnostics()
         normalized_requested_page, requested_page_error = normalize_optional_page(
@@ -280,6 +296,9 @@ class DcinsideListParser(HTMLParser):
                     "normal_view_link_seen": False,
                     "survey_signal_seen": data_no.casefold() in {"survey", "\uc124\ubb38"},
                     "interview_signal_seen": False,
+                    "subject_cell_count": 0,
+                    "title_icon_count": 0,
+                    "survey_icon_count": 0,
                     "advertisement_icon_count": 0,
                 }
                 return
@@ -314,7 +333,7 @@ class DcinsideListParser(HTMLParser):
             td_class_tokens = set(attrs.get("class", "").split())
             if "gall_subject" in td_class_tokens:
                 self.current_cell = "subject"
-                if self.current_row.get("row_kind") == "candidate":
+                if self.current_row.get("row_kind") in {"candidate", "non_numeric"}:
                     self.current_row["subject_cell_count"] += 1
             elif "gall_tit" in td_class_tokens:
                 self.current_cell = "title"
@@ -358,13 +377,21 @@ class DcinsideListParser(HTMLParser):
                 self._inspect_candidate_title_link(self.current_row, href)
             return
 
+        icon_classes = set(attrs.get("class", "").split())
+        icon_like_element = tag == "em" or any(
+            token == "icon_img" or token.startswith("icon_")
+            for token in icon_classes
+        )
         if (
-            tag == "em"
+            icon_like_element
             and self.current_row.get("row_kind") == "non_numeric"
             and self.current_cell == "title"
-            and set(attrs.get("class", "").split()) == {"icon_img", "icon_ad"}
         ):
-            self.current_row["advertisement_icon_count"] += 1
+            self.current_row["title_icon_count"] += 1
+            if tag == "em" and icon_classes == {"icon_img", "icon_n_survey"}:
+                self.current_row["survey_icon_count"] += 1
+            elif tag == "em" and icon_classes == {"icon_img", "icon_ad"}:
+                self.current_row["advertisement_icon_count"] += 1
             return
 
         if tag == "span" and self.current_row.get("row_kind") == "candidate":
@@ -564,6 +591,34 @@ class DcinsideListParser(HTMLParser):
         row_classes = set(row["row_class_tokens"])
         subject_label = " ".join(row["subject_text_parts"]).strip().casefold()
         normal_view_link_seen = bool(row["normal_view_link_seen"])
+        if self.subject_cell_mode == SUBJECT_CELL_ABSENT:
+            recognized_icon_count = int(row["survey_icon_count"]) + int(
+                row["advertisement_icon_count"]
+            )
+            explicitly_auxiliary = (
+                str(row["external_post_id"]) == ""
+                and data_type == ""
+                and row_classes == {"ub-content"}
+                and int(row["subject_cell_count"]) == 0
+                and subject_label == ""
+                and int(row["title_link_count"]) == 1
+                and not normal_view_link_seen
+                and int(row["title_icon_count"]) == 1
+                and recognized_icon_count == 1
+            )
+            if explicitly_auxiliary:
+                return
+            external_post_id = str(row["external_post_id"]) or "<missing>"
+            self.diagnostics.errors.append(
+                DcinsideParseError(
+                    external_post_id,
+                    "non_numeric_post_id",
+                    "Subjectless non-numeric row did not match the strict "
+                    "survey/advertisement icon layout.",
+                )
+            )
+            return
+
         interview_auxiliary = (
             bool(row["interview_signal_seen"])
             and str(row["external_post_id"]) == ""
@@ -830,15 +885,22 @@ class DcinsideListParser(HTMLParser):
         created_at_title = str(row["created_at_title"]).strip()
 
         subject_cell_count = int(row["subject_cell_count"])
-        if subject_cell_count == 0:
-            return None, self._row_error(
-                row, "missing_subject_cell", "Candidate row has no subject cell."
-            )
-        if subject_cell_count != 1:
+        if self.subject_cell_mode == SUBJECT_CELL_REQUIRED:
+            if subject_cell_count == 0:
+                return None, self._row_error(
+                    row, "missing_subject_cell", "Candidate row has no subject cell."
+                )
+            if subject_cell_count != 1:
+                return None, self._row_error(
+                    row,
+                    "multiple_subject_cells",
+                    "Candidate row must have exactly one subject cell.",
+                )
+        elif subject_cell_count != 0:
             return None, self._row_error(
                 row,
-                "multiple_subject_cells",
-                "Candidate row must have exactly one subject cell.",
+                "unexpected_subject_cell",
+                "Candidate row must not have a subject cell for this board layout.",
             )
 
         subject_inner_count = int(row["subject_inner_count"])
@@ -964,6 +1026,7 @@ class DcinsideListParser(HTMLParser):
                     comments,
                     min_upvotes=self.min_upvotes,
                     min_comments=self.min_comments,
+                    policy=self.policy,
                 ),
             ),
             None,
@@ -975,14 +1038,19 @@ def build_qualifies_by(
     comments: int,
     min_upvotes: int = DEFAULT_MIN_UPVOTES,
     min_comments: int = DEFAULT_MIN_COMMENTS,
+    policy: str = WEIGHTED_ENGAGEMENT_POLICY,
 ) -> str:
     if not meets_collection_threshold(
         upvotes,
         comments,
         min_upvotes=min_upvotes,
         min_comments=min_comments,
+        policy=policy,
     ):
         return "none"
+
+    if policy == UPVOTES_ONLY_POLICY:
+        return "upvotes"
 
     reasons = []
     if upvotes >= min_upvotes:
@@ -997,13 +1065,20 @@ def meets_collection_threshold(
     comments: int,
     min_upvotes: int = DEFAULT_MIN_UPVOTES,
     min_comments: int = DEFAULT_MIN_COMMENTS,
+    policy: str = WEIGHTED_ENGAGEMENT_POLICY,
 ) -> bool:
-    """Return whether the combined engagement score reaches the target.
+    """Return whether engagement reaches the target's collection policy.
 
-    ``min_upvotes`` and ``min_comments`` are the solo thresholds: reaching
-    either one without help from the other metric is sufficient. Cross
-    multiplication keeps mixed scores exact without floating-point math.
+    Weighted engagement treats ``min_upvotes`` and ``min_comments`` as solo
+    thresholds and uses exact cross multiplication for mixed scores. The
+    upvotes-only policy ignores comments completely.
     """
+
+    validate_collection_policy(policy)
+    if policy == UPVOTES_ONLY_POLICY:
+        if min_upvotes <= 0:
+            raise ValueError("The upvotes-only threshold must be positive.")
+        return upvotes >= min_upvotes
 
     if min_upvotes <= 0 or min_comments <= 0:
         raise ValueError("Collection thresholds must be positive integers.")
@@ -1013,13 +1088,37 @@ def meets_collection_threshold(
     )
 
 
-def is_qualifying_post(post: DcinsidePost, min_upvotes: int, min_comments: int) -> bool:
+def is_qualifying_post(
+    post: DcinsidePost,
+    min_upvotes: int,
+    min_comments: int,
+    policy: str = WEIGHTED_ENGAGEMENT_POLICY,
+) -> bool:
     return meets_collection_threshold(
         post.upvotes,
         post.comments,
         min_upvotes=min_upvotes,
         min_comments=min_comments,
+        policy=policy,
     )
+
+
+def validate_collection_policy(policy: str) -> None:
+    if policy not in SUPPORTED_COLLECTION_POLICIES:
+        available = ", ".join(sorted(SUPPORTED_COLLECTION_POLICIES))
+        raise ValueError(
+            f"Unsupported DCInside collection policy {policy!r}. "
+            f"Available: {available}."
+        )
+
+
+def validate_subject_cell_mode(subject_cell_mode: str) -> None:
+    if subject_cell_mode not in SUPPORTED_SUBJECT_CELL_MODES:
+        available = ", ".join(sorted(SUPPORTED_SUBJECT_CELL_MODES))
+        raise ValueError(
+            f"Unsupported DCInside subject-cell mode {subject_cell_mode!r}. "
+            f"Available: {available}."
+        )
 
 
 def normalize_dcinside_datetime(raw_value: str, now: Optional[datetime] = None) -> str:

@@ -48,15 +48,17 @@ test("ships the compact archive surface and hidden collection dialog", () => {
   );
 });
 
-test("ships five accessible archive tabs and replaces them from the API catalog", () => {
+test("ships six accessible archive tabs and replaces them from the API catalog", () => {
   assert.match(html, /id="archive-tabs"[^>]*role="tablist"/);
   assert.match(html, /role="tab"[\s\S]*href="\/?\?target=dcinside-singularity"/);
   assert.match(html, /href="\/?\?target=dcinside-agent-stack"/);
+  assert.match(html, /href="\/?\?target=dcinside-zeus-pride"/);
   assert.match(html, /href="\/?\?target=fmkorea-munich"/);
   assert.match(html, /href="\/?\?target=game-news"/);
   assert.match(html, /href="\/?\?target=all"/);
   assert.match(html, />특이점이 온다 갤<\/a>/);
   assert.match(html, />AI 활용 갤<\/a>/);
+  assert.match(html, />제우스 오만의 신 갤<\/a>/);
   assert.match(html, />Bayern Munich<\/a>/);
   assert.match(html, />게임 뉴스<\/a>/);
   assert.match(html, />모두<\/a>/);
@@ -70,12 +72,17 @@ test("ships five accessible archive tabs and replaces them from the API catalog"
   assert.match(app, /\["ArrowLeft", "ArrowRight", "Home", "End"\]/);
   assert.match(app, /"dcinside-singularity": "특이점이 온다 갤"/);
   assert.match(app, /"dcinside-agent-stack": "AI 활용 갤"/);
+  assert.match(app, /"dcinside-zeus-pride": "제우스 오만의 신 갤"/);
   assert.match(app, /"fmkorea-munich": "Bayern Munich"/);
   assert.match(app, /"game-news": "게임 뉴스"/);
   assert.match(app, /all: "모두"/);
   assert.match(
     app,
     /archive_key: "dcinside-agent-stack",[\s\S]*display_name: "AI 활용",[\s\S]*description: "디시인사이드 AI 활용 갤러리 인기글"/
+  );
+  assert.match(
+    app,
+    /archive_key: "dcinside-zeus-pride",[\s\S]*display_name: "제우스 오만의 신",[\s\S]*description: "디시인사이드 제우스 오만의 신 갤러리 인기글"/
   );
   assert.match(app, /ARCHIVE_TAB_LABELS\[key\] \|\| String\(archive\.display_name \|\| key\)/);
   assert.match(css, /\.archive-tab\[aria-selected="true"\]/);
@@ -89,6 +96,7 @@ test("renders the all target as a mixed five-column archive without feedback", (
   assert.match(app, /mixedMode \? "소속" : "출처"/);
   assert.match(app, /mixedMode[\s\S]*"분류"/);
   assert.match(app, /"dcinside-agent-stack": "AI활용"/);
+  assert.match(app, /"dcinside-zeus-pride": "제우스"/);
   assert.match(app, /"game-news": "게임뉴스"/);
   assert.match(app, /elements\.numberColumnLabel,[\s\S]*elements\.sourceColumnLabel,[\s\S]*elements\.subjectColumnLabel/);
   assert.match(app, /isMixedArchive\(\) && isGameNewsPost\(post\)[\s\S]*\? "-"/);
@@ -350,6 +358,7 @@ test("shows an archive-specific two-line collection summary", () => {
   assert.match(html, /디시인사이드 특이점이 온다 갤러리 인기글\.<br \/>/);
   assert.match(app, /"dcinside-singularity": "디시인사이드 특이점이 온다 갤러리 인기글\."/);
   assert.match(app, /"dcinside-agent-stack": "디시인사이드 AI 활용 갤러리 인기글\."/);
+  assert.match(app, /"dcinside-zeus-pride": "디시인사이드 제우스 오만의 신 갤러리 인기글\."/);
   assert.match(app, /"fmkorea-munich": "에펨코리아 바이에른 뮌헨 관련 인기글\."/);
   assert.match(
     app,

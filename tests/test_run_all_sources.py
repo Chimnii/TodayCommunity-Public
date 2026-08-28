@@ -22,6 +22,7 @@ class RunAllSourcesTests(unittest.TestCase):
             [
                 "dcinside-singularity",
                 "dcinside-ai-utilize",
+                "dcinside-zeus-pride",
                 "fmkorea-best-munich-search",
                 "fmkorea-best-bayern-search",
                 "fmkorea-bayern-board",
@@ -29,7 +30,11 @@ class RunAllSourcesTests(unittest.TestCase):
         )
         self.assertEqual(
             scheduled_keys,
-            ["dcinside-singularity", "dcinside-ai-utilize"],
+            [
+                "dcinside-singularity",
+                "dcinside-ai-utilize",
+                "dcinside-zeus-pride",
+            ],
         )
 
         for mode in (CYCLE_MODE_HOT, CYCLE_MODE_BACKFILL):
@@ -45,9 +50,9 @@ class RunAllSourcesTests(unittest.TestCase):
                 self.assertEqual([key for key, _, _ in calls], scheduled_keys)
                 self.assertEqual(
                     [selected_mode for _, selected_mode, _ in calls],
-                    [mode, mode],
+                    [mode] * len(scheduled_keys),
                 )
-                self.assertEqual(result["target_count"], 2)
+                self.assertEqual(result["target_count"], 3)
                 self.assertEqual(result["failure_count"], 0)
                 self.assertEqual(result["status"], "completed")
 
@@ -102,7 +107,14 @@ class RunAllSourcesTests(unittest.TestCase):
         )
         self.assertEqual(
             [item["status"] for item in result["results"]],
-            ["cooldown", "cooldown", "cooldown", "cooldown", "cooldown"],
+            [
+                "cooldown",
+                "cooldown",
+                "cooldown",
+                "cooldown",
+                "cooldown",
+                "cooldown",
+            ],
         )
         self.assertEqual(result["status"], "completed")
 
@@ -126,7 +138,11 @@ class RunAllSourcesTests(unittest.TestCase):
         self.assertEqual(agent.hot_max_seconds, 240)
 
     def test_backfill_config_reserves_positive_history_window(self) -> None:
-        for target_key in ("dcinside-singularity", "dcinside-ai-utilize"):
+        for target_key in (
+            "dcinside-singularity",
+            "dcinside-ai-utilize",
+            "dcinside-zeus-pride",
+        ):
             with self.subTest(target=target_key):
                 with patch.dict(os.environ, {}, clear=True):
                     config = dc_cycle_config(

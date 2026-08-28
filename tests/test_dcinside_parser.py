@@ -125,6 +125,32 @@ LIVE_AD_ROW = """
 """
 
 
+SUBJECTLESS_SURVEY_ROW = """
+<tr class="ub-content" data-no="" data-type="">
+  <td class="gall_num">-</td>
+  <td class="gall_tit ub-word">
+    <a class="font_blue3a7" href="javascript:;">
+      <em class="icon_img icon_n_survey"></em>survey title
+    </a>
+  </td>
+  <td class="gall_date">26/08/28</td>
+</tr>
+"""
+
+
+SUBJECTLESS_AD_ROW = """
+<tr class="ub-content" data-no="" data-type="">
+  <td class="gall_num">-</td>
+  <td class="gall_tit ub-word">
+    <a href="https://ad.example.test/campaign">
+      <em class="icon_img icon_ad"></em>advertisement
+    </a>
+  </td>
+  <td class="gall_date">26/08/28</td>
+</tr>
+"""
+
+
 def pagination(
     *,
     current: int = 1,
@@ -421,9 +447,79 @@ class DcinsideListParserTests(unittest.TestCase):
                 )
                 self.assertEqual(build_qualifies_by(upvotes, comments), reason)
 
+    def test_upvotes_only_policy_ignores_comments_at_every_boundary(self) -> None:
+        parser = DcinsideListParser(
+            BASE_URL,
+            now=FIXED_NOW,
+            min_upvotes=3,
+            min_comments=0,
+            policy="upvotes-only",
+        )
+        parser.feed(
+            regular_row("105", upvotes="3", comments=0)
+            + regular_row("104", upvotes="2", comments=999)
+        )
+
+        qualified, rejected = parser.posts
+        self.assertEqual(qualified.qualifies_by, "upvotes")
+        self.assertEqual(rejected.qualifies_by, "none")
+        self.assertTrue(
+            is_qualifying_post(
+                qualified,
+                min_upvotes=3,
+                min_comments=0,
+                policy="upvotes-only",
+            )
+        )
+        self.assertFalse(
+            is_qualifying_post(
+                rejected,
+                min_upvotes=3,
+                min_comments=0,
+                policy="upvotes-only",
+            )
+        )
+        self.assertFalse(
+            meets_collection_threshold(
+                2,
+                100_000,
+                min_upvotes=3,
+                min_comments=0,
+                policy="upvotes-only",
+            )
+        )
+        self.assertEqual(
+            build_qualifies_by(
+                3,
+                100_000,
+                min_upvotes=3,
+                min_comments=0,
+                policy="upvotes-only",
+            ),
+            "upvotes",
+        )
+
+    def test_unknown_collection_policy_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            DcinsideListParser(BASE_URL, policy="comments-only")
+        with self.assertRaises(ValueError):
+            meets_collection_threshold(4, 0, policy="comments-only")
+
+    def test_unknown_subject_cell_mode_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            DcinsideListParser(BASE_URL, subject_cell_mode="optional")
+
     def test_collection_thresholds_must_be_positive(self) -> None:
         with self.assertRaises(ValueError):
             meets_collection_threshold(4, 0, min_upvotes=0, min_comments=20)
+        with self.assertRaises(ValueError):
+            meets_collection_threshold(
+                4,
+                0,
+                min_upvotes=0,
+                min_comments=0,
+                policy="upvotes-only",
+            )
 
     def test_post_id_order_helper_rejects_duplicates_and_non_numeric_ids(self) -> None:
         self.assertTrue(are_post_ids_strictly_descending(["105", "103", "99"]))
@@ -503,6 +599,49 @@ class DcinsideRowIntegrityTests(unittest.TestCase):
         parser = self.parse_row(regular_row("105", subject=""))
         self.assertEqual(parser.posts[0].subject, "")
         self.assertTrue(parser.diagnostics.is_coverage_safe)
+
+    def test_subjectless_layout_accepts_only_rows_without_a_subject_cell(self) -> None:
+        subjectless = DcinsideListParser(
+            BASE_URL,
+            now=FIXED_NOW,
+            subject_cell_mode="absent",
+        )
+        subjectless.feed(regular_row("105", subject_markup=""))
+
+        self.assertEqual(len(subjectless.posts), 1)
+        self.assertEqual(subjectless.posts[0].subject, "")
+        self.assertTrue(subjectless.diagnostics.is_collection_safe)
+        self.assertTrue(subjectless.diagnostics.is_coverage_safe)
+
+        unexpected = DcinsideListParser(
+            BASE_URL,
+            now=FIXED_NOW,
+            subject_cell_mode="absent",
+        )
+        unexpected.feed(regular_row("105", subject="일반"))
+
+        self.assertEqual(unexpected.posts, [])
+        self.assertEqual(
+            [error.code for error in unexpected.diagnostics.errors],
+            ["unexpected_subject_cell"],
+        )
+        self.assertFalse(unexpected.diagnostics.is_collection_safe)
+        self.assertFalse(unexpected.diagnostics.is_coverage_safe)
+
+    def test_explicit_required_layout_rejects_subjectless_rows(self) -> None:
+        parser = DcinsideListParser(
+            BASE_URL,
+            now=FIXED_NOW,
+            subject_cell_mode="required",
+        )
+        parser.feed(regular_row("105", subject_markup=""))
+
+        self.assertEqual(parser.posts, [])
+        self.assertEqual(
+            [error.code for error in parser.diagnostics.errors],
+            ["missing_subject_cell"],
+        )
+        self.assertFalse(parser.diagnostics.is_collection_safe)
 
     def test_title_may_be_empty_when_numeric_id_and_post_link_are_valid(self) -> None:
         parser = self.parse_row(
@@ -730,6 +869,109 @@ class DcinsideRowIntegrityTests(unittest.TestCase):
                 )
                 self.assertTrue(parser.diagnostics.is_collection_safe)
                 self.assertFalse(parser.diagnostics.is_coverage_safe)
+
+    def test_subjectless_layout_recognizes_exact_survey_and_ad_icons(self) -> None:
+        zeus_url = (
+            "https://gall.dcinside.com/mgallery/board/lists/"
+            "?id=zeusthegodofpride"
+        )
+        subjectless_posts = (
+            regular_row("105", subject_markup="").replace(
+                "thesingularity", "zeusthegodofpride"
+            )
+            + regular_row("104", subject_markup="").replace(
+                "thesingularity", "zeusthegodofpride"
+            )
+        )
+        parser = DcinsideListParser(
+            zeus_url,
+            now=FIXED_NOW,
+            requested_page=1,
+            expected_board_id="zeusthegodofpride",
+            min_upvotes=3,
+            min_comments=0,
+            policy="upvotes-only",
+            subject_cell_mode="absent",
+        )
+        parser.feed(
+            SUBJECTLESS_SURVEY_ROW
+            + SUBJECTLESS_AD_ROW
+            + SUBJECTLESS_AD_ROW.replace("campaign", "campaign-two")
+            + subjectless_posts
+            + pagination(board_id="zeusthegodofpride")
+        )
+        parser.close()
+
+        self.assertEqual(parser.diagnostics.non_numeric_rows, 3)
+        self.assertEqual(parser.diagnostics.candidate_rows, 2)
+        self.assertEqual(parser.diagnostics.parsed_rows, 2)
+        self.assertEqual(parser.diagnostics.errors, [])
+        self.assertEqual([post.subject for post in parser.posts], ["", ""])
+        self.assertTrue(parser.navigation.is_valid)
+        self.assertTrue(parser.diagnostics.is_collection_safe)
+        self.assertTrue(parser.diagnostics.is_coverage_safe)
+
+    def test_subjectless_auxiliary_icon_near_matches_block_coverage(self) -> None:
+        near_matches = (
+            SUBJECTLESS_SURVEY_ROW.replace(
+                '<em class="icon_img icon_n_survey"></em>',
+                "",
+            ),
+            SUBJECTLESS_SURVEY_ROW.replace(
+                "icon_n_survey",
+                "icon_survey",
+            ),
+            SUBJECTLESS_SURVEY_ROW.replace(
+                '<em class="icon_img icon_n_survey"></em>',
+                '<em class="icon_img icon_n_survey"></em>' * 2,
+            ),
+            SUBJECTLESS_SURVEY_ROW.replace(
+                '<em class="icon_img icon_n_survey"></em>',
+                '<em class="icon_img icon_n_survey"></em>'
+                '<em class="icon_img icon_ad"></em>',
+            ),
+            SUBJECTLESS_SURVEY_ROW.replace(
+                '</em>survey title',
+                '</em><span class="icon_img icon_ad"></span>survey title',
+            ),
+            SUBJECTLESS_AD_ROW.replace(
+                '<tr class="ub-content" data-no="" data-type="">',
+                '<tr class="ub-content us-post" data-no="" data-type="">',
+            ),
+            SUBJECTLESS_AD_ROW.replace(
+                '<td class="gall_num">-</td>',
+                '<td class="gall_num">-</td><td class="gall_subject"></td>',
+            ),
+        )
+        numeric_row = regular_row("104", subject_markup="")
+        for near_match in near_matches:
+            with self.subTest(near_match=near_match):
+                parser = DcinsideListParser(
+                    BASE_URL,
+                    now=FIXED_NOW,
+                    subject_cell_mode="absent",
+                )
+                parser.feed(near_match + numeric_row)
+
+                self.assertIn(
+                    "non_numeric_post_id",
+                    [error.code for error in parser.diagnostics.errors],
+                )
+                self.assertTrue(parser.diagnostics.is_collection_safe)
+                self.assertFalse(parser.diagnostics.is_coverage_safe)
+
+    def test_required_layout_does_not_accept_subjectless_icon_auxiliaries(self) -> None:
+        parser = self.parse_row(
+            SUBJECTLESS_SURVEY_ROW + SUBJECTLESS_AD_ROW + regular_row("104")
+        )
+
+        self.assertEqual(parser.diagnostics.non_numeric_rows, 2)
+        self.assertEqual(
+            [error.code for error in parser.diagnostics.errors],
+            ["non_numeric_post_id", "non_numeric_post_id"],
+        )
+        self.assertTrue(parser.diagnostics.is_collection_safe)
+        self.assertFalse(parser.diagnostics.is_coverage_safe)
 
     def test_interview_link_near_matches_block_coverage(self) -> None:
         live_url = (

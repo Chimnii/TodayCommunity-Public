@@ -39,6 +39,7 @@ class TargetBoard:
     request_interval_seconds: float = 10.0
     finalization_age_hours: float = 12.0
     block_cooldown_hours: float = 6.0
+    subject_cell_mode: str = "required"
 
     @property
     def archive(self) -> ArchiveDefinition:
@@ -63,6 +64,12 @@ ARCHIVES = {
         display_name="AI 활용",
         description="디시인사이드 AI 활용 갤러리 인기글",
         display_order=20,
+    ),
+    "dcinside-zeus-pride": ArchiveDefinition(
+        key="dcinside-zeus-pride",
+        display_name="제우스 오만의 신",
+        description="디시인사이드 제우스 오만의 신 갤러리 인기글",
+        display_order=25,
     ),
     "fmkorea-munich": ArchiveDefinition(
         key="fmkorea-munich",
@@ -112,6 +119,30 @@ TARGETS = {
         canonical_namespace="dcinside:ai_utilize",
         hot_max_seconds=240.0,
         backfill_max_seconds=480.0,
+    ),
+    "dcinside-zeus-pride": TargetBoard(
+        key="dcinside-zeus-pride",
+        site_name="dcinside",
+        board_name="제우스 오만의 신 마이너 갤러리",
+        board_url=(
+            "https://gall.dcinside.com/mgallery/board/lists/"
+            "?id=zeusthegodofpride"
+        ),
+        list_url_template=(
+            "https://gall.dcinside.com/mgallery/board/lists/"
+            "?id=zeusthegodofpride&page={page}"
+        ),
+        min_upvotes=3,
+        min_comments=0,
+        archive_key="dcinside-zeus-pride",
+        collector_kind="dcinside-board",
+        origin_key="dcinside",
+        policy="upvotes-only",
+        canonical_namespace="dcinside:zeusthegodofpride",
+        hot_lookback_minutes=180.0,
+        hot_max_seconds=180.0,
+        backfill_max_seconds=600.0,
+        subject_cell_mode="absent",
     ),
     "fmkorea-best-munich-search": TargetBoard(
         key="fmkorea-best-munich-search",

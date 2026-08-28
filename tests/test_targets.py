@@ -6,12 +6,13 @@ from crawler.targets import ARCHIVES, TARGETS, canonical_post_key, get_target
 
 
 class TargetRegistryTests(unittest.TestCase):
-    def test_five_collection_sources_map_to_three_public_archives(self) -> None:
+    def test_six_collection_sources_map_to_four_public_archives(self) -> None:
         self.assertEqual(
             set(TARGETS),
             {
                 "dcinside-singularity",
                 "dcinside-ai-utilize",
+                "dcinside-zeus-pride",
                 "fmkorea-best-munich-search",
                 "fmkorea-best-bayern-search",
                 "fmkorea-bayern-board",
@@ -22,6 +23,7 @@ class TargetRegistryTests(unittest.TestCase):
             {
                 "dcinside-singularity",
                 "dcinside-agent-stack",
+                "dcinside-zeus-pride",
                 "fmkorea-munich",
             },
         )
@@ -37,11 +39,16 @@ class TargetRegistryTests(unittest.TestCase):
             {"fmkorea-munich"},
         )
 
-    def test_thresholds_encode_the_requested_weighted_scores(self) -> None:
+    def test_thresholds_and_collection_policies_match_each_source(self) -> None:
         agent_stack = get_target("dcinside-ai-utilize")
+        zeus = get_target("dcinside-zeus-pride")
         bayern = get_target("fmkorea-bayern-board")
 
         self.assertEqual((agent_stack.min_upvotes, agent_stack.min_comments), (4, 40))
+        self.assertEqual((zeus.min_upvotes, zeus.min_comments), (3, 0))
+        self.assertEqual(zeus.policy, "upvotes-only")
+        self.assertEqual(zeus.subject_cell_mode, "absent")
+        self.assertEqual(agent_stack.subject_cell_mode, "required")
         self.assertEqual((bayern.min_upvotes, bayern.min_comments), (13, 130))
         for target_key in (
             "fmkorea-best-munich-search",
@@ -99,6 +106,10 @@ class TargetRegistryTests(unittest.TestCase):
             "dcinside:ai_utilize:123",
         )
         self.assertEqual(
+            canonical_post_key(get_target("dcinside-zeus-pride"), "123"),
+            "dcinside:zeusthegodofpride:123",
+        )
+        self.assertEqual(
             {
                 canonical_post_key(get_target(target_key), "123")
                 for target_key in (
@@ -121,6 +132,24 @@ class TargetRegistryTests(unittest.TestCase):
         self.assertIn("id=ai_utilize", migrated.page_url(1))
         self.assertIn("id=ai_utilize", migrated.page_url(2))
         self.assertNotIn("dcinside-agent-stack", TARGETS)
+
+    def test_zeus_gallery_has_an_independent_public_archive(self) -> None:
+        target = get_target("dcinside-zeus-pride")
+        archive = ARCHIVES["dcinside-zeus-pride"]
+
+        self.assertEqual(target.archive_key, archive.key)
+        self.assertEqual(archive.display_name, "제우스 오만의 신")
+        self.assertEqual(target.board_name, "제우스 오만의 신 마이너 갤러리")
+        self.assertEqual(
+            target.page_url(1),
+            "https://gall.dcinside.com/mgallery/board/lists/"
+            "?id=zeusthegodofpride",
+        )
+        self.assertEqual(
+            target.page_url(2),
+            "https://gall.dcinside.com/mgallery/board/lists/"
+            "?id=zeusthegodofpride&page=2",
+        )
 
     def test_search_uses_its_special_first_page_url(self) -> None:
         for target_key in (

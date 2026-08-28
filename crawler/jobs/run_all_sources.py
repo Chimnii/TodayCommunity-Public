@@ -24,6 +24,7 @@ FAILURE_STATUSES = {"blocked", "failed"}
 GITHUB_SCHEDULED_TARGET_KEYS = (
     "dcinside-singularity",
     "dcinside-ai-utilize",
+    "dcinside-zeus-pride",
 )
 
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib import error
 
+from crawler.parsers.dcinside import DcinsidePost
 from crawler.jobs.scan_new_posts import (
     CrawlBlockedError,
     CrawlTimeoutError,
@@ -20,6 +21,7 @@ from crawler.jobs.scan_new_posts import (
     fetch_html,
     mark_posts_deleted,
     post_upsert_query_count,
+    scan_target,
     update_finalized_posts,
     upsert_posts,
     upsert_source,
@@ -224,6 +226,64 @@ class FetchHtmlTests(unittest.TestCase):
                         fetch_html("https://example.com/list", 5)
 
 
+class DirectScanLayoutTests(unittest.TestCase):
+    def test_zeus_scan_threads_layout_and_upvotes_only_policy(self) -> None:
+        constructor_args = []
+
+        class Diagnostics:
+            is_collection_safe = True
+
+        class FakeParser:
+            def __init__(self, **kwargs):
+                constructor_args.append(kwargs)
+                self.diagnostics = Diagnostics()
+                self.posts = [
+                    DcinsidePost(
+                        external_post_id="2",
+                        subject="",
+                        title="comments cannot qualify",
+                        post_url="https://example.com/2",
+                        created_at="2026-07-16T00:00:00+09:00",
+                        created_at_raw="2026-07-16 00:00:00",
+                        upvotes=2,
+                        comments=100_000,
+                        qualifies_by="none",
+                    ),
+                    DcinsidePost(
+                        external_post_id="3",
+                        subject="",
+                        title="three upvotes qualify",
+                        post_url="https://example.com/3",
+                        created_at="2026-07-16T00:01:00+09:00",
+                        created_at_raw="2026-07-16 00:01:00",
+                        upvotes=3,
+                        comments=0,
+                        qualifies_by="upvotes",
+                    ),
+                ]
+
+            def feed(self, html):
+                self.html = html
+
+        with (
+            patch("crawler.jobs.scan_new_posts.fetch_html", return_value="<html />"),
+            patch("crawler.jobs.scan_new_posts.DcinsideListParser", FakeParser),
+        ):
+            result = scan_target(
+                get_target("dcinside-zeus-pride"),
+                pages=1,
+                page_delay_seconds=0,
+            )
+
+        self.assertEqual(len(constructor_args), 1)
+        self.assertEqual(constructor_args[0]["policy"], "upvotes-only")
+        self.assertEqual(constructor_args[0]["subject_cell_mode"], "absent")
+        self.assertEqual(
+            [post["external_post_id"] for post in result["posts"]],
+            ["3"],
+        )
+
+
 class SourceBootstrapTests(unittest.TestCase):
     def test_source_state_guard_uses_one_query_and_keeps_missing_source_as_noop(
         self,
@@ -401,6 +461,39 @@ class BatchedPostUpsertTests(unittest.TestCase):
         update_finalized_posts(
             client,
             get_target("dcinside-singularity"),
+            posts,
+            "2026-07-16T00:00:00+00:00",
+        )
+
+        insert_calls = [
+            (sql, params)
+            for sql, params in client.calls
+            if "INSERT INTO posts" in sql
+        ]
+        self.assertEqual(len(insert_calls), 1)
+        self.assertIn("2", insert_calls[0][1])
+        self.assertNotIn("1", insert_calls[0][1])
+
+    def test_finalizer_uses_zeus_upvotes_only_policy_for_new_posts(self) -> None:
+        client = RecordingClient()
+        posts = [
+            {
+                **sample_post(1),
+                "upvotes": 2,
+                "comments": 100_000,
+                "qualifies_by": "none",
+            },
+            {
+                **sample_post(2),
+                "upvotes": 3,
+                "comments": 0,
+                "qualifies_by": "upvotes",
+            },
+        ]
+
+        update_finalized_posts(
+            client,
+            get_target("dcinside-zeus-pride"),
             posts,
             "2026-07-16T00:00:00+00:00",
         )

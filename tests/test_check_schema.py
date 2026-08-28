@@ -38,6 +38,13 @@ D1_USAGE_MIGRATION_PATH = (
     / "009_d1_usage_optimization.sql"
 )
 D1_USAGE_MIGRATION = D1_USAGE_MIGRATION_PATH.read_text(encoding="utf-8")
+ZEUS_ARCHIVE_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "cloudflare"
+    / "migrations"
+    / "010_add_zeus_pride_archive.sql"
+)
+ZEUS_ARCHIVE_MIGRATION = ZEUS_ARCHIVE_MIGRATION_PATH.read_text(encoding="utf-8")
 CRAWL_RUN_INDEX_DEFINITIONS = """CREATE INDEX IF NOT EXISTS idx_crawl_runs_source_status_id
   ON crawl_runs (source_key, status, id DESC);
 
@@ -62,6 +69,50 @@ class SqliteClient:
 
 
 class SchemaPreflightTests(unittest.TestCase):
+    def test_zeus_archive_seed_and_migration_are_idempotent(self) -> None:
+        client = SqliteClient()
+        expected = {
+            "archive_key": "dcinside-zeus-pride",
+            "display_name": "제우스 오만의 신",
+            "description": "디시인사이드 제우스 오만의 신 갤러리 인기글",
+            "display_order": 25,
+            "is_public": 1,
+            "content_kind": "community",
+        }
+
+        rows = client.query(
+            """
+            SELECT archive_key, display_name, description, display_order,
+                   is_public, content_kind
+            FROM archives
+            WHERE archive_key = 'dcinside-zeus-pride'
+            """
+        )
+        self.assertEqual(rows, [expected])
+
+        client.query(
+            """
+            UPDATE archives
+            SET display_name = 'old', description = 'old', display_order = 999,
+                is_public = 0
+            WHERE archive_key = 'dcinside-zeus-pride'
+            """
+        )
+        client.connection.executescript(ZEUS_ARCHIVE_MIGRATION)
+        client.connection.executescript(ZEUS_ARCHIVE_MIGRATION)
+
+        self.assertEqual(
+            client.query(
+                """
+                SELECT archive_key, display_name, description, display_order,
+                       is_public, content_kind
+                FROM archives
+                WHERE archive_key = 'dcinside-zeus-pride'
+                """
+            ),
+            [expected],
+        )
+
     def test_owner_auth_schema_stores_only_hashed_link_credentials(self) -> None:
         client = SqliteClient()
         columns = {

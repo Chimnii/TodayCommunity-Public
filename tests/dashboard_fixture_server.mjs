@@ -65,6 +65,14 @@ const archives = [
     updated_at: "2026-07-17T00:30:00.000Z",
   },
   {
+    archive_key: "dcinside-zeus-pride",
+    display_name: "제우스 오만의 신",
+    description: "디시인사이드 제우스 오만의 신 갤러리 인기글",
+    content_kind: "community",
+    display_order: 25,
+    updated_at: "2026-08-28T00:30:00.000Z",
+  },
+  {
     archive_key: "fmkorea-munich",
     display_name: "뮌헨",
     description: "에펨코리아의 뮌헨 관련 인기글",
@@ -111,6 +119,17 @@ const sourcesByArchive = {
       board_url: "https://gall.dcinside.com/mgallery/board/lists/?id=agent_stack",
       min_upvotes: 10,
       min_comments: 100,
+    },
+  ],
+  "dcinside-zeus-pride": [
+    {
+      source_key: "dcinside-zeus-pride",
+      archive_key: "dcinside-zeus-pride",
+      site_name: "dcinside",
+      board_name: "제우스 오만의 신 마이너 갤러리",
+      board_url: "https://gall.dcinside.com/mgallery/board/lists/?id=zeusthegodofpride",
+      min_upvotes: 3,
+      min_comments: 0,
     },
   ],
   "fmkorea-munich": [
@@ -276,7 +295,9 @@ function handleArchive(requestUrl, response) {
         ? index % 2 === 0
           ? `https://www.inven.co.kr/webzine/news/?news=${post.external_post_id}`
           : `https://www.thisisgame.com/webzine/news/nboard/4/?n=${post.external_post_id}`
-        : post.post_url,
+        : postArchive.archive_key === "dcinside-zeus-pride"
+          ? `https://gall.dcinside.com/mgallery/board/view/?id=zeusthegodofpride&no=${post.external_post_id}`
+          : post.post_url,
       upvotes: postIsArticle ? 0 : post.upvotes,
       comments: postIsArticle ? 0 : post.comments,
       qualifies_by: postIsArticle ? "llm-include" : post.qualifies_by,

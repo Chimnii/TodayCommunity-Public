@@ -35,6 +35,14 @@ INSERT OR IGNORE INTO archives (
     'community'
   ),
   (
+    'dcinside-zeus-pride',
+    '제우스 오만의 신',
+    '디시인사이드 제우스 오만의 신 갤러리 인기글',
+    25,
+    1,
+    'community'
+  ),
+  (
     'fmkorea-munich',
     '뮌헨',
     '에펨코리아의 뮌헨 관련 인기글',

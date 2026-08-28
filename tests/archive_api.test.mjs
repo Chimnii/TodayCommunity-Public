@@ -130,6 +130,14 @@ class MockDatabase {
         updated_at: "2026-07-17T01:07:00Z",
       },
       {
+        archive_key: "dcinside-zeus-pride",
+        display_name: "제우스 오만의 신",
+        description: "디시인사이드 제우스 오만의 신 갤러리 인기글",
+        content_kind: "community",
+        display_order: 25,
+        updated_at: "2026-08-28T01:07:00Z",
+      },
+      {
         archive_key: "fmkorea-munich",
         display_name: "뮌헨",
         description: "에펨코리아의 뮌헨 관련 인기글",
@@ -229,7 +237,14 @@ test("defaults to the first 30 globally counted posts and preserves recent runs"
   assert.equal(body.archive.display_name, "특이점이 온다");
   assert.deepEqual(
     body.archives.map((archive) => archive.archive_key),
-    ["dcinside-singularity", "dcinside-agent-stack", "fmkorea-munich", "game-news", "all"]
+    [
+      "dcinside-singularity",
+      "dcinside-agent-stack",
+      "dcinside-zeus-pride",
+      "fmkorea-munich",
+      "game-news",
+      "all",
+    ]
   );
   assert.equal(body.archive.content_kind, "community");
   assert.equal(
@@ -490,6 +505,31 @@ test("validates well-formed targets against public archives", async () => {
   assert.match(database.calls[0].sql, /FROM archives/);
   assert.match(database.calls[0].sql, /WHERE archive_key = \? AND is_public = 1/);
   assert.deepEqual(database.calls[0].values, ["missing-archive"]);
+});
+
+test("serves the Zeus gallery as its own public community archive", async () => {
+  const target = "dcinside-zeus-pride";
+  const sources = [
+    {
+      source_key: target,
+      archive_key: target,
+      site_name: "dcinside",
+      board_name: "제우스 오만의 신 마이너 갤러리",
+      board_url: "https://gall.dcinside.com/mgallery/board/lists/?id=zeusthegodofpride",
+      min_upvotes: 3,
+      min_comments: 0,
+    },
+  ];
+  const database = new MockDatabase({ sources });
+
+  const { response, body } = await requestArchive(database, `?target=${target}`);
+
+  assert.equal(response.status, 200);
+  assert.equal(body.target, target);
+  assert.equal(body.archive.display_name, "제우스 오만의 신");
+  assert.equal(body.archive.content_kind, "community");
+  assert.deepEqual(body.sources, sources);
+  assert.deepEqual(body.source, sources[0]);
 });
 
 test("combines multiple collection sources under one archive", async () => {
