@@ -15,6 +15,12 @@ const postCount = Number.isInteger(requestedPostCount) && requestedPostCount > 0
   : 73;
 const feedbackByPost = new Map();
 const hiddenPostKeys = new Set();
+let excludedArchiveKeys = new Set(
+  String(process.env.TC_FIXTURE_EXCLUDED_ARCHIVES || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+);
 let preferenceDocument = {
   content: "LCK를 포함한 e스포츠 관련 기사는 역대급 이벤트나 중대한 이슈가 아니라면 수집하지 않는다.",
   version: 1,
@@ -322,10 +328,12 @@ function handleArchive(requestUrl, response) {
   const pageSize = Math.min(normalizePositive(requestUrl.searchParams.get("page_size"), 30), 100);
   const requestedPage = normalizePositive(requestUrl.searchParams.get("page"), 1);
   const topicId = normalizePositive(requestUrl.searchParams.get("topic"), 0);
+  const excludedArchives = new Set(requestUrl.searchParams.getAll("exclude_archive"));
 
   const filtered = archivePosts
     .filter((post) => {
       return (
+        (!mixedMode || !excludedArchives.has(post.archive_key)) &&
         post.upvotes >= minUpvotes &&
         post.comments >= minComments &&
         (!subject || post.subject === subject) &&
@@ -518,6 +526,36 @@ async function handleGameNewsApi(request, requestUrl, response) {
   sendJson(response, { error: "Unsupported fixture route" }, 404);
 }
 
+async function handleArchiveFilterApi(request, response) {
+  if (fixtureAuthState !== "authenticated") {
+    sendJson(response, { error: "시크릿 링크 인증이 필요합니다." }, 401);
+    return;
+  }
+  if (request.method === "GET") {
+    sendJson(response, {
+      excluded_archive_keys: [...excludedArchiveKeys],
+      updated_at: null,
+    });
+    return;
+  }
+  if (request.method === "POST") {
+    const body = await readJson(request);
+    excludedArchiveKeys = new Set(
+      Array.isArray(body.excluded_archive_keys)
+        ? body.excluded_archive_keys.filter((key) => (
+            archives.some((archive) => archive.archive_key === key && key !== "all")
+          ))
+        : []
+    );
+    sendJson(response, {
+      excluded_archive_keys: [...excludedArchiveKeys],
+      updated_at: new Date().toISOString(),
+    });
+    return;
+  }
+  sendJson(response, { error: "Unsupported fixture route" }, 404);
+}
+
 function comparePosts(left, right, sortBy) {
   if (sortBy === "upvotes") {
     return right.upvotes - left.upvotes || compareCreatedAt(left, right) || compareId(left, right);
@@ -589,6 +627,10 @@ const server = createServer(async (request, response) => {
   }
   if (requestUrl.pathname.startsWith("/api/game-news/")) {
     await handleGameNewsApi(request, requestUrl, response);
+    return;
+  }
+  if (requestUrl.pathname === "/api/auth/archive-filters") {
+    await handleArchiveFilterApi(request, response);
     return;
   }
   if (requestUrl.pathname === "/api/auth/session" && request.method === "GET") {

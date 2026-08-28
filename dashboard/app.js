@@ -137,6 +137,13 @@ const state = {
     loaded: false,
   },
   preferenceSaving: false,
+  archiveFilterLoaded: false,
+  excludedArchiveKeys: new Set(),
+  archiveFilterSaveRevision: 0,
+  archiveFilterSaveQueue: Promise.resolve(),
+  archiveFilterSaveState: "idle",
+  archiveFilterSaveMessage: "",
+  pendingArchiveFilterSave: false,
   undoAction: null,
   toastTimer: null,
 };
@@ -179,6 +186,9 @@ const elements = {
   sortCommentsOption: document.querySelector('#sort-select option[value="comments"]'),
   pageSizeSelect: document.querySelector("#page-size-select"),
   filterForm: document.querySelector("#filter-form"),
+  archiveFilter: document.querySelector("#archive-filter"),
+  archiveFilterOptions: document.querySelector("#archive-filter-options"),
+  archiveFilterStatus: document.querySelector("#archive-filter-status"),
   topicPanel: document.querySelector("#topic-panel"),
   topicPanelTitle: document.querySelector("#topic-panel-title"),
   topicPanelToggle: document.querySelector("#topic-panel-toggle"),
@@ -246,7 +256,12 @@ async function initialize() {
       },
     };
   }
+  if (hasSecretLinkSession()) {
+    await loadArchiveFilterPreference();
+  }
   applyContentKindMode();
+  writeStateToControls();
+  setMobileFiltersExpanded(hasActiveFilterState());
   loadArchive();
 }
 
@@ -341,6 +356,11 @@ function buildApiUrl() {
   if (state.topicId > 0) {
     params.set("topic", String(state.topicId));
   }
+  if (canUseArchiveFilter()) {
+    for (const archiveKey of state.excludedArchiveKeys) {
+      params.append("exclude_archive", archiveKey);
+    }
+  }
 
   return `/api/archive?${params.toString()}`;
 }
@@ -401,6 +421,18 @@ function isMixedArchive() {
 
 function isGameNewsPost(post) {
   return post?.archive_key === "game-news";
+}
+
+function hasSecretLinkSession() {
+  return state.feedbackSession?.authentication === "authenticated";
+}
+
+function canUseArchiveFilter() {
+  return (
+    state.target === ALL_TARGET &&
+    hasSecretLinkSession() &&
+    state.archiveFilterLoaded
+  );
 }
 
 function normalizeContentState() {
@@ -509,6 +541,193 @@ function findArchive(archives, target) {
     : null;
 }
 
+async function loadArchiveFilterPreference() {
+  state.archiveFilterLoaded = false;
+  state.excludedArchiveKeys = new Set();
+  try {
+    const payload = await fetchGameNewsJson("/api/auth/archive-filters");
+    state.excludedArchiveKeys = normalizeArchiveFilterKeys(
+      payload?.excluded_archive_keys
+    );
+    state.archiveFilterLoaded = true;
+    state.archiveFilterSaveState = "idle";
+    state.archiveFilterSaveMessage = "";
+  } catch (error) {
+    if (error.status === 401) {
+      state.feedbackSession = {
+        authentication: "guest",
+        actor: null,
+        capabilities: {
+          rate: false,
+          hide: false,
+          manage_rules: false,
+          manage_auth: false,
+        },
+      };
+      return;
+    }
+    state.archiveFilterLoaded = true;
+    state.archiveFilterSaveState = "error";
+    state.archiveFilterSaveMessage = "저장된 탭 설정을 불러오지 못했습니다.";
+  }
+}
+
+function normalizeArchiveFilterKeys(value) {
+  const keys = new Set();
+  if (!Array.isArray(value)) {
+    return keys;
+  }
+  for (const rawKey of value) {
+    const key = normalizeTarget(rawKey);
+    if (key && key !== ALL_TARGET) {
+      keys.add(key);
+    }
+  }
+  return keys;
+}
+
+function getArchiveFilterArchives() {
+  return getAvailableArchives().filter((archive) => {
+    const key = normalizeTarget(archive?.archive_key);
+    return key && key !== ALL_TARGET;
+  });
+}
+
+function renderArchiveFilterControls() {
+  const visible = canUseArchiveFilter();
+  elements.archiveFilter.hidden = !visible;
+  if (!visible) {
+    elements.archiveFilterOptions.replaceChildren();
+    delete elements.archiveFilterOptions.dataset.signature;
+    elements.archiveFilterStatus.textContent = "";
+    elements.archiveFilterStatus.removeAttribute("data-state");
+    return;
+  }
+
+  const archives = getArchiveFilterArchives();
+  const signature = archives.map((archive) => {
+    const key = normalizeTarget(archive.archive_key);
+    const label = ARCHIVE_TAB_LABELS[key] || String(archive.display_name || key);
+    return `${key}:${label}`;
+  }).join("|");
+  if (elements.archiveFilterOptions.dataset.signature !== signature) {
+    const options = archives.map((archive) => {
+      const key = normalizeTarget(archive.archive_key);
+      const option = document.createElement("label");
+      option.className = "archive-filter-option";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.name = "archive_filter";
+      input.value = key;
+      input.dataset.archiveFilterKey = key;
+      const text = document.createElement("span");
+      text.textContent = ARCHIVE_TAB_LABELS[key] || String(archive.display_name || key);
+      option.append(input, text);
+      return option;
+    });
+    elements.archiveFilterOptions.replaceChildren(...options);
+    elements.archiveFilterOptions.dataset.signature = signature;
+  }
+
+  for (const input of elements.archiveFilterOptions.querySelectorAll(
+    "input[data-archive-filter-key]"
+  )) {
+    const checked = !state.excludedArchiveKeys.has(input.dataset.archiveFilterKey);
+    input.checked = checked;
+    input.defaultChecked = checked;
+  }
+  renderArchiveFilterStatus();
+}
+
+function renderArchiveFilterStatus() {
+  const messages = {
+    idle: "이 시크릿 링크에 자동 저장됩니다.",
+    saving: "탭 설정을 저장하는 중입니다.",
+    saved: "이 시크릿 링크에 저장했습니다.",
+    error: state.archiveFilterSaveMessage || "탭 설정을 저장하지 못했습니다.",
+  };
+  elements.archiveFilterStatus.textContent = messages[state.archiveFilterSaveState]
+    || messages.idle;
+  if (state.archiveFilterSaveState === "error") {
+    elements.archiveFilterStatus.dataset.state = "error";
+  } else {
+    elements.archiveFilterStatus.removeAttribute("data-state");
+  }
+}
+
+function readArchiveFilterFromControls() {
+  if (!canUseArchiveFilter()) {
+    return;
+  }
+  const excludedArchiveKeys = new Set();
+  for (const input of elements.archiveFilterOptions.querySelectorAll(
+    "input[data-archive-filter-key]"
+  )) {
+    if (!input.checked) {
+      excludedArchiveKeys.add(input.dataset.archiveFilterKey);
+    }
+  }
+  state.excludedArchiveKeys = excludedArchiveKeys;
+}
+
+function queueArchiveFilterPreferenceSave() {
+  if (!canUseArchiveFilter()) {
+    return;
+  }
+  const revision = state.archiveFilterSaveRevision + 1;
+  state.archiveFilterSaveRevision = revision;
+  const excludedArchiveKeys = [...state.excludedArchiveKeys];
+  state.archiveFilterSaveState = "saving";
+  state.archiveFilterSaveMessage = "";
+  renderArchiveFilterStatus();
+  state.archiveFilterSaveQueue = state.archiveFilterSaveQueue
+    .catch(() => undefined)
+    .then(async () => {
+      if (!hasSecretLinkSession()) {
+        return;
+      }
+      try {
+        const payload = await postAuthJson("/api/auth/archive-filters", {
+          excluded_archive_keys: excludedArchiveKeys,
+        });
+        if (revision !== state.archiveFilterSaveRevision) {
+          return;
+        }
+        state.excludedArchiveKeys = normalizeArchiveFilterKeys(
+          payload?.excluded_archive_keys
+        );
+        state.archiveFilterSaveState = "saved";
+        state.archiveFilterSaveMessage = "";
+      } catch (error) {
+        if (revision !== state.archiveFilterSaveRevision) {
+          return;
+        }
+        if (error.status === 401) {
+          state.feedbackSession = {
+            authentication: "guest",
+            actor: null,
+            capabilities: {
+              rate: false,
+              hide: false,
+              manage_rules: false,
+              manage_auth: false,
+            },
+          };
+          state.archiveFilterLoaded = false;
+          applyContentKindMode();
+          renderArchiveFilterControls();
+          return;
+        }
+        state.archiveFilterSaveState = "error";
+        state.archiveFilterSaveMessage = "탭 설정을 저장하지 못했습니다.";
+      } finally {
+        if (revision === state.archiveFilterSaveRevision && canUseArchiveFilter()) {
+          renderArchiveFilterControls();
+        }
+      }
+    });
+}
+
 function renderArchiveTabs() {
   const tabs = getAvailableArchives().map((archive) => {
     const key = normalizeTarget(archive?.archive_key);
@@ -613,6 +832,7 @@ function render() {
   const view = getViewModel();
   elements.board.setAttribute("aria-busy", "false");
   renderArchiveTabs();
+  renderArchiveFilterControls();
   renderSubjectOptions();
   renderSummary(view);
   renderTopicPanel();
@@ -654,6 +874,12 @@ function getLocalViewModel() {
   const search = state.search.trim().toLocaleLowerCase("ko-KR");
   const filtered = [...allPosts]
     .filter((post) => {
+      if (
+        canUseArchiveFilter() &&
+        state.excludedArchiveKeys.has(String(post?.archive_key || ""))
+      ) {
+        return false;
+      }
       if (
         (state.minUpvotes > 0 &&
           normalizeSignedInteger(post.upvotes, 0) < state.minUpvotes) ||
@@ -1522,6 +1748,17 @@ function postGameNewsJson(url, body) {
   });
 }
 
+function postAuthJson(url, body) {
+  return fetchGameNewsJson(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-TodayCommunity-Auth": "1",
+    },
+    body: JSON.stringify(body),
+  });
+}
+
 function createRequestKey(prefix) {
   const random = globalThis.crypto?.randomUUID?.()
     || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
@@ -1997,8 +2234,8 @@ function compareExternalId(left, right) {
 }
 
 function bindEvents() {
-  elements.filterForm.addEventListener("input", scheduleFilterUpdate);
-  elements.filterForm.addEventListener("change", scheduleFilterUpdate);
+  elements.filterForm.addEventListener("input", handleFilterControlUpdate);
+  elements.filterForm.addEventListener("change", handleFilterControlUpdate);
   elements.filterForm.addEventListener("reset", () => {
     window.requestAnimationFrame(resetFilters);
   });
@@ -2114,6 +2351,13 @@ function bindEvents() {
   });
 }
 
+function handleFilterControlUpdate(event) {
+  if (event.target?.matches?.("input[data-archive-filter-key]")) {
+    state.pendingArchiveFilterSave = true;
+  }
+  scheduleFilterUpdate();
+}
+
 function hasActiveFilterState() {
   return Boolean(
     state.search ||
@@ -2121,7 +2365,8 @@ function hasActiveFilterState() {
     state.minUpvotes !== DEFAULT_STATE.minUpvotes ||
     state.minComments !== DEFAULT_STATE.minComments ||
     state.sortBy !== DEFAULT_STATE.sortBy ||
-    state.pageSize !== DEFAULT_STATE.pageSize
+    state.pageSize !== DEFAULT_STATE.pageSize ||
+    (canUseArchiveFilter() && state.excludedArchiveKeys.size > 0)
   );
 }
 
@@ -2135,19 +2380,33 @@ function scheduleFilterUpdate() {
   window.clearTimeout(state.filterTimer);
   state.filterTimer = window.setTimeout(() => {
     readStateFromControls();
+    const shouldSaveArchiveFilter = state.pendingArchiveFilterSave;
+    state.pendingArchiveFilterSave = false;
     state.page = 1;
     state.focusPageContentAfterLoad = false;
     syncStateToUrl();
     loadArchive();
+    if (shouldSaveArchiveFilter) {
+      queueArchiveFilterPreferenceSave();
+    }
   }, 180);
 }
 
 function resetFilters() {
+  const shouldSaveArchiveFilter = canUseArchiveFilter()
+    && state.excludedArchiveKeys.size > 0;
   Object.assign(state, DEFAULT_STATE);
+  if (canUseArchiveFilter()) {
+    state.excludedArchiveKeys = new Set();
+    state.pendingArchiveFilterSave = false;
+  }
   state.focusPageContentAfterLoad = false;
   writeStateToControls();
   syncStateToUrl();
   loadArchive();
+  if (shouldSaveArchiveFilter) {
+    queueArchiveFilterPreferenceSave();
+  }
 }
 
 function openRunsDrawer() {
@@ -2364,6 +2623,7 @@ function readStateFromControls() {
 
   const pageSize = normalizePositiveNumber(elements.pageSizeSelect.value, DEFAULT_STATE.pageSize);
   state.pageSize = VALID_PAGE_SIZES.has(pageSize) ? pageSize : DEFAULT_STATE.pageSize;
+  readArchiveFilterFromControls();
   normalizeContentState();
 }
 
@@ -2374,6 +2634,7 @@ function writeStateToControls() {
   elements.commentsInput.value = String(state.minComments);
   elements.sortSelect.value = state.sortBy;
   elements.pageSizeSelect.value = String(state.pageSize);
+  renderArchiveFilterControls();
 }
 
 function hydrateStateFromUrl() {
@@ -2428,6 +2689,7 @@ function syncStateToUrl({ replace = true } = {}) {
 function renderLoadingState() {
   applyContentKindMode();
   renderArchiveTabs();
+  renderArchiveFilterControls();
   reserveBoardRows(state.pageSize);
   elements.board.setAttribute("aria-busy", "true");
   elements.resultCount.textContent = "목록을 불러오는 중입니다.";

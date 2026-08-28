@@ -552,6 +552,64 @@ body[data-content-kind="article"] .filter-comments {
   align-self: end;
 }
 
+.archive-filter {
+  display: grid;
+  grid-column: 1 / -1;
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-3) 0 0;
+  border: 0;
+  border-top: 1px solid var(--color-border);
+  gap: var(--space-2);
+}
+
+.archive-filter[hidden] {
+  display: none;
+}
+
+.archive-filter legend {
+  padding: 0;
+  color: var(--color-ink-muted);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.archive-filter-options {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+}
+
+.archive-filter-option {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.archive-filter-option input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--color-primary);
+}
+
+.archive-filter-status {
+  min-height: 1.4em;
+  margin: 0;
+  color: var(--color-ink-muted);
+  font-size: var(--text-xs);
+}
+
+.archive-filter-status[data-state="error"] {
+  color: var(--color-warning);
+}
+
 .data-notice {
   margin: 0;
   padding: var(--space-2) var(--space-3);

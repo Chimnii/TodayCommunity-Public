@@ -80,6 +80,14 @@ class MockDatabase {
   constructor() {
     this.links = [];
     this.loginLimits = new Map();
+    this.archiveFilters = new Map();
+    this.archives = [
+      "dcinside-singularity",
+      "dcinside-agent-stack",
+      "dcinside-zeus-pride",
+      "fmkorea-munich",
+      "game-news",
+    ];
   }
 
   prepare(sql) {
@@ -87,6 +95,21 @@ class MockDatabase {
   }
 
   all(sql, values) {
+    if (sql.includes("FROM auth_secret_link_archive_filters") && sql.includes("LIMIT 1")) {
+      const row = this.archiveFilters.get(Number(values[0]));
+      return row ? [{ ...row }] : [];
+    }
+    if (sql.startsWith("INSERT INTO auth_secret_link_archive_filters")) {
+      const row = {
+        excluded_archive_keys_json: values[1],
+        updated_at: values[2],
+      };
+      this.archiveFilters.set(Number(values[0]), row);
+      return [{ ...row }];
+    }
+    if (sql.includes("SELECT archive_key FROM archives WHERE is_public = 1")) {
+      return this.archives.map((archiveKey) => ({ archive_key: archiveKey }));
+    }
     if (sql.includes("FROM auth_login_limits") && sql.includes("LIMIT 1")) {
       const row = this.loginLimits.get(values[0]);
       return row ? [{ ...row }] : [];
@@ -357,6 +380,107 @@ test("issues, exchanges, lists, and revokes one-time secret links", async () => 
     db,
   });
   assert.equal(reused.status, 401);
+});
+
+test("stores an isolated archive filter for each active secret link", async () => {
+  const db = new MockDatabase();
+  const guestRead = await request("archive-filters", { db });
+  assert.equal(guestRead.status, 401);
+
+  const login = await request("admin/login", {
+    method: "POST",
+    body: { password: ADMIN_PASSWORD },
+    db,
+  });
+  const adminCookie = cookieFromResponse(login, auth.ADMIN_COOKIE);
+  const adminRead = await request("archive-filters", { db, cookie: adminCookie });
+  assert.equal(adminRead.status, 401);
+
+  async function issueAuthenticatedCookie(label) {
+    const created = await request("admin/links", {
+      method: "POST",
+      body: { label, expires_in_days: 0 },
+      cookie: adminCookie,
+      db,
+    });
+    const secretUrl = new URL((await created.json()).secret_url);
+    const token = new URLSearchParams(secretUrl.hash.slice(1)).get("token");
+    const exchanged = await request("secret/exchange", {
+      method: "POST",
+      body: { token },
+      db,
+    });
+    return cookieFromResponse(exchanged, auth.AUTHENTICATED_COOKIE);
+  }
+
+  const firstCookie = await issueAuthenticatedCookie("첫 번째 링크");
+  const firstDefault = await request("archive-filters", {
+    db,
+    cookie: firstCookie,
+  });
+  assert.deepEqual(await firstDefault.json(), {
+    excluded_archive_keys: [],
+    updated_at: null,
+  });
+
+  const saved = await request("archive-filters", {
+    method: "POST",
+    body: {
+      excluded_archive_keys: [
+        "game-news",
+        "dcinside-agent-stack",
+        "game-news",
+      ],
+    },
+    cookie: firstCookie,
+    db,
+  });
+  assert.equal(saved.status, 200);
+  assert.deepEqual((await saved.json()).excluded_archive_keys, [
+    "dcinside-agent-stack",
+    "game-news",
+  ]);
+
+  const firstReload = await request("archive-filters", {
+    db,
+    cookie: firstCookie,
+  });
+  assert.deepEqual((await firstReload.json()).excluded_archive_keys, [
+    "dcinside-agent-stack",
+    "game-news",
+  ]);
+
+  const secondCookie = await issueAuthenticatedCookie("두 번째 링크");
+  const secondDefault = await request("archive-filters", {
+    db,
+    cookie: secondCookie,
+  });
+  assert.deepEqual((await secondDefault.json()).excluded_archive_keys, []);
+
+  const invalid = await request("archive-filters", {
+    method: "POST",
+    body: { excluded_archive_keys: ["private-or-missing"] },
+    cookie: firstCookie,
+    db,
+  });
+  assert.equal(invalid.status, 400);
+  assert.deepEqual(
+    JSON.parse(db.archiveFilters.get(1).excluded_archive_keys_json),
+    ["dcinside-agent-stack", "game-news"]
+  );
+
+  const revoked = await request("admin/links/revoke", {
+    method: "POST",
+    body: { id: 1 },
+    cookie: adminCookie,
+    db,
+  });
+  assert.equal(revoked.status, 200);
+  const revokedRead = await request("archive-filters", {
+    db,
+    cookie: firstCookie,
+  });
+  assert.equal(revokedRead.status, 401);
 });
 
 test("locks repeated wrong-password attempts", async () => {

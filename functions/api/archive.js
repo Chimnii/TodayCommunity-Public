@@ -14,6 +14,7 @@ const MAX_PAGE_SIZE = 100;
 const MAX_SEARCH_LENGTH = 100;
 const MAX_SUBJECT_LENGTH = 100;
 const MAX_SUBJECT_OPTIONS = 100;
+const MAX_ARCHIVE_FILTER_KEYS = 50;
 const MAX_TOPIC_ITEMS = 6;
 const TARGET_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const TOPIC_TREND_STATES = new Set(["new", "rising", "active"]);
@@ -84,6 +85,26 @@ function normalizeTopicId(rawValue) {
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
+function normalizeExcludedArchives(searchParams) {
+  const rawKeys = searchParams.getAll("exclude_archive");
+  if (rawKeys.length > MAX_ARCHIVE_FILTER_KEYS) {
+    return null;
+  }
+  const keys = [];
+  const seen = new Set();
+  for (const rawKey of rawKeys) {
+    const key = String(rawKey || "").trim();
+    if (key === ALL_TARGET || !TARGET_PATTERN.test(key)) {
+      return null;
+    }
+    if (!seen.has(key)) {
+      seen.add(key);
+      keys.push(key);
+    }
+  }
+  return keys;
+}
+
 function escapeLike(value) {
   return value.replace(/[\\%_]/g, "\\$&");
 }
@@ -124,19 +145,44 @@ function normalizeSubjectOptions(rawValue) {
     .slice(0, MAX_SUBJECT_OPTIONS);
 }
 
-function buildPostFilter(target, query, minUpvotes, minComments, subject, topicId) {
-  const clauses = target === ALL_TARGET
-    ? [
-        `EXISTS (
-          SELECT 1
-          FROM archives AS public_archive
-          WHERE public_archive.archive_key = posts.archive_key
-            AND public_archive.is_public = 1
-        )`,
-        "status = 'active'",
-      ]
-    : ["archive_key = ?", "status = 'active'"];
-  const bindings = target === ALL_TARGET ? [] : [target];
+function buildPostFilter(
+  target,
+  query,
+  minUpvotes,
+  minComments,
+  subject,
+  topicId,
+  excludedArchives
+) {
+  let clauses;
+  let bindings;
+  if (target === ALL_TARGET && excludedArchives.length > 0) {
+    const placeholders = excludedArchives.map(() => "?").join(", ");
+    clauses = [
+      `archive_key IN (
+        SELECT public_archive.archive_key
+        FROM archives AS public_archive
+        WHERE public_archive.is_public = 1
+          AND public_archive.archive_key NOT IN (${placeholders})
+      )`,
+      "status = 'active'",
+    ];
+    bindings = [...excludedArchives];
+  } else if (target === ALL_TARGET) {
+    clauses = [
+      `EXISTS (
+        SELECT 1
+        FROM archives AS public_archive
+        WHERE public_archive.archive_key = posts.archive_key
+          AND public_archive.is_public = 1
+      )`,
+      "status = 'active'",
+    ];
+    bindings = [];
+  } else {
+    clauses = ["archive_key = ?", "status = 'active'"];
+    bindings = [target];
+  }
 
   if (minUpvotes > 0) {
     clauses.push("upvotes >= ?");
@@ -189,7 +235,18 @@ function buildOrderClause(sort) {
 
 function buildCacheKey(
   url,
-  { target, pageSize, requestedPage, query, minUpvotes, minComments, subject, topicId, sort }
+  {
+    target,
+    pageSize,
+    requestedPage,
+    query,
+    minUpvotes,
+    minComments,
+    subject,
+    topicId,
+    sort,
+    excludedArchives,
+  }
 ) {
   const cacheUrl = new URL(url.pathname, url.origin);
   const normalized = {
@@ -208,6 +265,9 @@ function buildCacheKey(
     if (value) {
       cacheUrl.searchParams.set(name, value);
     }
+  }
+  for (const archiveKey of [...excludedArchives].sort()) {
+    cacheUrl.searchParams.append("exclude_archive", archiveKey);
   }
   return new Request(cacheUrl.toString(), { method: "GET" });
 }
@@ -321,6 +381,13 @@ export async function onRequestGet(context) {
       return jsonResponse({ error: "Topic filter must be a positive integer." }, 400);
     }
     const allArchives = target === ALL_TARGET;
+    const excludedArchives = normalizeExcludedArchives(url.searchParams);
+    if (excludedArchives === null) {
+      return jsonResponse({ error: "Archive filters are invalid." }, 400);
+    }
+    if (!allArchives && excludedArchives.length > 0) {
+      return jsonResponse({ error: "Archive filters require the all target." }, 400);
+    }
     if (allArchives && topicId > 0) {
       return jsonResponse({ error: "Topic filters are unavailable for this archive." }, 400);
     }
@@ -332,7 +399,8 @@ export async function onRequestGet(context) {
       minUpvotes,
       minComments,
       subject,
-      topicId
+      topicId,
+      excludedArchives
     );
     const cacheKey = buildCacheKey(url, {
       target,
@@ -344,6 +412,7 @@ export async function onRequestGet(context) {
       subject,
       topicId,
       sort,
+      excludedArchives,
     });
     const cacheable = target !== "game-news" && !allArchives;
     const edgeCache = cacheable ? globalThis.caches?.default : null;

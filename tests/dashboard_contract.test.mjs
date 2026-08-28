@@ -117,6 +117,33 @@ test("renders the all target as a mixed five-column archive without feedback", (
   assert.doesNotMatch(css, /body\[data-content-kind="mixed"\] \.cell-date\s*{[^}]*display:\s*block/s);
 });
 
+test("offers link-specific archive checkboxes only inside the all-tab filter form", () => {
+  assert.match(
+    html,
+    /<form class="filter-form" id="filter-form">[\s\S]*id="filter-reset"[\s\S]*<fieldset class="archive-filter" id="archive-filter" hidden>[\s\S]*<legend>표시할 탭<\/legend>[\s\S]*id="archive-filter-options"[\s\S]*<\/fieldset>[\s\S]*<\/form>/
+  );
+  assert.match(app, /state\.feedbackSession\?\.authentication === "authenticated"/);
+  assert.match(
+    app,
+    /state\.target === ALL_TARGET &&[\s\S]*hasSecretLinkSession\(\) &&[\s\S]*state\.archiveFilterLoaded/
+  );
+  assert.match(app, /fetchGameNewsJson\("\/api\/auth\/archive-filters"\)/);
+  assert.match(app, /postAuthJson\("\/api\/auth\/archive-filters"/);
+  assert.match(app, /"X-TodayCommunity-Auth": "1"/);
+  assert.match(app, /params\.append\("exclude_archive", archiveKey\)/);
+  assert.match(app, /state\.excludedArchiveKeys = new Set\(\)/);
+  assert.match(app, /queueArchiveFilterPreferenceSave\(\)/);
+  assert.doesNotMatch(app, /localStorage|sessionStorage/);
+  assert.match(css, /\.archive-filter\s*{[^}]*grid-column:\s*1 \/ -1/s);
+  assert.match(css, /\.archive-filter\[hidden\]\s*{[^}]*display:\s*none/s);
+  assert.match(
+    css,
+    /@media \(max-width:\s*520px\)[\s\S]*\.filter-form\s*{[^}]*display:\s*none[\s\S]*\.filter-shell\.is-filter-expanded \.filter-form\s*{[^}]*display:\s*grid/
+  );
+  assert.match(fixtureServer, /searchParams\.getAll\("exclude_archive"\)/);
+  assert.match(fixtureServer, /requestUrl\.pathname === "\/api\/auth\/archive-filters"/);
+});
+
 test("ships a stored hot-topic rail with URL-backed filtering and a compact accordion", () => {
   assert.match(html, /<aside[^>]*id="topic-panel"[^>]*aria-labelledby="topic-panel-title"[^>]*hidden/);
   assert.match(html, /id="topic-panel-title"[^>]*tabindex="-1"[^>]*>TOPICS/);

@@ -13,10 +13,12 @@ import {
 } from "../_auth.js";
 
 const MAX_BODY_BYTES = 4096;
+const MAX_ARCHIVE_FILTER_KEYS = 50;
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_LOCK_MS = 15 * 60 * 1000;
 const MAX_LOGIN_FAILURES = 5;
 const ALLOWED_EXPIRY_DAYS = new Set([0, 30, 90, 365]);
+const ARCHIVE_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/u;
 
 class RequestError extends Error {
   constructor(status, message, cookies = []) {
@@ -114,6 +116,18 @@ async function requireAdmin(request, env) {
   return identity;
 }
 
+async function requireAuthenticatedLink(request, env) {
+  const identity = await resolveAuthIdentity(request, env);
+  if (identity.state !== AUTH_STATE_AUTHENTICATED) {
+    throw new RequestError(
+      401,
+      "시크릿 링크 인증이 필요합니다.",
+      identity.cookies_to_clear
+    );
+  }
+  return identity;
+}
+
 function publicIdentity(identity) {
   return {
     state: identity.state,
@@ -126,6 +140,114 @@ async function getSession(request, env) {
   const identity = await resolveAuthIdentity(request, env);
   return jsonResponse(
     publicIdentity(identity),
+    200,
+    identity.cookies_to_clear
+  );
+}
+
+function normalizeArchiveFilterKeys(value) {
+  if (!Array.isArray(value) || value.length > MAX_ARCHIVE_FILTER_KEYS) {
+    return null;
+  }
+  const keys = [];
+  const seen = new Set();
+  for (const rawKey of value) {
+    if (typeof rawKey !== "string") {
+      return null;
+    }
+    const key = rawKey.trim();
+    if (key === "all" || !ARCHIVE_KEY_PATTERN.test(key)) {
+      return null;
+    }
+    if (!seen.has(key)) {
+      seen.add(key);
+      keys.push(key);
+    }
+  }
+  return keys;
+}
+
+function parseStoredArchiveFilterKeys(value) {
+  try {
+    return normalizeArchiveFilterKeys(JSON.parse(value || "[]")) ?? [];
+  } catch {
+    return [];
+  }
+}
+
+async function getArchiveFilters(request, env) {
+  const identity = await requireAuthenticatedLink(request, env);
+  const rows = await queryAll(
+    requireDatabase(env),
+    `
+    SELECT excluded_archive_keys_json, updated_at
+    FROM auth_secret_link_archive_filters
+    WHERE secret_link_id = ?
+    LIMIT 1
+    `,
+    [identity.credential_id]
+  );
+  const row = rows[0] ?? null;
+  return jsonResponse(
+    {
+      excluded_archive_keys: parseStoredArchiveFilterKeys(
+        row?.excluded_archive_keys_json
+      ),
+      updated_at: row?.updated_at || null,
+    },
+    200,
+    identity.cookies_to_clear
+  );
+}
+
+async function saveArchiveFilters(request, env) {
+  const identity = await requireAuthenticatedLink(request, env);
+  const db = requireDatabase(env);
+  const body = await readJsonBody(request);
+  const requestedKeys = normalizeArchiveFilterKeys(body.excluded_archive_keys);
+  if (requestedKeys === null) {
+    throw new RequestError(400, "탭 필터 설정이 올바르지 않습니다.");
+  }
+  const publicArchiveRows = await queryAll(
+    db,
+    `
+    SELECT archive_key
+    FROM archives
+    WHERE is_public = 1
+    ORDER BY display_order ASC, archive_key ASC
+    `
+  );
+  const requestedSet = new Set(requestedKeys);
+  const publicArchiveKeys = publicArchiveRows.map((row) => String(row.archive_key));
+  const publicArchiveKeySet = new Set(publicArchiveKeys);
+  if (requestedKeys.some((key) => !publicArchiveKeySet.has(key))) {
+    throw new RequestError(400, "공개 중인 탭만 필터에서 제외할 수 있습니다.");
+  }
+  const excludedArchiveKeys = publicArchiveKeys.filter((key) => requestedSet.has(key));
+  const updatedAt = new Date().toISOString();
+  const saved = await queryAll(
+    db,
+    `
+    INSERT INTO auth_secret_link_archive_filters (
+      secret_link_id, excluded_archive_keys_json, updated_at
+    ) VALUES (?, ?, ?)
+    ON CONFLICT(secret_link_id) DO UPDATE SET
+      excluded_archive_keys_json = excluded.excluded_archive_keys_json,
+      updated_at = excluded.updated_at
+    RETURNING excluded_archive_keys_json, updated_at
+    `,
+    [identity.credential_id, JSON.stringify(excludedArchiveKeys), updatedAt]
+  );
+  if (saved.length !== 1) {
+    throw new Error("Archive filter preference save failed");
+  }
+  return jsonResponse(
+    {
+      excluded_archive_keys: parseStoredArchiveFilterKeys(
+        saved[0].excluded_archive_keys_json
+      ),
+      updated_at: saved[0].updated_at || updatedAt,
+    },
     200,
     identity.cookies_to_clear
   );
@@ -396,6 +518,9 @@ export async function onRequestGet(context) {
     if (resource === "session") {
       return await getSession(context.request, context.env);
     }
+    if (resource === "archive-filters") {
+      return await getArchiveFilters(context.request, context.env);
+    }
     if (resource === "admin/links") {
       return await getLinks(context.request, context.env);
     }
@@ -437,6 +562,9 @@ export async function onRequestPost(context) {
     }
     if (resource === "secret/exchange") {
       return await exchangeSecretLink(context.request, context.env);
+    }
+    if (resource === "archive-filters") {
+      return await saveArchiveFilters(context.request, context.env);
     }
     if (resource === "authenticated/logout") {
       return jsonResponse(

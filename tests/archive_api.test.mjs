@@ -662,6 +662,63 @@ test("combines every public archive in the virtual all target", async () => {
   assert.deepEqual(postCall.values, [30, 0]);
 });
 
+test("excludes selected archives before counting and paginating the all target", async () => {
+  const database = new MockDatabase({
+    totalPosts: 20,
+    filteredPosts: 7,
+    posts: makeRows(7),
+  });
+  const params = new URLSearchParams({ target: "all" });
+  params.append("exclude_archive", "game-news");
+  params.append("exclude_archive", "dcinside-agent-stack");
+  params.append("exclude_archive", "game-news");
+
+  const { response, body } = await requestArchive(database, `?${params}`);
+
+  assert.equal(response.status, 200);
+  assert.equal(body.summary.filtered_posts, 7);
+  const countCall = findCall(database, "AS filtered_posts", "batch");
+  assert.match(countCall.sql, /archive_key IN \(/);
+  assert.match(countCall.sql, /public_archive\.is_public = 1/);
+  assert.match(countCall.sql, /public_archive\.archive_key NOT IN \(\?, \?\)/);
+  assert.deepEqual(countCall.values, ["game-news", "dcinside-agent-stack"]);
+
+  const postCall = findCall(
+    database,
+    "SELECT archive_key, source_key, external_post_id",
+    "batch"
+  );
+  assert.deepEqual(postCall.values, [
+    "game-news",
+    "dcinside-agent-stack",
+    30,
+    0,
+  ]);
+});
+
+test("rejects malformed or cross-target archive exclusions before querying D1", async () => {
+  for (const search of [
+    "?target=all&exclude_archive=",
+    "?target=all&exclude_archive=all",
+    "?target=all&exclude_archive=bad%20key",
+    "?target=game-news&exclude_archive=dcinside-singularity",
+  ]) {
+    const database = new MockDatabase();
+    const { response } = await requestArchive(database, search);
+    assert.equal(response.status, 400, search);
+    assert.deepEqual(database.calls, [], search);
+  }
+
+  const database = new MockDatabase();
+  const params = new URLSearchParams({ target: "all" });
+  for (let index = 0; index < 51; index += 1) {
+    params.append("exclude_archive", `archive-${index}`);
+  }
+  const { response } = await requestArchive(database, `?${params}`);
+  assert.equal(response.status, 400);
+  assert.deepEqual(database.calls, []);
+});
+
 test("rejects topic filters for the virtual all target before querying D1", async () => {
   const database = new MockDatabase();
 

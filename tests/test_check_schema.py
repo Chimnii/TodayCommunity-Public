@@ -52,6 +52,13 @@ UTC_MIGRATION_PATH = (
     / "011_canonical_utc_post_times.sql"
 )
 UTC_MIGRATION = UTC_MIGRATION_PATH.read_text(encoding="utf-8")
+ARCHIVE_FILTER_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "cloudflare"
+    / "migrations"
+    / "012_secret_link_archive_filters.sql"
+)
+ARCHIVE_FILTER_MIGRATION = ARCHIVE_FILTER_MIGRATION_PATH.read_text(encoding="utf-8")
 POST_TIME_METADATA_DEFINITION = """  created_at_basis TEXT NOT NULL DEFAULT 'source'
     CHECK (created_at_basis IN ('source', 'first_seen')),
   created_at_precision TEXT NOT NULL DEFAULT 'second'
@@ -159,6 +166,37 @@ class SchemaPreflightTests(unittest.TestCase):
             )
         }
         self.assertEqual({"auth_login_limits", "auth_secret_links"}, tables)
+
+    def test_secret_link_archive_filter_migration_is_idempotent(self) -> None:
+        marker = "CREATE TABLE IF NOT EXISTS auth_secret_link_archive_filters"
+        self.assertIn(marker, SCHEMA)
+        client = SqliteClient(SCHEMA.split(marker, 1)[0])
+
+        client.connection.executescript(ARCHIVE_FILTER_MIGRATION)
+        client.connection.executescript(ARCHIVE_FILTER_MIGRATION)
+
+        columns = {
+            row["name"]
+            for row in client.query(
+                "PRAGMA table_info(auth_secret_link_archive_filters)"
+            )
+        }
+        self.assertEqual(
+            {
+                "secret_link_id",
+                "excluded_archive_keys_json",
+                "updated_at",
+            },
+            columns,
+        )
+        with self.assertRaises(sqlite3.IntegrityError):
+            client.query(
+                """
+                INSERT INTO auth_secret_link_archive_filters (
+                  secret_link_id, excluded_archive_keys_json, updated_at
+                ) VALUES (1, 'not-json', CURRENT_TIMESTAMP)
+                """
+            )
 
     def test_current_schema_has_required_columns_and_keys(self) -> None:
         client = SqliteClient()
@@ -829,6 +867,35 @@ class SchemaPreflightTests(unittest.TestCase):
         self.assertFalse(
             any("SCAN source_runs" in row["detail"] for row in archive_recent_plan)
         )
+
+    def test_all_archive_exclusion_query_searches_the_archive_index(self) -> None:
+        client = SqliteClient()
+
+        plan = client.query(
+            """
+            EXPLAIN QUERY PLAN
+            SELECT id
+            FROM posts
+            WHERE archive_key IN (
+              SELECT archive_key
+              FROM archives
+              WHERE is_public = 1
+                AND archive_key NOT IN (?, ?)
+            )
+              AND status = 'active'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 30
+            """,
+            ["game-news", "dcinside-agent-stack"],
+        )
+
+        self.assertTrue(
+            any(
+                "SEARCH posts USING INDEX idx_posts_archive_" in row["detail"]
+                for row in plan
+            )
+        )
+        self.assertFalse(any("SCAN posts" in row["detail"] for row in plan))
 
     def test_missing_archive_canonical_unique_constraint_fails(self) -> None:
         fragment = "  UNIQUE(archive_key, canonical_post_key),\n"
