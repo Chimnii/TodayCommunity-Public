@@ -1694,7 +1694,7 @@ body[data-content-kind="mixed"] .cell-source {
 
   body[data-content-kind="mixed"] .board-head .board-row,
   body[data-content-kind="mixed"] .post-row {
-    grid-template-columns: 56px 72px minmax(0, 1fr) 38px 62px;
+    grid-template-columns: 56px 72px minmax(0, 1fr) 38px;
   }
 
   .game-news-tools {
@@ -1718,10 +1718,6 @@ body[data-content-kind="mixed"] .cell-source {
 
   .cell-date {
     display: none;
-  }
-
-  body[data-content-kind="mixed"] .cell-date {
-    display: block;
   }
 
   .board-cell {
