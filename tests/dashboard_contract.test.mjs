@@ -100,7 +100,11 @@ test("renders the all target as a mixed five-column archive without feedback", (
   assert.match(css, /body\[data-content-kind="mixed"\] \.cell-source\s*{[^}]*display:\s*block/s);
   assert.match(
     css,
-    /@media \(max-width:\s*520px\)[\s\S]*body\[data-content-kind="mixed"\] \.post-row\s*{[^}]*grid-template-columns:\s*56px 72px minmax\(0, 1fr\) 38px/
+    /@media \(max-width:\s*520px\)[\s\S]*body\[data-content-kind="mixed"\] \.post-row\s*{[^}]*grid-template-columns:\s*56px minmax\(0, 1fr\) 38px/
+  );
+  assert.match(
+    css,
+    /@media \(max-width:\s*520px\)[\s\S]*body\[data-content-kind="mixed"\] \.cell-subject\s*{[^}]*display:\s*none/
   );
   assert.doesNotMatch(css, /body\[data-content-kind="mixed"\] \.cell-date\s*{[^}]*display:\s*block/s);
 });
