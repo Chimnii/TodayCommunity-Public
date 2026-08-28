@@ -26,7 +26,10 @@ class MockStatement {
   }
 
   result() {
-    if (this.sql.includes("FROM archives")) {
+    if (
+      this.sql.includes("SELECT archive_key, display_name, description, content_kind") &&
+      this.sql.includes("FROM archives")
+    ) {
       if (this.sql.includes("WHERE archive_key = ?")) {
         const archive = this.database.archives.find(
           (candidate) => candidate.archive_key === this.values[0]
@@ -47,9 +50,11 @@ class MockStatement {
       !this.sql.includes("FROM crawl_runs")
     ) {
       return {
-        results: this.database.sources.filter(
-          (source) => source.archive_key === this.values[0]
-        ),
+        results: this.sql.includes("source_archive.is_public = 1")
+          ? this.database.sources
+          : this.database.sources.filter(
+              (source) => source.archive_key === this.values[0]
+            ),
       };
     }
     if (this.sql.includes("FROM crawl_runs")) {
@@ -224,7 +229,7 @@ test("defaults to the first 30 globally counted posts and preserves recent runs"
   assert.equal(body.archive.display_name, "특이점이 온다");
   assert.deepEqual(
     body.archives.map((archive) => archive.archive_key),
-    ["dcinside-singularity", "dcinside-agent-stack", "fmkorea-munich", "game-news"]
+    ["dcinside-singularity", "dcinside-agent-stack", "fmkorea-munich", "game-news", "all"]
   );
   assert.equal(body.archive.content_kind, "community");
   assert.equal(
@@ -538,6 +543,93 @@ test("combines multiple collection sources under one archive", async () => {
   assert.doesNotMatch(countCall.sql, /upvotes >= \?|comments >= \?/);
   const sourceCall = findCall(database, "FROM sources", "batch");
   assert.deepEqual(sourceCall.values, [target]);
+});
+
+test("combines every public archive in the virtual all target", async () => {
+  const sources = [
+    {
+      source_key: "dcinside-singularity",
+      archive_key: "dcinside-singularity",
+      site_name: "dcinside",
+      board_name: "특이점이 온다",
+    },
+    {
+      source_key: "game-news-inven",
+      archive_key: "game-news",
+      site_name: "inven",
+      board_name: "인벤",
+    },
+  ];
+  const gameNewsKey = "a".repeat(32);
+  const posts = [
+    {
+      archive_key: "dcinside-singularity",
+      source_key: "dcinside-singularity",
+      external_post_id: "123",
+      subject: "일반",
+      title: "커뮤니티 글",
+    },
+    {
+      archive_key: "game-news",
+      source_key: "game-news-inven",
+      external_post_id: gameNewsKey,
+      subject: "business",
+      title: "게임 뉴스 기사",
+    },
+  ];
+  const database = new MockDatabase({
+    sources,
+    totalPosts: posts.length,
+    posts,
+  });
+
+  const { response, body } = await requestArchive(database, "?target=all");
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(body.target, "all");
+  assert.equal(body.archive.archive_key, "all");
+  assert.equal(body.archive.content_kind, "mixed");
+  assert.equal(body.archives.at(-1).archive_key, "all");
+  assert.deepEqual(body.sources, sources);
+  assert.equal(body.topic_trends, null);
+  assert.equal(body.selected_topic, null);
+  assert.equal(body.posts[0].feedback_key, undefined);
+  assert.equal(body.posts[1].feedback_key, gameNewsKey);
+  assert.equal(database.calls.filter((call) => call.method === "first").length, 0);
+
+  const sourceCall = findCall(database, "FROM sources", "batch");
+  assert.match(sourceCall.sql, /INNER JOIN archives AS source_archive/);
+  assert.match(sourceCall.sql, /source_archive\.is_public = 1/);
+  assert.deepEqual(sourceCall.values, []);
+
+  const summaryCall = findCall(database, "AS total_posts", "batch");
+  assert.match(summaryCall.sql, /INNER JOIN archives AS summary_archive/);
+  assert.match(summaryCall.sql, /INNER JOIN archives AS subject_archive/);
+  assert.deepEqual(summaryCall.values, []);
+
+  const countCall = findCall(database, "AS filtered_posts", "batch");
+  assert.match(countCall.sql, /public_archive\.archive_key = posts\.archive_key/);
+  assert.match(countCall.sql, /public_archive\.is_public = 1/);
+  assert.deepEqual(countCall.values, []);
+
+  const postCall = findCall(
+    database,
+    "SELECT archive_key, source_key, external_post_id",
+    "batch"
+  );
+  assert.match(postCall.sql, /public_archive\.archive_key = posts\.archive_key/);
+  assert.deepEqual(postCall.values, [30, 0]);
+});
+
+test("rejects topic filters for the virtual all target before querying D1", async () => {
+  const database = new MockDatabase();
+
+  const { response, body } = await requestArchive(database, "?target=all&topic=1");
+
+  assert.equal(response.status, 400);
+  assert.equal(body.error, "Topic filters are unavailable for this archive.");
+  assert.deepEqual(database.calls, []);
 });
 
 test("serves article archives from published posts without exposing curation data", async () => {

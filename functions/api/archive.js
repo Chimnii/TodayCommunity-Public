@@ -1,4 +1,13 @@
 const DEFAULT_TARGET = "dcinside-singularity";
+const ALL_TARGET = "all";
+const ALL_ARCHIVE = Object.freeze({
+  archive_key: ALL_TARGET,
+  display_name: "모두",
+  description: "모든 공개 아카이브의 글",
+  content_kind: "mixed",
+  display_order: 100,
+  updated_at: "",
+});
 const DEFAULT_PAGE = 1;
 const DEFAULT_PAGE_SIZE = 30;
 const MAX_PAGE_SIZE = 100;
@@ -116,8 +125,18 @@ function normalizeSubjectOptions(rawValue) {
 }
 
 function buildPostFilter(target, query, minUpvotes, minComments, subject, topicId) {
-  const clauses = ["archive_key = ?", "status = 'active'"];
-  const bindings = [target];
+  const clauses = target === ALL_TARGET
+    ? [
+        `EXISTS (
+          SELECT 1
+          FROM archives AS public_archive
+          WHERE public_archive.archive_key = posts.archive_key
+            AND public_archive.is_public = 1
+        )`,
+        "status = 'active'",
+      ]
+    : ["archive_key = ?", "status = 'active'"];
+  const bindings = target === ALL_TARGET ? [] : [target];
 
   if (minUpvotes > 0) {
     clauses.push("upvotes >= ?");
@@ -259,7 +278,9 @@ function publicArchive(row) {
     archive_key: row.archive_key,
     display_name: row.display_name,
     description: row.description ?? "",
-    content_kind: row.content_kind === "article" ? "article" : "community",
+    content_kind: ["article", "mixed"].includes(row.content_kind)
+      ? row.content_kind
+      : "community",
     display_order: Number(row.display_order ?? 0),
     updated_at: row.updated_at ?? "",
   };
@@ -299,6 +320,10 @@ export async function onRequestGet(context) {
     if (topicId === null) {
       return jsonResponse({ error: "Topic filter must be a positive integer." }, 400);
     }
+    const allArchives = target === ALL_TARGET;
+    if (allArchives && topicId > 0) {
+      return jsonResponse({ error: "Topic filters are unavailable for this archive." }, 400);
+    }
     const requestedSort = url.searchParams.get("sort") || "created_at";
     const sort = Object.hasOwn(SORT_COLUMNS, requestedSort) ? requestedSort : "created_at";
     const filter = buildPostFilter(
@@ -320,7 +345,7 @@ export async function onRequestGet(context) {
       topicId,
       sort,
     });
-    const cacheable = target !== "game-news";
+    const cacheable = target !== "game-news" && !allArchives;
     const edgeCache = cacheable ? globalThis.caches?.default : null;
     if (edgeCache) {
       const cached = await edgeCache.match(cacheKey);
@@ -330,90 +355,116 @@ export async function onRequestGet(context) {
     }
 
     const db = context.env.DB;
-    const archive = publicArchive(
-      await db
-        .prepare(
-          `
-          SELECT archive_key, display_name, description, content_kind,
-                 display_order, updated_at
-          FROM archives
-          WHERE archive_key = ? AND is_public = 1
-          LIMIT 1
-          `
-        )
-        .bind(target)
-        .first()
-    );
+    const archive = allArchives
+      ? ALL_ARCHIVE
+      : publicArchive(
+          await db
+            .prepare(
+              `
+              SELECT archive_key, display_name, description, content_kind,
+                     display_order, updated_at
+              FROM archives
+              WHERE archive_key = ? AND is_public = 1
+              LIMIT 1
+              `
+            )
+            .bind(target)
+            .first()
+        );
     if (!archive) {
       return jsonResponse({ error: "Unknown archive target." }, 400);
     }
-    const communityArchive = archive.content_kind !== "article";
+    const communityArchive = archive.content_kind === "community";
     if (!communityArchive && topicId > 0) {
       return jsonResponse({ error: "Topic filters are unavailable for this archive." }, 400);
     }
 
-    const batchStatements = [
-      db.prepare(
-        `
-        SELECT archive_key, display_name, description, content_kind,
-               display_order, updated_at
-        FROM archives
-        WHERE is_public = 1
-        ORDER BY display_order ASC, archive_key ASC
-        `
-      ),
-      db
-        .prepare(
+    const sourceStatement = allArchives
+      ? db.prepare(
           `
-          SELECT source_key, archive_key, site_name, board_name, board_url,
-                 min_upvotes, min_comments, updated_at
+          SELECT sources.source_key, sources.archive_key, sources.site_name,
+                 sources.board_name, sources.board_url, sources.min_upvotes,
+                 sources.min_comments, sources.updated_at
           FROM sources
-          WHERE archive_key = ?
-          ORDER BY source_key ASC
+          INNER JOIN archives AS source_archive
+            ON source_archive.archive_key = sources.archive_key
+          WHERE source_archive.is_public = 1
+          ORDER BY source_archive.display_order ASC, sources.source_key ASC
           `
         )
-        .bind(target),
-      db
-        .prepare(
+      : db
+          .prepare(
+            `
+            SELECT source_key, archive_key, site_name, board_name, board_url,
+                   min_upvotes, min_comments, updated_at
+            FROM sources
+            WHERE archive_key = ?
+            ORDER BY source_key ASC
+            `
+          )
+          .bind(target);
+    const summaryStatement = allArchives
+      ? db.prepare(
           `
           SELECT
             COUNT(*) AS total_posts,
-            COALESCE(MAX(last_seen_at), '') AS latest_seen_at,
+            COALESCE(MAX(summary_posts.last_seen_at), '') AS latest_seen_at,
             (
               SELECT COALESCE(json_group_array(subject), '[]')
               FROM (
-                SELECT DISTINCT TRIM(subject) AS subject
-                FROM posts
-                WHERE archive_key = ?
-                  AND status = 'active'
-                  AND TRIM(subject) <> ''
-                  AND length(TRIM(subject)) <= ${MAX_SUBJECT_LENGTH}
+                SELECT DISTINCT TRIM(subject_posts.subject) AS subject
+                FROM posts AS subject_posts
+                INNER JOIN archives AS subject_archive
+                  ON subject_archive.archive_key = subject_posts.archive_key
+                WHERE subject_archive.is_public = 1
+                  AND subject_posts.status = 'active'
+                  AND TRIM(subject_posts.subject) <> ''
+                  AND length(TRIM(subject_posts.subject)) <= ${MAX_SUBJECT_LENGTH}
                 ORDER BY subject COLLATE NOCASE, subject
                 LIMIT ${MAX_SUBJECT_OPTIONS}
               )
             ) AS subject_options_json
-          FROM posts
-          WHERE archive_key = ?
-            AND status = 'active'
+          FROM posts AS summary_posts
+          INNER JOIN archives AS summary_archive
+            ON summary_archive.archive_key = summary_posts.archive_key
+          WHERE summary_archive.is_public = 1
+            AND summary_posts.status = 'active'
           `
         )
-        .bind(target, target),
-      db
-        .prepare(
-          `
-          SELECT COUNT(*) AS filtered_posts
-          FROM posts
-          WHERE ${filter.sql}
-          `
-        )
-        .bind(...filter.bindings),
-      db
-        .prepare(
+      : db
+          .prepare(
+            `
+            SELECT
+              COUNT(*) AS total_posts,
+              COALESCE(MAX(last_seen_at), '') AS latest_seen_at,
+              (
+                SELECT COALESCE(json_group_array(subject), '[]')
+                FROM (
+                  SELECT DISTINCT TRIM(subject) AS subject
+                  FROM posts
+                  WHERE archive_key = ?
+                    AND status = 'active'
+                    AND TRIM(subject) <> ''
+                    AND length(TRIM(subject)) <= ${MAX_SUBJECT_LENGTH}
+                  ORDER BY subject COLLATE NOCASE, subject
+                  LIMIT ${MAX_SUBJECT_OPTIONS}
+                )
+              ) AS subject_options_json
+            FROM posts
+            WHERE archive_key = ?
+              AND status = 'active'
+            `
+          )
+          .bind(target, target);
+    const runsStatement = allArchives
+      ? db.prepare(
           `
           WITH archive_sources AS (
-            SELECT source_key, site_name, board_name
+            SELECT sources.source_key, sources.site_name, sources.board_name
             FROM sources
-            WHERE archive_key = ?
+            INNER JOIN archives AS source_archive
+              ON source_archive.archive_key = sources.archive_key
+            WHERE source_archive.is_public = 1
           )
           SELECT runs.source_key, sources.site_name, sources.board_name,
                  runs.run_type, runs.status, runs.scanned_pages, runs.scanned_posts,
@@ -438,7 +489,60 @@ export async function onRequestGet(context) {
           LIMIT 10
           `
         )
-        .bind(target),
+      : db
+          .prepare(
+            `
+            WITH archive_sources AS (
+              SELECT source_key, site_name, board_name
+              FROM sources
+              WHERE archive_key = ?
+            )
+            SELECT runs.source_key, sources.site_name, sources.board_name,
+                   runs.run_type, runs.status, runs.scanned_pages, runs.scanned_posts,
+                   runs.matched_posts, runs.started_at, runs.finished_at,
+                   CASE
+                     WHEN runs.status IN ('failed', 'blocked')
+                      AND runs.error_message IS NOT NULL
+                      AND TRIM(runs.error_message) <> ''
+                     THEN 1
+                     ELSE 0
+                   END AS had_error
+            FROM archive_sources AS sources
+            INNER JOIN crawl_runs AS runs
+              ON runs.id IN (
+                SELECT source_runs.id
+                FROM crawl_runs AS source_runs
+                WHERE source_runs.source_key = sources.source_key
+                ORDER BY source_runs.id DESC
+                LIMIT 10
+              )
+            ORDER BY runs.id DESC
+            LIMIT 10
+            `
+          )
+          .bind(target);
+    const batchStatements = [
+      db.prepare(
+        `
+        SELECT archive_key, display_name, description, content_kind,
+               display_order, updated_at
+        FROM archives
+        WHERE is_public = 1
+        ORDER BY display_order ASC, archive_key ASC
+        `
+      ),
+      sourceStatement,
+      summaryStatement,
+      db
+        .prepare(
+          `
+          SELECT COUNT(*) AS filtered_posts
+          FROM posts
+          WHERE ${filter.sql}
+          `
+        )
+        .bind(...filter.bindings),
+      runsStatement,
     ];
     let selectedTopicIndex = -1;
     let topicSnapshotIndex = -1;
@@ -559,7 +663,12 @@ export async function onRequestGet(context) {
       ? batchResults[topicItemsIndex]
       : null;
 
-    const archives = (archiveResult.results ?? []).map(publicArchive);
+    const archives = [
+      ...(archiveResult.results ?? [])
+        .map(publicArchive)
+        .filter((candidate) => candidate?.archive_key !== ALL_TARGET),
+      ALL_ARCHIVE,
+    ];
     const sources = sourceResult.results ?? [];
     const summary = firstResult(summaryResult);
     const filteredSummary = firstResult(filteredSummaryResult);
@@ -599,7 +708,7 @@ export async function onRequestGet(context) {
       })
     );
     const posts = (postResult.results ?? []).map((post) => (
-      target === "game-news"
+      post.archive_key === "game-news"
         ? { ...post, feedback_key: String(post.external_post_id || "") }
         : post
     ));

@@ -301,6 +301,7 @@ async function createLink(request, env) {
     throw new Error("Secret link insertion failed");
   }
   const secretUrl = new URL("/owner/", request.url);
+  secretUrl.searchParams.set("next", "/?target=all");
   secretUrl.hash = `token=${rawToken}`;
   return jsonResponse(
     {

@@ -80,6 +80,14 @@ const archives = [
     display_order: 40,
     updated_at: "2026-07-17T00:30:00.000Z",
   },
+  {
+    archive_key: "all",
+    display_name: "모두",
+    description: "모든 공개 아카이브의 글",
+    content_kind: "mixed",
+    display_order: 100,
+    updated_at: "2026-07-17T00:30:00.000Z",
+  },
 ];
 
 const sourcesByArchive = {
@@ -155,6 +163,9 @@ const sourcesByArchive = {
     },
   ],
 };
+sourcesByArchive.all = Object.entries(sourcesByArchive)
+  .filter(([archiveKey]) => archiveKey !== "all")
+  .flatMap(([, archiveSources]) => archiveSources);
 
 const posts = Array.from({ length: postCount }, (_, index) => {
   const id = 1324407 - index;
@@ -243,28 +254,38 @@ function handleArchive(requestUrl, response) {
   }
   const sources = sourcesByArchive[target];
   const articleMode = archive.content_kind === "article";
+  const mixedMode = archive.content_kind === "mixed";
   const topicFixtures = COMMUNITY_TOPIC_FIXTURES[target] || [];
-  const archivePosts = posts.map((post, index) => ({
-    ...post,
-    archive_key: target,
-    source_key: sources[index % sources.length].source_key,
-    subject: articleMode
-      ? ARTICLE_SUBJECTS[index % ARTICLE_SUBJECTS.length]
-      : post.subject,
-    title: articleMode ? `게임 뉴스 검증 기사 ${index + 1}` : post.title,
-    post_url: articleMode
-      ? index % 2 === 0
-        ? `https://www.inven.co.kr/webzine/news/?news=${post.external_post_id}`
-        : `https://www.thisisgame.com/webzine/news/nboard/4/?n=${post.external_post_id}`
-      : post.post_url,
-    upvotes: articleMode ? 0 : post.upvotes,
-    comments: articleMode ? 0 : post.comments,
-    qualifies_by: articleMode ? "llm-include" : post.qualifies_by,
-    feedback_key: articleMode ? feedbackKeyForIndex(index) : undefined,
-    topic_ids: articleMode || topicFixtures.length === 0
-      ? []
-      : [topicFixtures[index % topicFixtures.length].topic_id],
-  })).filter((post) => !articleMode || !hiddenPostKeys.has(post.feedback_key));
+  const contentArchives = archives.filter((candidate) => candidate.archive_key !== "all");
+  const archivePosts = posts.map((post, index) => {
+    const postArchive = mixedMode
+      ? contentArchives[index % contentArchives.length]
+      : archive;
+    const postSources = sourcesByArchive[postArchive.archive_key];
+    const postSource = postSources[index % postSources.length];
+    const postIsArticle = postArchive.content_kind === "article";
+    return {
+      ...post,
+      archive_key: postArchive.archive_key,
+      source_key: postSource.source_key,
+      subject: postIsArticle
+        ? ARTICLE_SUBJECTS[index % ARTICLE_SUBJECTS.length]
+        : post.subject,
+      title: postIsArticle ? `게임 뉴스 검증 기사 ${index + 1}` : post.title,
+      post_url: postIsArticle
+        ? index % 2 === 0
+          ? `https://www.inven.co.kr/webzine/news/?news=${post.external_post_id}`
+          : `https://www.thisisgame.com/webzine/news/nboard/4/?n=${post.external_post_id}`
+        : post.post_url,
+      upvotes: postIsArticle ? 0 : post.upvotes,
+      comments: postIsArticle ? 0 : post.comments,
+      qualifies_by: postIsArticle ? "llm-include" : post.qualifies_by,
+      feedback_key: postIsArticle ? feedbackKeyForIndex(index) : undefined,
+      topic_ids: postIsArticle || mixedMode || topicFixtures.length === 0
+        ? []
+        : [topicFixtures[index % topicFixtures.length].topic_id],
+    };
+  }).filter((post) => post.archive_key !== "game-news" || !hiddenPostKeys.has(post.feedback_key));
   const archiveSubjectOptions = [
     ...new Set(archivePosts.map((post) => normalizeSubject(post.subject)).filter(Boolean)),
   ]
@@ -298,7 +319,7 @@ function handleArchive(requestUrl, response) {
   const offset = (page - 1) * pageSize;
   const visiblePosts = filtered.slice(offset, offset + pageSize);
   const selectedTopic = topicFixtures.find((topic) => topic.topic_id === topicId) || null;
-  const topicTrends = articleMode
+  const topicTrends = articleMode || mixedMode
     ? null
     : {
         window_hours: 24,
@@ -351,7 +372,7 @@ function handleArchive(requestUrl, response) {
       has_previous: page > 1,
       has_next: totalPages > 0 && page < totalPages,
     },
-    subject_options: articleMode ? archiveSubjectOptions : subjectOptions,
+    subject_options: articleMode || mixedMode ? archiveSubjectOptions : subjectOptions,
     runs: runs.map((run, index) => ({
       ...run,
       source_key: sources[index % sources.length].source_key,
@@ -510,7 +531,9 @@ function normalizeSubject(value) {
 }
 
 async function serveStatic(requestUrl, response) {
-  const requestedPath = requestUrl.pathname === "/" ? "/index.html" : requestUrl.pathname;
+  const requestedPath = requestUrl.pathname.endsWith("/")
+    ? `${requestUrl.pathname}index.html`
+    : requestUrl.pathname;
   const safeRelativePath = normalize(requestedPath).replace(/^[/\\]+/, "");
   const filePath = resolve(join(dashboardRoot, safeRelativePath));
 
@@ -549,6 +572,10 @@ const server = createServer(async (request, response) => {
   }
   if (requestUrl.pathname === "/api/auth/session" && request.method === "GET") {
     sendFixtureSession(response);
+    return;
+  }
+  if (requestUrl.pathname === "/api/auth/secret/exchange" && request.method === "POST") {
+    sendJson(response, { state: "authenticated" });
     return;
   }
   await serveStatic(requestUrl, response);

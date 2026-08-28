@@ -76,9 +76,14 @@ test("serves a password-only admin manager at the unlinked admin route", () => {
 
 test("exchanges secret-link fragments without exposing admin management", () => {
   assert.match(ownerApp, /window\.location\.hash/u);
+  assert.match(ownerApp, /window\.location\.search/u);
   assert.match(ownerApp, /window\.history\.replaceState\(null, "", "\/owner\/"\)/u);
   assert.match(ownerApp, /\/api\/auth\/secret\/exchange/u);
-  assert.match(ownerApp, /window\.location\.replace\("\/"\)/u);
+  assert.match(ownerApp, /const DEFAULT_DESTINATION = "\/\?target=all"/u);
+  assert.match(ownerApp, /destination\.origin !== window\.location\.origin/u);
+  assert.match(ownerApp, /destination\.pathname !== "\/"/u);
+  assert.match(ownerApp, /destination\.searchParams\.get\("target"\) !== "all"/u);
+  assert.match(ownerApp, /window\.location\.replace\(destination\)/u);
   assert.ok(
     ownerApp.indexOf("window.history.replaceState") < ownerApp.indexOf("fetch("),
     "The fragment credential must be removed before the network request."
@@ -94,6 +99,7 @@ test("uses signed HttpOnly sessions and stores only hashed link credentials", ()
   assert.match(authLibrary, /PBKDF2/u);
   assert.match(authLibrary, /HMAC/u);
   assert.match(authRoute, /hashSecretLinkToken\(rawToken\)/u);
+  assert.match(authRoute, /secretUrl\.searchParams\.set\("next", "\/\?target=all"\)/u);
   assert.match(authRoute, /secretUrl\.hash = `token=/u);
   assert.doesNotMatch(migration, /raw_token|password/u);
   assert.match(migration, /token_hash TEXT NOT NULL UNIQUE/u);

@@ -35,11 +35,11 @@ test("ships the compact archive surface and hidden collection dialog", () => {
   assert.match(html, /id="comments-input"[^>]*type="number"/);
   assert.match(
     html,
-    /cell-number" role="columnheader">번호<\/span>[\s\S]*cell-subject"[\s\S]*role="columnheader"[\s\S]*>말머리<\/span>[\s\S]*cell-source" role="columnheader">출처<\/span>[\s\S]*cell-title" role="columnheader">제목<\/span>/
+    /cell-number"[^>]*role="columnheader"[^>]*>번호<\/span>[\s\S]*cell-subject"[\s\S]*role="columnheader"[\s\S]*>말머리<\/span>[\s\S]*cell-source"[^>]*role="columnheader"[^>]*>출처<\/span>[\s\S]*cell-title"[^>]*role="columnheader"[^>]*>제목<\/span>/
   );
   assert.match(
     html,
-    /cell-title" role="columnheader">제목<\/span>[\s\S]*cell-upvotes" role="columnheader">추천<\/span>[\s\S]*cell-date" role="columnheader">작성일<\/span>/
+    /cell-title"[^>]*role="columnheader"[^>]*>제목<\/span>[\s\S]*cell-upvotes"[^>]*role="columnheader"[^>]*>추천<\/span>[\s\S]*cell-date"[^>]*role="columnheader"[^>]*>작성일<\/span>/
   );
   assert.doesNotMatch(html, /cell-comments" role="columnheader"/);
   assert.match(
@@ -48,16 +48,18 @@ test("ships the compact archive surface and hidden collection dialog", () => {
   );
 });
 
-test("ships four accessible archive tabs and replaces them from the API catalog", () => {
+test("ships five accessible archive tabs and replaces them from the API catalog", () => {
   assert.match(html, /id="archive-tabs"[^>]*role="tablist"/);
   assert.match(html, /role="tab"[\s\S]*href="\/?\?target=dcinside-singularity"/);
   assert.match(html, /href="\/?\?target=dcinside-agent-stack"/);
   assert.match(html, /href="\/?\?target=fmkorea-munich"/);
   assert.match(html, /href="\/?\?target=game-news"/);
+  assert.match(html, /href="\/?\?target=all"/);
   assert.match(html, />특이점이 온다 갤<\/a>/);
   assert.match(html, />AI 활용 갤<\/a>/);
   assert.match(html, />Bayern Munich<\/a>/);
   assert.match(html, />게임 뉴스<\/a>/);
+  assert.match(html, />모두<\/a>/);
 
   assert.match(app, /Array\.isArray\(state\.archive\?\.archives\)/);
   assert.match(app, /getAvailableArchives\(\)\.map/);
@@ -70,12 +72,35 @@ test("ships four accessible archive tabs and replaces them from the API catalog"
   assert.match(app, /"dcinside-agent-stack": "AI 활용 갤"/);
   assert.match(app, /"fmkorea-munich": "Bayern Munich"/);
   assert.match(app, /"game-news": "게임 뉴스"/);
+  assert.match(app, /all: "모두"/);
   assert.match(
     app,
     /archive_key: "dcinside-agent-stack",[\s\S]*display_name: "AI 활용",[\s\S]*description: "디시인사이드 AI 활용 갤러리 인기글"/
   );
   assert.match(app, /ARCHIVE_TAB_LABELS\[key\] \|\| String\(archive\.display_name \|\| key\)/);
   assert.match(css, /\.archive-tab\[aria-selected="true"\]/);
+});
+
+test("renders the all target as a mixed five-column archive without feedback", () => {
+  assert.match(app, /const ALL_TARGET = "all"/);
+  assert.match(app, /archive_key: ALL_TARGET,[\s\S]*content_kind: "mixed"/);
+  assert.match(app, /function isMixedArchive\(\)/);
+  assert.match(app, /document\.body\.dataset\.contentKind = mixedMode/);
+  assert.match(app, /mixedMode \? "소속" : "출처"/);
+  assert.match(app, /mixedMode[\s\S]*"말머리 \/ 출처-주제"/);
+  assert.match(app, /elements\.numberColumnLabel,[\s\S]*elements\.sourceColumnLabel,[\s\S]*elements\.subjectColumnLabel/);
+  assert.match(app, /isMixedArchive\(\) && isGameNewsPost\(post\)[\s\S]*\? "-"/);
+  assert.match(app, /cell\.textContent = `\$\{sourceLabel\}-\$\{subjectLabel\}`/);
+  assert.match(app, /ARCHIVE_ROW_LABELS\[post\?\.archive_key\]/);
+  assert.match(app, /const communityArchive = !isArticleArchive\(\) && !isMixedArchive\(\)/);
+  assert.match(css, /body\[data-content-kind="mixed"\] \.board-row\s*{[^}]*grid-template-columns:\s*88px 116px minmax\(0, 1fr\) 64px 104px/s);
+  assert.match(css, /body\[data-content-kind="mixed"\] \.cell-number,[\s\S]*body\[data-content-kind="mixed"\] \.cell-feedback\s*{[^}]*display:\s*none/s);
+  assert.match(css, /body\[data-content-kind="mixed"\] \.cell-source\s*{[^}]*display:\s*block/s);
+  assert.match(
+    css,
+    /@media \(max-width:\s*520px\)[\s\S]*body\[data-content-kind="mixed"\] \.post-row\s*{[^}]*grid-template-columns:\s*60px 72px minmax\(0, 1fr\) 38px 62px/
+  );
+  assert.match(css, /body\[data-content-kind="mixed"\] \.cell-date\s*{[^}]*display:\s*block/s);
 });
 
 test("ships a stored hot-topic rail with URL-backed filtering and a compact accordion", () => {
@@ -133,12 +158,12 @@ test("ships a stored hot-topic rail with URL-backed filtering and a compact acco
 
 test("switches article archives to a five-column feedback presentation", () => {
   assert.match(app, /getCurrentArchive\(\)\?\.content_kind === "article"/);
-  assert.match(app, /document\.body\.dataset\.contentKind = articleMode \? "article" : "community"/);
+  assert.match(app, /document\.body\.dataset\.contentKind = mixedMode/);
   assert.match(app, /state\.minUpvotes = 0/);
   assert.match(app, /state\.minComments = 0/);
   assert.match(app, /state\.sortBy = "created_at"/);
-  assert.match(app, /articleMode \? "주제" : "말머리"/);
-  assert.match(app, /articleMode \? "저장된 게임 기사" : "저장된 커뮤니티 글"/);
+  assert.match(app, /articleMode[\s\S]*\? "주제"[\s\S]*: "말머리"/);
+  assert.match(app, /articleMode[\s\S]*\? "저장된 게임 기사"[\s\S]*: "저장된 커뮤니티 글"/);
   assert.match(app, /option\.hidden = articleMode/);
   assert.match(app, /if \(!articleMode\) \{\s*content\.append\(commentCount\)/);
   assert.match(app, /createSourceCell\(post\)/);
@@ -178,7 +203,7 @@ test("switches article archives to a five-column feedback presentation", () => {
     3
   );
   assert.match(css, /\.cell-source\s*{[^}]*padding:\s*0 var\(--space-1\)[^}]*font-weight:\s*400/s);
-  assert.match(html, /class="board-cell cell-feedback"[^>]*role="columnheader">평가/);
+  assert.match(html, /class="board-cell cell-feedback"[^>]*role="columnheader"[^>]*>평가/);
   assert.match(app, /FEEDBACK_RATINGS = Object\.freeze/);
   assert.match(app, /아주 흥미있음/);
   assert.match(app, /흥미는 있음/);
@@ -311,7 +336,7 @@ test("filters by exact subjects from the complete saved set", () => {
   assert.match(fixtureServer, /!subject \|\| post\.subject === subject/);
   assert.match(
     fixtureServer,
-    /subject_options:\s*articleMode\s*\?\s*archiveSubjectOptions\s*:\s*subjectOptions/
+    /subject_options:\s*articleMode \|\| mixedMode \? archiveSubjectOptions : subjectOptions/
   );
 });
 
@@ -336,8 +361,8 @@ test("renders untrusted archive data without HTML injection", () => {
   assert.match(app, /content\.rel = "noreferrer noopener"/);
   assert.match(app, /getSafeHttpUrl/);
   assert.match(app, /\["http:", "https:"\]/);
-  assert.match(app, /String\(subject \|\| ""\)\.trim\(\)/);
-  assert.match(app, /createSubjectCell\(post\.subject\)/);
+  assert.match(app, /String\(post\?\.subject \|\| ""\)\.trim\(\)/);
+  assert.match(app, /createSubjectCell\(post\)/);
   assert.match(app, /DESKTOP_SUBJECT_PREVIEW_LENGTH = 5/);
   assert.match(app, /MOBILE_SUBJECT_PREVIEW_LENGTH = 5/);
   assert.match(app, /new Intl\.Segmenter\("ko", \{ granularity: "grapheme" \}\)/);

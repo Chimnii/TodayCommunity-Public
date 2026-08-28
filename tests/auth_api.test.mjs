@@ -299,6 +299,7 @@ test("issues, exchanges, lists, and revokes one-time secret links", async () => 
   const createdPayload = await created.json();
   const secretUrl = new URL(createdPayload.secret_url);
   assert.equal(secretUrl.pathname, "/owner/");
+  assert.equal(secretUrl.searchParams.get("next"), "/?target=all");
   const rawToken = new URLSearchParams(secretUrl.hash.slice(1)).get("token");
   assert.match(rawToken, /^[A-Za-z0-9_-]{43}$/u);
   assert.equal(db.links.length, 1);

@@ -1,4 +1,5 @@
 const DEFAULT_TARGET = "dcinside-singularity";
+const ALL_TARGET = "all";
 const TARGET_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const SOURCE_DESCRIPTION =
   "추천수 또는 댓글수가 일정 조건을 만족하는 글을 모읍니다. 본문 내용은 수집하지 않고 제목과 원문 링크 등 목록 정보만 수집합니다.";
@@ -9,12 +10,20 @@ const ARCHIVE_TAB_LABELS = Object.freeze({
   "dcinside-agent-stack": "AI 활용 갤",
   "fmkorea-munich": "Bayern Munich",
   "game-news": "게임 뉴스",
+  all: "모두",
 });
 const ARCHIVE_MASTHEAD_DESCRIPTIONS = Object.freeze({
   "dcinside-singularity": "디시인사이드 특이점이 온다 갤러리 인기글.",
   "dcinside-agent-stack": "디시인사이드 AI 활용 갤러리 인기글.",
   "fmkorea-munich": "에펨코리아 바이에른 뮌헨 관련 인기글.",
   "game-news": "게임 신작, 인터뷰와 업계 동향을 휴리스틱하게 선별한 기사.",
+  all: "모든 공개 아카이브의 글을 최신순으로 모았습니다.",
+});
+const ARCHIVE_ROW_LABELS = Object.freeze({
+  "dcinside-singularity": "특이점",
+  "dcinside-agent-stack": "AI 활용",
+  "fmkorea-munich": "Bayern",
+  "game-news": "게임 뉴스",
 });
 const FALLBACK_ARCHIVES = Object.freeze([
   {
@@ -44,6 +53,13 @@ const FALLBACK_ARCHIVES = Object.freeze([
     description: "게임 신작, 인터뷰와 업계 동향 기사",
     content_kind: "article",
     display_order: 40,
+  },
+  {
+    archive_key: ALL_TARGET,
+    display_name: "모두",
+    description: "모든 공개 아카이브의 글",
+    content_kind: "mixed",
+    display_order: 100,
   },
 ]);
 const DEFAULT_STATE = Object.freeze({
@@ -127,6 +143,8 @@ const elements = {
   runs: document.querySelector("#runs"),
   archiveTitle: document.querySelector("#archive-title"),
   board: document.querySelector("#archive-board"),
+  boardHeaderRow: document.querySelector("#board-header-row"),
+  numberColumnLabel: document.querySelector("#number-column-label"),
   posts: document.querySelector("#posts"),
   resultCount: document.querySelector("#result-count"),
   rangeSummary: document.querySelector("#range-summary"),
@@ -139,6 +157,11 @@ const elements = {
   subjectSelect: document.querySelector("#subject-select"),
   subjectFilterLabel: document.querySelector("#subject-filter-label"),
   subjectColumnLabel: document.querySelector("#subject-column-label"),
+  sourceColumnLabel: document.querySelector("#source-column-label"),
+  titleColumnLabel: document.querySelector("#title-column-label"),
+  upvotesColumnLabel: document.querySelector("#upvotes-column-label"),
+  dateColumnLabel: document.querySelector("#date-column-label"),
+  feedbackColumnLabel: document.querySelector("#feedback-column-label"),
   upvotesInput: document.querySelector("#upvotes-input"),
   commentsInput: document.querySelector("#comments-input"),
   sortSelect: document.querySelector("#sort-select"),
@@ -193,7 +216,7 @@ const dateTimeFormatter = new Intl.DateTimeFormat("ko-KR", {
 
 async function initialize() {
   hydrateStateFromUrl();
-  normalizeArticleState();
+  normalizeContentState();
   applyContentKindMode();
   writeStateToControls();
   setMobileFiltersExpanded(hasActiveFilterState());
@@ -362,7 +385,19 @@ function isArticleArchive() {
   );
 }
 
-function normalizeArticleState() {
+function isMixedArchive() {
+  return state.target === ALL_TARGET || getCurrentArchive()?.content_kind === "mixed";
+}
+
+function isGameNewsPost(post) {
+  return post?.archive_key === "game-news";
+}
+
+function normalizeContentState() {
+  if (isMixedArchive()) {
+    state.topicId = 0;
+    return;
+  }
   if (!isArticleArchive()) {
     return;
   }
@@ -374,25 +409,45 @@ function normalizeArticleState() {
 
 function applyContentKindMode() {
   const articleMode = isArticleArchive();
+  const mixedMode = isMixedArchive();
   const authentication = ["authenticated", "admin"].includes(
     state.feedbackSession?.authentication
   )
     ? state.feedbackSession.authentication
     : "guest";
   const canUseFeedback = Boolean(state.feedbackSession?.capabilities?.rate);
-  document.body.dataset.contentKind = articleMode ? "article" : "community";
+  document.body.dataset.contentKind = mixedMode
+    ? "mixed"
+    : articleMode
+      ? "article"
+      : "community";
   document.body.dataset.authState = authentication;
   elements.board.setAttribute(
     "aria-label",
-    articleMode ? "저장된 게임 기사" : "저장된 커뮤니티 글"
+    mixedMode
+      ? "모든 아카이브의 저장 글"
+      : articleMode
+        ? "저장된 게임 기사"
+        : "저장된 커뮤니티 글"
   );
   elements.gameNewsTools.hidden = !articleMode || !canUseFeedback;
 
   if (elements.subjectFilterLabel) {
-    elements.subjectFilterLabel.textContent = articleMode ? "주제" : "말머리";
+    elements.subjectFilterLabel.textContent = mixedMode
+      ? "말머리/주제"
+      : articleMode
+        ? "주제"
+        : "말머리";
   }
   if (elements.subjectColumnLabel) {
-    elements.subjectColumnLabel.textContent = articleMode ? "주제" : "말머리";
+    elements.subjectColumnLabel.textContent = mixedMode
+      ? "말머리 / 출처-주제"
+      : articleMode
+        ? "주제"
+        : "말머리";
+  }
+  if (elements.sourceColumnLabel) {
+    elements.sourceColumnLabel.textContent = mixedMode ? "소속" : "출처";
   }
   for (const option of [elements.sortUpvotesOption, elements.sortCommentsOption]) {
     if (option) {
@@ -405,6 +460,33 @@ function applyContentKindMode() {
     elements.commentsInput.value = "0";
     elements.sortSelect.value = "created_at";
   }
+  renderColumnHeaders(mixedMode);
+}
+
+function renderColumnHeaders(mixedMode) {
+  if (!elements.boardHeaderRow) {
+    return;
+  }
+  const orderedHeaders = mixedMode
+    ? [
+        elements.numberColumnLabel,
+        elements.sourceColumnLabel,
+        elements.subjectColumnLabel,
+        elements.titleColumnLabel,
+        elements.upvotesColumnLabel,
+        elements.dateColumnLabel,
+        elements.feedbackColumnLabel,
+      ]
+    : [
+        elements.numberColumnLabel,
+        elements.subjectColumnLabel,
+        elements.sourceColumnLabel,
+        elements.titleColumnLabel,
+        elements.upvotesColumnLabel,
+        elements.dateColumnLabel,
+        elements.feedbackColumnLabel,
+      ];
+  elements.boardHeaderRow.append(...orderedHeaders.filter(Boolean));
 }
 
 function getCurrentSources() {
@@ -516,7 +598,7 @@ function selectArchive(target) {
 }
 
 function render() {
-  normalizeArticleState();
+  normalizeContentState();
   applyContentKindMode();
   const view = getViewModel();
   elements.board.setAttribute("aria-busy", "false");
@@ -640,7 +722,11 @@ function renderSubjectOptions() {
   options.sort((left, right) => left.localeCompare(right, "ko-KR"));
   const allOption = document.createElement("option");
   allOption.value = "";
-  allOption.textContent = isArticleArchive() ? "전체 주제" : "전체 말머리";
+  allOption.textContent = isMixedArchive()
+    ? "전체 말머리/주제"
+    : isArticleArchive()
+      ? "전체 주제"
+      : "전체 말머리";
   const subjectOptions = options.slice(0, 100).map(createSubjectOption);
 
   elements.subjectSelect.replaceChildren(allOption, ...subjectOptions);
@@ -726,7 +812,7 @@ function renderSummary(view) {
 }
 
 function renderTopicPanel() {
-  const communityArchive = !isArticleArchive();
+  const communityArchive = !isArticleArchive() && !isMixedArchive();
   elements.topicPanel.hidden = !communityArchive;
   if (!communityArchive) {
     elements.topicList.replaceChildren();
@@ -966,14 +1052,44 @@ function renderPosts(posts) {
     row.className = "board-row post-row";
     row.setAttribute("role", "row");
 
+    const numberCell = createCell(
+      post.external_post_id || "-",
+      "cell-number numeric-cell"
+    );
+    const sourceCell = createSourceCell(post);
+    const subjectCell = createSubjectCell(post);
+    const titleCell = createTitleCell(post);
+    const upvotesCell = createCell(
+      isMixedArchive() && isGameNewsPost(post)
+        ? "-"
+        : numberFormatter.format(normalizeSignedInteger(post.upvotes, 0)),
+      "cell-upvotes numeric-cell"
+    );
+    const dateCell = createCell(
+      formatPostDate(post.created_at),
+      "cell-date numeric-cell"
+    );
+    const feedbackCell = createFeedbackCell(post);
     row.append(
-      createCell(post.external_post_id || "-", "cell-number numeric-cell"),
-      createSubjectCell(post.subject),
-      createSourceCell(post),
-      createTitleCell(post),
-      createCell(numberFormatter.format(normalizeSignedInteger(post.upvotes, 0)), "cell-upvotes numeric-cell"),
-      createCell(formatPostDate(post.created_at), "cell-date numeric-cell"),
-      createFeedbackCell(post)
+      ...(isMixedArchive()
+        ? [
+            numberCell,
+            sourceCell,
+            subjectCell,
+            titleCell,
+            upvotesCell,
+            dateCell,
+            feedbackCell,
+          ]
+        : [
+            numberCell,
+            subjectCell,
+            sourceCell,
+            titleCell,
+            upvotesCell,
+            dateCell,
+            feedbackCell,
+          ])
     );
 
     elements.posts.append(row);
@@ -988,9 +1104,21 @@ function createCell(value, className) {
   return cell;
 }
 
-function createSubjectCell(subject) {
-  const value = String(subject || "").trim();
+function createSubjectCell(post) {
+  const value = String(post?.subject || "").trim();
   const cell = createCell("", "cell-subject");
+
+  if (isMixedArchive() && isGameNewsPost(post)) {
+    const sources = getCurrentSources();
+    const sourceLabel = getArticleSourceLabel(post, sources) || "-";
+    const subjectLabel = getArticleSubjectLabel(value) || "-";
+    cell.textContent = `${sourceLabel}-${subjectLabel}`;
+    cell.setAttribute(
+      "aria-label",
+      `출처 ${getArticleSourceFullName(post, sources) || sourceLabel}, 주제 ${value || "없음"}`
+    );
+    return cell;
+  }
 
   if (!value) {
     return cell;
@@ -1404,18 +1532,34 @@ function showFeedbackToast(message, undoAction = null) {
 
 function createSourceCell(post) {
   const sources = getCurrentSources();
-  const source = sources.find(
-    (candidate) => candidate?.source_key === post?.source_key
-  );
+  if (isMixedArchive()) {
+    const archive = findArchive(getAvailableArchives(), post?.archive_key);
+    const label = ARCHIVE_ROW_LABELS[post?.archive_key]
+      || String(archive?.display_name || post?.archive_key || "-");
+    const cell = createCell(label, "cell-source");
+    const fullName = String(archive?.display_name || "").trim();
+    if (fullName && fullName !== label) {
+      cell.setAttribute("aria-label", `소속 ${fullName}`);
+    }
+    return cell;
+  }
+
   const label = getArticleSourceLabel(post, sources);
   const cell = createCell(label || "-", "cell-source");
-  const fullName = String(source?.board_name || source?.site_name || "").trim();
+  const fullName = getArticleSourceFullName(post, sources);
 
   if (fullName && fullName.toLocaleLowerCase("ko-KR") !== label) {
     cell.setAttribute("aria-label", `출처 ${fullName}`);
   }
 
   return cell;
+}
+
+function getArticleSourceFullName(post, sources = []) {
+  const source = Array.isArray(sources)
+    ? sources.find((candidate) => candidate?.source_key === post?.source_key)
+    : null;
+  return String(source?.board_name || source?.site_name || "").trim();
 }
 
 function getArticleSourceLabel(post, sources = []) {
@@ -1529,7 +1673,7 @@ function createTitleCell(post) {
 
   const title = String(post.title || "제목 없음");
   const comments = normalizeNonNegativeNumber(post.comments, 0);
-  const articleMode = isArticleArchive();
+  const articleMode = isArticleArchive() || (isMixedArchive() && isGameNewsPost(post));
   const safeUrl = getSafeHttpUrl(post.post_url);
   const content = safeUrl
     ? document.createElement("a")
@@ -2210,7 +2354,7 @@ function readStateFromControls() {
 
   const pageSize = normalizePositiveNumber(elements.pageSizeSelect.value, DEFAULT_STATE.pageSize);
   state.pageSize = VALID_PAGE_SIZES.has(pageSize) ? pageSize : DEFAULT_STATE.pageSize;
-  normalizeArticleState();
+  normalizeContentState();
 }
 
 function writeStateToControls() {
@@ -2241,7 +2385,7 @@ function hydrateStateFromUrl() {
   state.sortBy = VALID_SORTS.has(sortBy) ? sortBy : DEFAULT_STATE.sortBy;
   state.page = normalizePositiveNumber(params.get("page"), 1);
   state.pageSize = VALID_PAGE_SIZES.has(pageSize) ? pageSize : DEFAULT_STATE.pageSize;
-  normalizeArticleState();
+  normalizeContentState();
 }
 
 function syncStateToUrl({ replace = true } = {}) {

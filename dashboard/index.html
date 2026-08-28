@@ -86,6 +86,14 @@
             tabindex="-1"
             href="/?target=game-news"
           >게임 뉴스</a>
+          <a
+            class="archive-tab"
+            role="tab"
+            aria-selected="false"
+            aria-controls="archive-board"
+            tabindex="-1"
+            href="/?target=all"
+          >모두</a>
         </div>
       </nav>
 
@@ -207,18 +215,42 @@
                 aria-busy="true"
               >
                 <div class="board-head" role="rowgroup">
-                  <div class="board-row" role="row">
-                    <span class="board-cell cell-number" role="columnheader">번호</span>
+                  <div class="board-row" id="board-header-row" role="row">
+                    <span
+                      class="board-cell cell-number"
+                      id="number-column-label"
+                      role="columnheader"
+                    >번호</span>
                     <span
                       class="board-cell cell-subject"
                       id="subject-column-label"
                       role="columnheader"
                     >말머리</span>
-                    <span class="board-cell cell-source" role="columnheader">출처</span>
-                    <span class="board-cell cell-title" role="columnheader">제목</span>
-                    <span class="board-cell cell-upvotes" role="columnheader">추천</span>
-                    <span class="board-cell cell-date" role="columnheader">작성일</span>
-                    <span class="board-cell cell-feedback" role="columnheader">평가</span>
+                    <span
+                      class="board-cell cell-source"
+                      id="source-column-label"
+                      role="columnheader"
+                    >출처</span>
+                    <span
+                      class="board-cell cell-title"
+                      id="title-column-label"
+                      role="columnheader"
+                    >제목</span>
+                    <span
+                      class="board-cell cell-upvotes"
+                      id="upvotes-column-label"
+                      role="columnheader"
+                    >추천</span>
+                    <span
+                      class="board-cell cell-date"
+                      id="date-column-label"
+                      role="columnheader"
+                    >작성일</span>
+                    <span
+                      class="board-cell cell-feedback"
+                      id="feedback-column-label"
+                      role="columnheader"
+                    >평가</span>
                   </div>
                 </div>
 

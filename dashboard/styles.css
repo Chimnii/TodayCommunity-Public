@@ -587,8 +587,17 @@ body[data-content-kind="article"] .board-row {
   grid-template-columns: 60px 40px minmax(0, 1fr) 92px 56px;
 }
 
+body[data-content-kind="mixed"] .board-row {
+  grid-template-columns: 88px 116px minmax(0, 1fr) 64px 104px;
+}
+
 body[data-content-kind="article"] .cell-number,
 body[data-content-kind="article"] .cell-upvotes {
+  display: none;
+}
+
+body[data-content-kind="mixed"] .cell-number,
+body[data-content-kind="mixed"] .cell-feedback {
   display: none;
 }
 
@@ -620,6 +629,13 @@ body[data-content-kind="article"] .post-row {
 }
 
 body[data-content-kind="article"] .post-row .cell-subject {
+  overflow: hidden;
+  padding: 0 5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body[data-content-kind="mixed"] .post-row .cell-subject {
   overflow: hidden;
   padding: 0 5px;
   text-overflow: ellipsis;
@@ -689,6 +705,11 @@ body[data-content-kind="article"] .post-row .cell-subject {
 }
 
 body[data-content-kind="article"] .cell-source {
+  display: block;
+  padding: 0 var(--space-1);
+}
+
+body[data-content-kind="mixed"] .cell-source {
   display: block;
   padding: 0 var(--space-1);
 }
@@ -1516,6 +1537,11 @@ body[data-content-kind="article"] .cell-source {
     grid-template-columns: 60px 40px minmax(0, 1fr) 92px 56px;
   }
 
+  body[data-content-kind="mixed"] .board-head .board-row,
+  body[data-content-kind="mixed"] .post-row {
+    grid-template-columns: 80px 108px minmax(0, 1fr) 56px 92px;
+  }
+
   body[data-content-kind="article"] .board-body {
     min-height: calc(var(--board-row-height) * var(--reserved-row-count, 30));
   }
@@ -1666,6 +1692,11 @@ body[data-content-kind="article"] .cell-source {
     grid-template-columns: 60px 40px minmax(0, 1fr) 48px;
   }
 
+  body[data-content-kind="mixed"] .board-head .board-row,
+  body[data-content-kind="mixed"] .post-row {
+    grid-template-columns: 60px 72px minmax(0, 1fr) 38px 62px;
+  }
+
   .game-news-tools {
     width: 100%;
     justify-content: flex-start;
@@ -1687,6 +1718,15 @@ body[data-content-kind="article"] .cell-source {
 
   .cell-date {
     display: none;
+  }
+
+  body[data-content-kind="mixed"] .cell-date {
+    display: block;
+  }
+
+  body[data-content-kind="mixed"] .board-head .cell-subject {
+    line-height: 1.2;
+    white-space: normal;
   }
 
   .board-cell {
