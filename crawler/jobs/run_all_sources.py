@@ -17,6 +17,7 @@ from crawler.jobs.scan_new_posts import record_run, upsert_source, utc_now
 from crawler.runtime import CycleRuntime
 from crawler.state import SourceState, get_source_state, save_source_state
 from crawler.targets import TargetBoard, get_target
+from crawler.timestamps import canonical_utc
 
 
 VALID_MODES = (CYCLE_MODE_HOT, CYCLE_MODE_BACKFILL)
@@ -189,17 +190,18 @@ def _propagate_origin_cooldown(
     if client is None:
         return
     blocked_at = datetime.now(timezone.utc).replace(microsecond=0)
+    blocked_at_text = canonical_utc(blocked_at)
     for target in targets:
         # record_run/upsert_source will create missing sources for skipped feeds.
-        upsert_source(client, target, blocked_at.isoformat())
+        upsert_source(client, target, blocked_at_text)
         state = get_source_state(client, target.key) or SourceState(
             source_key=target.key
         )
-        state.last_blocked_at = blocked_at.isoformat()
+        state.last_blocked_at = blocked_at_text
         state.last_block_reason = reason[:500]
-        state.blocked_until = (
+        state.blocked_until = canonical_utc(
             blocked_at + timedelta(hours=target.block_cooldown_hours)
-        ).isoformat()
+        )
         save_source_state(client, state)
 
 
@@ -215,7 +217,7 @@ def run_all_targets(
     if mode not in VALID_MODES:
         raise ValueError(f"unsupported sweep mode: {mode!r}")
 
-    started_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    started_at = canonical_utc(datetime.now(timezone.utc))
     target_list = tuple(
         iter_github_scheduled_targets() if targets is None else targets
     )
@@ -296,7 +298,7 @@ def run_all_targets(
     return {
         "mode": mode,
         "started_at": started_at,
-        "finished_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "finished_at": canonical_utc(datetime.now(timezone.utc)),
         "status": "failed" if failure_count else "completed",
         "target_count": len(results),
         "failure_count": failure_count,

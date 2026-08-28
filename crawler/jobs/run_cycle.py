@@ -47,6 +47,7 @@ from crawler.runtime import (
 )
 from crawler.state import SourceState, get_source_state, save_source_state
 from crawler.targets import TargetBoard, get_target
+from crawler.timestamps import canonical_utc
 
 
 DEFAULT_FINALIZATION_AGE_HOURS = 12.0
@@ -232,7 +233,7 @@ class CrawlCycle:
         self.cycle_started_at = ensure_aware(
             cycle_started_at or datetime.now(timezone.utc)
         ).replace(microsecond=0)
-        self.run_started_at = self.cycle_started_at.astimezone(timezone.utc).isoformat()
+        self.run_started_at = canonical_utc(self.cycle_started_at)
         self.finalization_cutoff = self.cycle_started_at - timedelta(
             hours=config.finalization_age_hours
         )
@@ -271,7 +272,7 @@ class CrawlCycle:
             return self._result(
                 "cooldown",
                 self.summaries,
-                f"source cooldown remains active until {blocked_until.isoformat()}",
+                f"source cooldown remains active until {canonical_utc(blocked_until)}",
             )
 
         try:
@@ -1443,7 +1444,7 @@ class CrawlCycle:
         summary.scanned_pages += 1
         summary.scanned_posts += len(snapshot.posts)
         summary.pages.append(snapshot.page)
-        oldest = snapshot.oldest_created_at.astimezone(timezone.utc).isoformat()
+        oldest = canonical_utc(snapshot.oldest_created_at)
         if not summary.oldest_seen_at or oldest < summary.oldest_seen_at:
             summary.oldest_seen_at = oldest
 
@@ -1517,9 +1518,7 @@ class CrawlCycle:
             hours=self.config.block_cooldown_hours
         )
         if recovered_until > self.cycle_started_at:
-            self.source_state.blocked_until = recovered_until.astimezone(
-                timezone.utc
-            ).isoformat()
+            self.source_state.blocked_until = canonical_utc(recovered_until)
 
     def _mark_active_phase(self, status: str, reason: str) -> None:
         if not self.summaries:
@@ -1531,12 +1530,11 @@ class CrawlCycle:
     def _record_block(self, reason: str, summaries: Sequence[PhaseSummary]) -> None:
         timestamp = utc_now()
         blocked_at = parse_optional_datetime(timestamp) or datetime.now(timezone.utc)
-        self.source_state.last_blocked_at = timestamp
+        self.source_state.last_blocked_at = canonical_utc(blocked_at)
         self.source_state.last_block_reason = reason[:500]
-        self.source_state.blocked_until = (
-            blocked_at
-            + timedelta(hours=self.config.block_cooldown_hours)
-        ).astimezone(timezone.utc).isoformat()
+        self.source_state.blocked_until = canonical_utc(
+            blocked_at + timedelta(hours=self.config.block_cooldown_hours)
+        )
         if self.client:
             try:
                 save_source_state(self.client, self.source_state)
@@ -1588,8 +1586,8 @@ class CrawlCycle:
             "status": status,
             "persisted": bool(self.client),
             "cycle_started_at": self.run_started_at,
-            "hot_cutoff": self.hot_cutoff.astimezone(timezone.utc).isoformat(),
-            "finalization_cutoff": self.finalization_cutoff.astimezone(timezone.utc).isoformat(),
+            "hot_cutoff": canonical_utc(self.hot_cutoff),
+            "finalization_cutoff": canonical_utc(self.finalization_cutoff),
             "source_requests": self.runtime.request_count,
             "blocked_reason": self.runtime.blocked_reason or "",
             "persistence_warnings": self.persistence_warnings,

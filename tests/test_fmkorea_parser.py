@@ -145,7 +145,9 @@ class FmkoreaSearchParserTests(unittest.TestCase):
         self.assertEqual(post.subject, "축구")
         self.assertEqual(post.upvotes, 270)
         self.assertEqual(post.comments, 263)
-        self.assertEqual(post.created_at, "2026-07-21T20:39:00+09:00")
+        self.assertEqual(post.created_at, "2026-07-21T11:39:00Z")
+        self.assertEqual(post.created_at_basis, "source")
+        self.assertEqual(post.created_at_precision, "minute")
         self.assertEqual(post.qualifies_by, "keyword")
 
     def test_keeps_support_for_legacy_search_row_marker(self) -> None:
@@ -301,7 +303,7 @@ class FmkoreaSearchParserTests(unittest.TestCase):
         parser.close()
 
         self.assertTrue(parser.diagnostics.is_collection_safe)
-        self.assertEqual(parser.posts[0].created_at, "2026-07-21T23:05:00+09:00")
+        self.assertEqual(parser.posts[0].created_at, "2026-07-21T14:05:00Z")
 
     def test_navigation_rejects_rendered_page_mismatch(self) -> None:
         parser = FmkoreaSearchParser(
@@ -501,7 +503,8 @@ class FmkoreaBoardParserTests(unittest.TestCase):
         post = parser.posts[0]
         self.assertEqual(post.upvotes, 14)
         self.assertEqual(post.comments, 10)
-        self.assertEqual(post.created_at, "2026-07-22T00:37:00+09:00")
+        self.assertEqual(post.created_at, "2026-07-21T15:37:00Z")
+        self.assertEqual(post.created_at_precision, "minute")
         self.assertEqual(post.qualifies_by, "upvotes")
 
     def test_parses_current_anonymous_board_shape_without_row_id(self) -> None:
@@ -589,18 +592,18 @@ class FmkoreaBoardParserTests(unittest.TestCase):
 
 
 class FmkoreaValueParserTests(unittest.TestCase):
-    def test_date_variants_are_normalized_in_kst(self) -> None:
+    def test_date_variants_are_normalized_in_utc(self) -> None:
         self.assertEqual(
             normalize_fmkorea_datetime("2026.07.20", now=NOW),
-            "2026-07-20T23:59:59+09:00",
+            "2026-07-20T14:59:59Z",
         )
         self.assertEqual(
             normalize_fmkorea_datetime("23:59", now=NOW),
-            "2026-07-21T23:59:00+09:00",
+            "2026-07-21T14:59:00Z",
         )
         self.assertEqual(
             normalize_fmkorea_datetime("30 분 전", comment_value="00:09", now=NOW),
-            "2026-07-22T00:09:00+09:00",
+            "2026-07-21T15:09:00Z",
         )
 
     def test_count_parser_rejects_loose_numeric_text(self) -> None:

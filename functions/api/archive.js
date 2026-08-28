@@ -632,7 +632,8 @@ export async function onRequestGet(context) {
           .prepare(
             `
             SELECT archive_key, source_key, external_post_id, subject, title, post_url,
-                   created_at, created_at_raw, upvotes, comments, qualifies_by,
+                   created_at, created_at_raw, created_at_basis,
+                   created_at_precision, upvotes, comments, qualifies_by,
                    fetched_at, first_seen_at, last_seen_at, status
             FROM posts
             WHERE ${filter.sql}
@@ -687,7 +688,8 @@ export async function onRequestGet(context) {
         .prepare(
           `
           SELECT archive_key, source_key, external_post_id, subject, title, post_url,
-                 created_at, created_at_raw, upvotes, comments, qualifies_by,
+                 created_at, created_at_raw, created_at_basis,
+                 created_at_precision, upvotes, comments, qualifies_by,
                  fetched_at, first_seen_at, last_seen_at, status
           FROM posts
           WHERE ${filter.sql}

@@ -8,6 +8,13 @@ from typing import Dict, List, Optional, Tuple
 from urllib.parse import parse_qs, urljoin, urlparse, urlunparse
 
 from crawler.parsers.dcinside import build_qualifies_by, meets_collection_threshold
+from crawler.timestamps import (
+    DATE_PRECISION,
+    MINUTE_PRECISION,
+    SECOND_PRECISION,
+    SOURCE_TIME_BASIS,
+    canonical_utc,
+)
 
 
 KST = timezone(timedelta(hours=9))
@@ -48,6 +55,8 @@ class FmkoreaPost:
     post_url: str
     created_at: str
     created_at_raw: str
+    created_at_basis: str
+    created_at_precision: str
     upvotes: int
     comments: int
     qualifies_by: str
@@ -227,16 +236,20 @@ def normalize_fmkorea_datetime(
     if full:
         year, month, day, hour, minute = map(int, full.groups()[:5])
         second = int(full.group(6) or 0)
-        return _validated_datetime(year, month, day, hour, minute, second).isoformat()
+        return canonical_utc(
+            _validated_datetime(year, month, day, hour, minute, second)
+        )
 
     full_date = FULL_DATE.fullmatch(cleaned)
     if full_date:
-        return _validated_datetime(
-            *map(int, full_date.groups()),
-            hour=23,
-            minute=59,
-            second=59,
-        ).isoformat()
+        return canonical_utc(
+            _validated_datetime(
+                *map(int, full_date.groups()),
+                hour=23,
+                minute=59,
+                second=59,
+            )
+        )
 
     short_date = SHORT_DATE.fullmatch(cleaned)
     if short_date:
@@ -253,19 +266,21 @@ def normalize_fmkorea_datetime(
                 minute=59,
                 second=59,
             )
-        return candidate.isoformat()
+        return canonical_utc(candidate)
 
     time_only = TIME_ONLY.fullmatch(cleaned)
     if time_only:
         hour, minute = map(int, time_only.groups()[:2])
         second = int(time_only.group(3) or 0)
-        return _time_near(
-            current=current,
-            estimate=current,
-            hour=hour,
-            minute=minute,
-            second=second,
-        ).isoformat()
+        return canonical_utc(
+            _time_near(
+                current=current,
+                estimate=current,
+                hour=hour,
+                minute=minute,
+                second=second,
+            )
+        )
 
     if cleaned in {"방금", "방금 전"}:
         estimate = current
@@ -289,20 +304,56 @@ def normalize_fmkorea_datetime(
             int, comment_datetime.groups()[:5]
         )
         second = int(comment_datetime.group(6) or 0)
-        return _validated_datetime(year, month, day, hour, minute, second).isoformat()
+        return canonical_utc(
+            _validated_datetime(year, month, day, hour, minute, second)
+        )
 
     comment_time = COMMENT_TIME.search(comment)
     if comment_time:
         hour, minute = map(int, comment_time.groups()[:2])
         second = int(comment_time.group(3) or 0)
-        return _time_near(
-            current=current,
-            estimate=estimate,
-            hour=hour,
-            minute=minute,
-            second=second,
-        ).isoformat()
-    return estimate.isoformat()
+        return canonical_utc(
+            _time_near(
+                current=current,
+                estimate=estimate,
+                hour=hour,
+                minute=minute,
+                second=second,
+            )
+        )
+    return canonical_utc(estimate)
+
+
+def fmkorea_datetime_precision(raw_value: str, *, comment_value: str = "") -> str:
+    cleaned = " ".join(str(raw_value).split())
+    comment = " ".join(str(comment_value).split())
+
+    full = FULL_DATETIME.fullmatch(cleaned)
+    if full:
+        return SECOND_PRECISION if full.group(6) is not None else MINUTE_PRECISION
+    if FULL_DATE.fullmatch(cleaned) or SHORT_DATE.fullmatch(cleaned):
+        return DATE_PRECISION
+    time_only = TIME_ONLY.fullmatch(cleaned)
+    if time_only:
+        return SECOND_PRECISION if time_only.group(3) is not None else MINUTE_PRECISION
+
+    comment_datetime = COMMENT_DATETIME.search(comment)
+    if comment_datetime:
+        return (
+            SECOND_PRECISION
+            if comment_datetime.group(6) is not None
+            else MINUTE_PRECISION
+        )
+    comment_time = COMMENT_TIME.search(comment)
+    if comment_time:
+        return SECOND_PRECISION if comment_time.group(3) is not None else MINUTE_PRECISION
+
+    if cleaned in {"방금", "방금 전"}:
+        return SECOND_PRECISION
+    relative = RELATIVE_TIME.fullmatch(cleaned)
+    if relative:
+        return SECOND_PRECISION if relative.group(2) == "초" else MINUTE_PRECISION
+    raise ValueError(f"Unsupported FMKorea datetime: {raw_value!r}")
 
 
 def validate_search_datetime_evidence(
@@ -805,17 +856,22 @@ class _FmkoreaParserBase(HTMLParser):
             )
             return None
 
+        datetime_comment = " ".join(str(item) for item in row["date_comments"])
         try:
             upvotes = self._upvote_count(row)
             comments = self._comment_count(row)
             self._validate_datetime_evidence(
                 created_at_raw,
-                " ".join(str(item) for item in row["date_comments"]),
+                datetime_comment,
             )
             created_at = normalize_fmkorea_datetime(
                 created_at_raw,
-                comment_value=" ".join(str(item) for item in row["date_comments"]),
+                comment_value=datetime_comment,
                 now=self.now,
+            )
+            created_at_precision = fmkorea_datetime_precision(
+                created_at_raw,
+                comment_value=datetime_comment,
             )
         except ValueError as exc:
             self._error(row, "invalid_candidate_metric", str(exc), external_post_id)
@@ -838,6 +894,8 @@ class _FmkoreaParserBase(HTMLParser):
             post_url=post_url,
             created_at=created_at,
             created_at_raw=created_at_raw,
+            created_at_basis=SOURCE_TIME_BASIS,
+            created_at_precision=created_at_precision,
             upvotes=upvotes,
             comments=comments,
             qualifies_by=qualifies_by,

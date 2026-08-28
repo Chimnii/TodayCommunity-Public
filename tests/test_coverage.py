@@ -20,7 +20,7 @@ from crawler.coverage import (
 
 
 SOURCE_KEY = "dcinside-singularity"
-FIXED_TIME = "2026-07-16T00:00:00+00:00"
+FIXED_TIME = "2026-07-16T00:00:00Z"
 
 
 def interval(oldest: object, newest: object) -> CoverageInterval:
@@ -286,7 +286,7 @@ class CoverageRepositoryTests(unittest.TestCase):
             ),
             (205, 199),
         )
-        self.assertEqual(loaded[0].checked_at, "2026-07-16T01:00:00+00:00")
+        self.assertEqual(loaded[0].checked_at, "2026-07-16T01:00:00Z")
         self.assertEqual(loaded[0].created_at, FIXED_TIME)
 
     def test_absence_repository_delete_removes_reappeared_id(self) -> None:

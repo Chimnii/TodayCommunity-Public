@@ -2,17 +2,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from crawler.d1 import D1Client
+from crawler.timestamps import canonicalize_utc_text, utc_now
 
 
 NUMERIC_POST_ID_PATTERN = re.compile(r"^[0-9]+$")
-
-
-def utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 def validate_numeric_post_id(value: object) -> int:
@@ -60,6 +56,19 @@ class CoverageInterval:
         object.__setattr__(self, "source_key", source_key)
         object.__setattr__(self, "oldest_post_id", oldest_post_id)
         object.__setattr__(self, "newest_post_id", newest_post_id)
+        for field_name in (
+            "oldest_created_at",
+            "newest_created_at",
+            "checked_at",
+            "created_at",
+            "updated_at",
+        ):
+            field_value = str(getattr(self, field_name) or "")
+            object.__setattr__(
+                self,
+                field_name,
+                canonicalize_utc_text(field_value) if field_value else "",
+            )
 
     @property
     def key(self) -> Tuple[str, int, int]:
@@ -139,6 +148,12 @@ class CoverageAbsence:
         object.__setattr__(
             self, "older_boundary_post_id", older_boundary_post_id
         )
+        for field_name in ("checked_at", "created_at", "updated_at"):
+            object.__setattr__(
+                self,
+                field_name,
+                canonicalize_utc_text(getattr(self, field_name)),
+            )
 
     @classmethod
     def from_row(cls, row: Dict[str, Any]) -> "CoverageAbsence":

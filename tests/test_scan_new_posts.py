@@ -70,8 +70,10 @@ def sample_post(post_id: int) -> dict:
         "post_url": f"https://example.com/{post_id}",
         "subject": "일반",
         "title": f"post {post_id}",
-        "created_at": "2026-07-16T00:00:00+09:00",
+        "created_at": "2026-07-15T15:00:00Z",
         "created_at_raw": "2026-07-16 00:00:00",
+        "created_at_basis": "source",
+        "created_at_precision": "second",
         "upvotes": 4,
         "comments": 0,
         "qualifies_by": "upvotes",
@@ -245,6 +247,8 @@ class DirectScanLayoutTests(unittest.TestCase):
                         post_url="https://example.com/2",
                         created_at="2026-07-16T00:00:00+09:00",
                         created_at_raw="2026-07-16 00:00:00",
+                        created_at_basis="source",
+                        created_at_precision="second",
                         upvotes=2,
                         comments=100_000,
                         qualifies_by="none",
@@ -256,6 +260,8 @@ class DirectScanLayoutTests(unittest.TestCase):
                         post_url="https://example.com/3",
                         created_at="2026-07-16T00:01:00+09:00",
                         created_at_raw="2026-07-16 00:01:00",
+                        created_at_basis="source",
+                        created_at_precision="second",
                         upvotes=3,
                         comments=0,
                         qualifies_by="upvotes",
@@ -300,7 +306,12 @@ class SourceBootstrapTests(unittest.TestCase):
         self.assertIn("WHERE EXISTS", sql)
         self.assertEqual(
             params,
-            [missing_source_key, checked_at, missing_source_key],
+            [
+                missing_source_key,
+                "2026-07-25T00:00:00Z",
+                "2026-07-25T00:00:00Z",
+                missing_source_key,
+            ],
         )
 
         sqlite_client = SqliteClient()
@@ -332,8 +343,8 @@ class SourceBootstrapTests(unittest.TestCase):
                 "디시인사이드 AI 활용 갤러리 인기글",
                 20,
                 1,
-                checked_at,
-                checked_at,
+                "2026-07-25T00:00:00Z",
+                "2026-07-25T00:00:00Z",
             ],
         )
         self.assertEqual(
@@ -346,13 +357,18 @@ class SourceBootstrapTests(unittest.TestCase):
                 "https://gall.dcinside.com/mgallery/board/lists/?id=ai_utilize",
                 4,
                 40,
-                checked_at,
-                checked_at,
+                "2026-07-25T00:00:00Z",
+                "2026-07-25T00:00:00Z",
             ],
         )
         self.assertEqual(
             statements[2][1],
-            ["dcinside-ai-utilize", checked_at, "dcinside-ai-utilize"],
+            [
+                "dcinside-ai-utilize",
+                "2026-07-25T00:00:00Z",
+                "2026-07-25T00:00:00Z",
+                "dcinside-ai-utilize",
+            ],
         )
 
     def test_query_only_sqlite_client_bootstraps_and_preserves_source_state(
@@ -395,9 +411,9 @@ class SourceBootstrapTests(unittest.TestCase):
             [
                 {
                     "archive_key": "dcinside-agent-stack",
-                    "archive_updated_at": second_checked_at,
+                    "archive_updated_at": "2026-07-25T01:00:00Z",
                     "source_key": "dcinside-ai-utilize",
-                    "source_updated_at": second_checked_at,
+                    "source_updated_at": "2026-07-25T01:00:00Z",
                     "backfill_anchor_post_id": "123",
                     "state_updated_at": "preserved-state-timestamp",
                 }
@@ -523,8 +539,8 @@ class BatchedPostUpsertTests(unittest.TestCase):
         self.assertEqual([len(batch) for batch in client.batches], [2, 2])
         upserts = [batch[0] for batch in client.batches]
         heartbeats = [batch[1] for batch in client.batches]
-        self.assertEqual([len(params) for _, params in upserts], [99, 15])
-        self.assertEqual([len(params) for _, params in heartbeats], [12, 6])
+        self.assertEqual([len(params) for _, params in upserts], [97, 17])
+        self.assertEqual([len(params) for _, params in heartbeats], [11, 6])
         self.assertTrue(all("INSERT INTO posts" in sql for sql, _ in upserts))
         self.assertTrue(
             all("SET fetched_at = ?" in sql for sql, _ in heartbeats)
@@ -554,6 +570,7 @@ class BatchedPostUpsertTests(unittest.TestCase):
         target = get_target("dcinside-singularity")
         first_checked_at = "2026-07-16T00:00:00+00:00"
         next_checked_at = "2026-07-16T00:15:00+00:00"
+        canonical_next_checked_at = "2026-07-16T00:15:00Z"
         upsert_source(client, target, first_checked_at)
         upsert_posts(client, target, [sample_post(1)], first_checked_at)
         client.connection.executescript(
@@ -591,8 +608,8 @@ class BatchedPostUpsertTests(unittest.TestCase):
                     "title": "post 1",
                     "upvotes": 4,
                     "comments": 0,
-                    "fetched_at": next_checked_at,
-                    "last_seen_at": next_checked_at,
+                    "fetched_at": canonical_next_checked_at,
+                    "last_seen_at": canonical_next_checked_at,
                     "status": "active",
                 }
             ],
@@ -614,6 +631,7 @@ class BatchedPostUpsertTests(unittest.TestCase):
         target = get_target("dcinside-singularity")
         first_checked_at = "2026-07-16T00:00:00+00:00"
         next_checked_at = "2026-07-16T00:15:00+00:00"
+        canonical_next_checked_at = "2026-07-16T00:15:00Z"
         upsert_source(client, target, first_checked_at)
         upsert_posts(client, target, [sample_post(1)], first_checked_at)
         client.connection.executescript(
@@ -650,7 +668,7 @@ class BatchedPostUpsertTests(unittest.TestCase):
                 {
                     "upvotes": 7,
                     "qualifies_by": "upvotes",
-                    "last_seen_at": next_checked_at,
+                    "last_seen_at": canonical_next_checked_at,
                 }
             ],
         )

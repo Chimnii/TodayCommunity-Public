@@ -172,27 +172,27 @@ def pagination(
 
 
 class DcinsideDatetimeTests(unittest.TestCase):
-    def test_full_title_datetime_is_kst_aware(self) -> None:
+    def test_full_title_datetime_is_persisted_as_utc(self) -> None:
         self.assertEqual(
             normalize_dcinside_datetime("2026-07-15 23:58:59", FIXED_NOW),
-            "2026-07-15T23:58:59+09:00",
+            "2026-07-15T14:58:59Z",
         )
 
     def test_date_only_fallback_uses_end_of_day(self) -> None:
         self.assertEqual(
             normalize_dcinside_datetime("26.07.15", FIXED_NOW),
-            "2026-07-15T23:59:59+09:00",
+            "2026-07-15T14:59:59Z",
         )
         self.assertEqual(
             normalize_dcinside_datetime("26/07/15", FIXED_NOW),
-            "2026-07-15T23:59:59+09:00",
+            "2026-07-15T14:59:59Z",
         )
 
     def test_time_only_uses_fixed_now_and_handles_midnight_rollover(self) -> None:
         midnight = datetime(2026, 7, 16, 0, 0, 0, tzinfo=KST)
         self.assertEqual(
             normalize_dcinside_datetime("23:59", midnight),
-            "2026-07-15T23:59:00+09:00",
+            "2026-07-15T14:59:00Z",
         )
 
     def test_unsupported_datetime_is_rejected(self) -> None:
@@ -299,7 +299,9 @@ class DcinsideListParserTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(parser.posts[0].created_at, "2026-07-15T23:58:59+09:00")
+        self.assertEqual(parser.posts[0].created_at, "2026-07-15T14:58:59Z")
+        self.assertEqual(parser.posts[0].created_at_basis, "source")
+        self.assertEqual(parser.posts[0].created_at_precision, "second")
         self.assertEqual(parser.posts[0].created_at_raw, "26.07.15")
 
     def test_diagnostics_exclude_notice_and_survey_rows(self) -> None:

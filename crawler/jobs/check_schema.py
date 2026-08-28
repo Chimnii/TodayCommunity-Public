@@ -39,6 +39,8 @@ REQUIRED_COLUMNS: Dict[str, Tuple[str, ...]] = {
         "title",
         "created_at",
         "created_at_raw",
+        "created_at_basis",
+        "created_at_precision",
         "upvotes",
         "comments",
         "fetched_at",
@@ -143,6 +145,16 @@ REQUIRED_COLUMN_PROPERTIES = {
             "type": "TEXT",
             "notnull": 1,
             "default": "''",
+        },
+        "created_at_basis": {
+            "type": "TEXT",
+            "notnull": 1,
+            "default": "'source'",
+        },
+        "created_at_precision": {
+            "type": "TEXT",
+            "notnull": 1,
+            "default": "'second'",
         },
     },
 }
@@ -260,6 +272,51 @@ def inspect_schema(client: D1Client) -> dict:
                     f"non-partial index on {_format_key(expected_columns)}; found "
                     f"{_format_key(actual_columns)} (partial={actual['partial']})"
                 )
+
+    post_columns = set(details.get("posts", {}).get("columns", []))
+    required_post_time_columns = {
+        "created_at",
+        "fetched_at",
+        "first_seen_at",
+        "last_seen_at",
+        "created_at_basis",
+        "created_at_precision",
+    }
+    if required_post_time_columns.issubset(post_columns):
+        time_audit = client.query(
+            """
+            SELECT
+              SUM(CASE WHEN NOT (
+                length(created_at) = 20
+                AND created_at IS strftime('%Y-%m-%dT%H:%M:%SZ', created_at)
+              ) THEN 1 ELSE 0 END) AS invalid_created_at,
+              SUM(CASE WHEN NOT (
+                length(fetched_at) = 20
+                AND fetched_at IS strftime('%Y-%m-%dT%H:%M:%SZ', fetched_at)
+              ) THEN 1 ELSE 0 END) AS invalid_fetched_at,
+              SUM(CASE WHEN NOT (
+                length(first_seen_at) = 20
+                AND first_seen_at IS strftime('%Y-%m-%dT%H:%M:%SZ', first_seen_at)
+              ) THEN 1 ELSE 0 END) AS invalid_first_seen_at,
+              SUM(CASE WHEN NOT (
+                length(last_seen_at) = 20
+                AND last_seen_at IS strftime('%Y-%m-%dT%H:%M:%SZ', last_seen_at)
+              ) THEN 1 ELSE 0 END) AS invalid_last_seen_at,
+              SUM(CASE WHEN created_at_basis NOT IN ('source', 'first_seen')
+                THEN 1 ELSE 0 END) AS invalid_basis,
+              SUM(CASE WHEN created_at_precision NOT IN ('second', 'minute', 'date')
+                THEN 1 ELSE 0 END) AS invalid_precision
+            FROM posts
+            """
+        )
+        audit = time_audit[0] if time_audit else {}
+        details["posts"]["timestamp_audit"] = audit
+        invalid_total = sum(_pragma_int(value) for value in audit.values())
+        if invalid_total:
+            errors.append(
+                "table 'posts' contains non-canonical timestamps or invalid "
+                f"timestamp metadata: {audit}"
+            )
 
     return {
         "valid": not errors,

@@ -7,7 +7,6 @@ import socket
 import sys
 import time
 from dataclasses import asdict
-from datetime import datetime, timezone
 from typing import Callable, Dict, Iterable, List, Optional
 from urllib import error, request
 
@@ -20,6 +19,12 @@ from crawler.parsers.dcinside import (
 )
 from crawler.state import source_state_initialization_statement
 from crawler.targets import TargetBoard, canonical_post_key, get_target
+from crawler.timestamps import (
+    TIME_BASES,
+    TIME_PRECISIONS,
+    canonicalize_utc_text,
+    utc_now,
+)
 
 
 DEFAULT_USER_AGENT = (
@@ -36,7 +41,7 @@ BLOCKED_HTML_HINTS = (
     ('class="g-recaptcha"', "captcha challenge"),
     ('id="captcha"', "captcha challenge"),
 )
-POST_UPSERT_BOUND_PARAMETERS = 14
+POST_UPSERT_BOUND_PARAMETERS = 16
 POST_UPSERT_SHARED_PARAMETERS = 1
 MAX_D1_BOUND_PARAMETERS = 100
 POSTS_PER_UPSERT = (
@@ -183,6 +188,7 @@ def _execute_statements(
 
 
 def upsert_source(client: D1Client, target: TargetBoard, run_started_at: str) -> None:
+    run_started_at = canonicalize_utc_text(run_started_at)
     archive = target.archive
     source_state_statement = source_state_initialization_statement(
         target.key,
@@ -256,6 +262,7 @@ def record_run(
     ensure_source: bool = True,
     run_type: str = "new_posts",
 ) -> None:
+    run_started_at = canonicalize_utc_text(run_started_at)
     if ensure_source:
         upsert_source(client, target, run_started_at)
     client.query(
@@ -309,12 +316,13 @@ def upsert_posts(
     checked_at: str,
     on_batch_persisted: Optional[Callable[[int], None]] = None,
 ) -> None:
+    checked_at = canonicalize_utc_text(checked_at)
     for offset in range(0, len(posts), POSTS_PER_UPSERT):
         chunk = posts[offset : offset + POSTS_PER_UPSERT]
         value_clause = ",\n              ".join(
             """(
                 ?, (SELECT archive_key FROM target_archive), ?, ?, ?, ?, ?,
-                ?, ?, ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
               )"""
             for _ in chunk
         )
@@ -323,6 +331,15 @@ def upsert_posts(
         for post in chunk:
             external_post_id = str(post["external_post_id"]).strip()
             canonical_key = canonical_post_key(target, external_post_id)
+            created_at = canonicalize_utc_text(post["created_at"])
+            created_at_basis = str(post["created_at_basis"])
+            created_at_precision = str(post["created_at_precision"])
+            if created_at_basis not in TIME_BASES:
+                raise ValueError(f"unsupported created_at_basis: {created_at_basis!r}")
+            if created_at_precision not in TIME_PRECISIONS:
+                raise ValueError(
+                    f"unsupported created_at_precision: {created_at_precision!r}"
+                )
             canonical_keys.append(canonical_key)
             params.extend(
                 [
@@ -332,8 +349,10 @@ def upsert_posts(
                     post["post_url"],
                     post["subject"],
                     post["title"],
-                    post["created_at"],
+                    created_at,
                     post["created_at_raw"],
+                    created_at_basis,
+                    created_at_precision,
                     post["upvotes"],
                     post["comments"],
                     checked_at,
@@ -349,8 +368,9 @@ def upsert_posts(
             WITH target_archive(archive_key) AS (VALUES (?))
             INSERT INTO posts (
               source_key, archive_key, canonical_post_key, external_post_id,
-              post_url, subject, title, created_at, created_at_raw, upvotes,
-              comments, fetched_at, first_seen_at, last_seen_at, qualifies_by
+              post_url, subject, title, created_at, created_at_raw,
+              created_at_basis, created_at_precision, upvotes, comments,
+              fetched_at, first_seen_at, last_seen_at, qualifies_by
             ) VALUES
               {value_clause}
             ON CONFLICT DO UPDATE SET
@@ -370,6 +390,8 @@ def upsert_posts(
               title = excluded.title,
               created_at = excluded.created_at,
               created_at_raw = excluded.created_at_raw,
+              created_at_basis = excluded.created_at_basis,
+              created_at_precision = excluded.created_at_precision,
               upvotes = excluded.upvotes,
               comments = excluded.comments,
               fetched_at = excluded.fetched_at,
@@ -382,6 +404,8 @@ def upsert_posts(
                OR posts.title IS NOT excluded.title
                OR posts.created_at IS NOT excluded.created_at
                OR posts.created_at_raw IS NOT excluded.created_at_raw
+               OR posts.created_at_basis IS NOT excluded.created_at_basis
+               OR posts.created_at_precision IS NOT excluded.created_at_precision
                OR posts.upvotes IS NOT excluded.upvotes
                OR posts.comments IS NOT excluded.comments
                OR posts.qualifies_by IS NOT excluded.qualifies_by
@@ -549,10 +573,6 @@ def mark_posts_deleted(
         )
         deleted_count += len(active_ids)
     return deleted_count
-
-
-def utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
 def get_page_delay_seconds() -> float:

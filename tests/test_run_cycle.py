@@ -229,6 +229,8 @@ def post(post_id: int, created_at: str, upvotes: int = 4) -> DcinsidePost:
         post_url=f"https://example.com/{post_id}",
         created_at=created_at,
         created_at_raw=created_at,
+        created_at_basis="source",
+        created_at_precision="second",
         upvotes=upvotes,
         comments=0,
         qualifies_by="upvotes" if upvotes >= 4 else "none",
@@ -2787,7 +2789,7 @@ class CrawlCycleTests(unittest.TestCase):
                 enumerate(minutes),
                 key=lambda item: (item[1], 4000 - item[0]),
                 reverse=True,
-            )[:7]
+            )[:6]
         }
         settings = CycleConfig(
             finalization_age_hours=24,
@@ -2810,7 +2812,7 @@ class CrawlCycleTests(unittest.TestCase):
         result = cycle.run()
 
         self.assertEqual(result["status"], "failed")
-        self.assertEqual(result["phases"][0]["hot_persisted_posts"], 7)
+        self.assertEqual(result["phases"][0]["hot_persisted_posts"], 6)
         persisted_ids = {
             item["external_post_id"]
             for item in client.query("SELECT external_post_id FROM posts")
@@ -2859,7 +2861,7 @@ class CrawlCycleTests(unittest.TestCase):
         }
         self.assertEqual(
             persisted_ids,
-            {str(post_id) for post_id in range(5000, 4993, -1)},
+            {str(post_id) for post_id in range(5000, 4994, -1)},
         )
 
     def test_dedicated_hot_post_write_failure_is_not_a_green_partial(self) -> None:
@@ -3042,7 +3044,7 @@ class CrawlCycleTests(unittest.TestCase):
 
         self.assertEqual(
             first.source_state.blocked_until,
-            "2026-07-16T18:20:00+00:00",
+            "2026-07-16T18:20:00Z",
         )
 
         # Simulate a source_state cooldown write that was unavailable while

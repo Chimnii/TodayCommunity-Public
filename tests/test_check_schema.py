@@ -45,6 +45,18 @@ ZEUS_ARCHIVE_MIGRATION_PATH = (
     / "010_add_zeus_pride_archive.sql"
 )
 ZEUS_ARCHIVE_MIGRATION = ZEUS_ARCHIVE_MIGRATION_PATH.read_text(encoding="utf-8")
+UTC_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "cloudflare"
+    / "migrations"
+    / "011_canonical_utc_post_times.sql"
+)
+UTC_MIGRATION = UTC_MIGRATION_PATH.read_text(encoding="utf-8")
+POST_TIME_METADATA_DEFINITION = """  created_at_basis TEXT NOT NULL DEFAULT 'source'
+    CHECK (created_at_basis IN ('source', 'first_seen')),
+  created_at_precision TEXT NOT NULL DEFAULT 'second'
+    CHECK (created_at_precision IN ('second', 'minute', 'date')),
+"""
 CRAWL_RUN_INDEX_DEFINITIONS = """CREATE INDEX IF NOT EXISTS idx_crawl_runs_source_status_id
   ON crawl_runs (source_key, status, id DESC);
 
@@ -205,6 +217,293 @@ class SchemaPreflightTests(unittest.TestCase):
         self.assertEqual(canonical_column["type"], "TEXT")
         self.assertEqual(canonical_column["notnull"], 0)
         self.assertIsNone(canonical_column["dflt_value"])
+
+    def test_utc_migration_normalizes_existing_rows_without_losing_source_time(self) -> None:
+        self.assertIn(POST_TIME_METADATA_DEFINITION, SCHEMA)
+        client = SqliteClient(
+            SCHEMA.replace(POST_TIME_METADATA_DEFINITION, "", 1)
+        )
+        client.query(
+            """
+            UPDATE archives
+            SET created_at = '2026-08-28 12:00:00',
+                updated_at = '2026-08-29T09:00:00+09:00'
+            WHERE archive_key = 'dcinside-zeus-pride'
+            """
+        )
+        for source_key, archive_key, site_name in (
+            ("dcinside-zeus-pride", "dcinside-zeus-pride", "dcinside"),
+            ("fmkorea-migration-test", "fmkorea-munich", "fmkorea"),
+        ):
+            client.query(
+                """
+                INSERT INTO sources (
+                  source_key, archive_key, site_name, board_name, board_url,
+                  created_at, updated_at
+                ) VALUES (?, ?, ?, 'board', 'https://example.com',
+                          '2026-08-28T12:00:00+00:00',
+                          '2026-08-29T09:00:00+09:00')
+                """,
+                [source_key, archive_key, site_name],
+            )
+        client.query(
+            """
+            INSERT INTO game_news_candidates (
+              canonical_url, url_sha256, source_key, title, publisher, topic,
+              summary, published_at, published_at_raw, discovery_reason,
+              first_seen_at, last_seen_at, first_run_id, last_run_id
+            ) VALUES (
+              'https://www.inven.co.kr/article/date-only', ?,
+              'game-news-inven', 'date article', '인벤', 'industry', 'summary',
+              '2026-08-29T00:00:00Z', '2026-08-29', 'reason',
+              '2026-08-29T00:00:00Z', '2026-08-29T00:00:00Z', 'run-1', 'run-1'
+            )
+            """,
+            ["a" * 64],
+        )
+        posts = (
+            (
+                "dcinside-zeus-pride", "dcinside-zeus-pride", "dcinside:z:1",
+                "1", "26.08.28", "2026-08-28T23:59:59+09:00",
+                "2026-08-29T09:00:00+09:00",
+            ),
+            (
+                "fmkorea-migration-test", "fmkorea-munich", "fmkorea:2",
+                "2", "1분 전", "2026-08-29T09:31:37+09:00",
+                "2026-08-29T09:32:00+09:00",
+            ),
+            (
+                "game-news-inven", "game-news", f"game-news:{'a' * 64}",
+                "3", "2026-08-29", "2026-08-29T00:00:00Z",
+                "2026-08-29T00:00:00Z",
+            ),
+            (
+                "game-news-inven", "game-news", f"game-news:{'b' * 64}",
+                "4", "발행 시각 미상", "2026-08-29T01:02:03+00:00",
+                "2026-08-29T01:02:03+00:00",
+            ),
+        )
+        client.connection.executemany(
+            """
+            INSERT INTO posts (
+              source_key, archive_key, canonical_post_key, external_post_id,
+              post_url, title, created_at_raw, created_at, fetched_at,
+              first_seen_at, last_seen_at, qualifies_by
+            ) VALUES (?, ?, ?, ?, 'https://example.com/post', 'post', ?, ?, ?, ?, ?,
+                      'migration-test')
+            """,
+            [
+                (*row[:5], row[5], row[6], row[6], row[6])
+                for row in posts
+            ],
+        )
+        client.query(
+            """
+            INSERT INTO crawl_runs (
+              source_key, run_type, status, started_at, finished_at
+            ) VALUES (
+              'dcinside-zeus-pride', 'incremental', 'success',
+              '2026-08-29T09:00:00+09:00', '2026-08-29T00:01:00+00:00'
+            )
+            """
+        )
+        client.query(
+            """
+            INSERT INTO source_state (
+              source_key, backfill_anchor_created_at, blocked_until,
+              last_blocked_at, created_at, updated_at
+            ) VALUES (
+              'dcinside-zeus-pride', '2026-08-28T23:59:59+09:00', NULL,
+              '2026-08-29T08:00:00+09:00', '2026-08-28 12:00:00',
+              '2026-08-29T09:00:00+09:00'
+            )
+            """
+        )
+        client.query(
+            """
+            INSERT INTO coverage_intervals (
+              source_key, oldest_post_id, newest_post_id, oldest_created_at,
+              newest_created_at, checked_at, created_at, updated_at
+            ) VALUES (
+              'dcinside-zeus-pride', 10, 20, '',
+              '2026-08-29T09:00:00+09:00', '2026-08-29T00:01:00+00:00',
+              '2026-08-29 00:00:00', '2026-08-29T09:02:00+09:00'
+            )
+            """
+        )
+        client.query(
+            """
+            INSERT INTO coverage_absences (
+              source_key, post_id, newer_page, older_page,
+              newer_boundary_post_id, older_boundary_post_id, checked_at,
+              created_at, updated_at
+            ) VALUES (
+              'dcinside-zeus-pride', 15, 1, 2, 20, 10,
+              '2026-08-29T09:00:00+09:00', '2026-08-29 00:00:00',
+              '2026-08-29T09:02:00+09:00'
+            )
+            """
+        )
+        before_count = client.query("SELECT COUNT(*) AS count FROM posts")[0]["count"]
+
+        client.connection.executescript(UTC_MIGRATION)
+
+        self.assertEqual(
+            client.query("SELECT COUNT(*) AS count FROM posts")[0]["count"],
+            before_count,
+        )
+        self.assertEqual(
+            client.query(
+                """
+                SELECT external_post_id, created_at, created_at_raw,
+                       created_at_basis, created_at_precision
+                FROM posts
+                ORDER BY id
+                """
+            ),
+            [
+                {
+                    "external_post_id": "1",
+                    "created_at": "2026-08-28T14:59:59Z",
+                    "created_at_raw": "26.08.28",
+                    "created_at_basis": "source",
+                    "created_at_precision": "date",
+                },
+                {
+                    "external_post_id": "2",
+                    "created_at": "2026-08-29T00:31:37Z",
+                    "created_at_raw": "1분 전",
+                    "created_at_basis": "source",
+                    "created_at_precision": "minute",
+                },
+                {
+                    "external_post_id": "3",
+                    "created_at": "2026-08-29T00:00:00Z",
+                    "created_at_raw": "2026-08-29",
+                    "created_at_basis": "source",
+                    "created_at_precision": "date",
+                },
+                {
+                    "external_post_id": "4",
+                    "created_at": "2026-08-29T01:02:03Z",
+                    "created_at_raw": "발행 시각 미상",
+                    "created_at_basis": "first_seen",
+                    "created_at_precision": "second",
+                },
+            ],
+        )
+        self.assertEqual(
+            client.query(
+                "SELECT external_post_id FROM posts ORDER BY created_at DESC"
+            ),
+            [
+                {"external_post_id": "4"},
+                {"external_post_id": "2"},
+                {"external_post_id": "3"},
+                {"external_post_id": "1"},
+            ],
+        )
+        self.assertEqual(
+            client.query(
+                """
+                SELECT started_at, finished_at FROM crawl_runs
+                WHERE source_key = 'dcinside-zeus-pride'
+                """
+            ),
+            [
+                {
+                    "started_at": "2026-08-29T00:00:00Z",
+                    "finished_at": "2026-08-29T00:01:00Z",
+                }
+            ],
+        )
+        self.assertEqual(
+            client.query(
+                """
+                SELECT backfill_anchor_created_at, blocked_until, last_blocked_at,
+                       created_at, updated_at
+                FROM source_state WHERE source_key = 'dcinside-zeus-pride'
+                """
+            ),
+            [
+                {
+                    "backfill_anchor_created_at": "2026-08-28T14:59:59Z",
+                    "blocked_until": None,
+                    "last_blocked_at": "2026-08-28T23:00:00Z",
+                    "created_at": "2026-08-28T12:00:00Z",
+                    "updated_at": "2026-08-29T00:00:00Z",
+                }
+            ],
+        )
+        self.assertEqual(
+            client.query(
+                """
+                SELECT oldest_created_at, newest_created_at, checked_at,
+                       created_at, updated_at
+                FROM coverage_intervals
+                WHERE source_key = 'dcinside-zeus-pride'
+                """
+            ),
+            [
+                {
+                    "oldest_created_at": "",
+                    "newest_created_at": "2026-08-29T00:00:00Z",
+                    "checked_at": "2026-08-29T00:01:00Z",
+                    "created_at": "2026-08-29T00:00:00Z",
+                    "updated_at": "2026-08-29T00:02:00Z",
+                }
+            ],
+        )
+        report = validate_schema(client)
+        self.assertTrue(report["valid"])
+        self.assertEqual(
+            {
+                "invalid_created_at": 0,
+                "invalid_fetched_at": 0,
+                "invalid_first_seen_at": 0,
+                "invalid_last_seen_at": 0,
+                "invalid_basis": 0,
+                "invalid_precision": 0,
+            },
+            report["tables"]["posts"]["timestamp_audit"],
+        )
+
+    def test_noncanonical_post_timestamp_fails_preflight(self) -> None:
+        client = SqliteClient()
+        client.query(
+            """
+            INSERT INTO sources (
+              source_key, archive_key, site_name, board_name, board_url
+            ) VALUES (
+              'timestamp-test', 'dcinside-singularity', 'test', 'test',
+              'https://example.com'
+            )
+            """
+        )
+        client.query(
+            """
+            INSERT INTO posts (
+              source_key, archive_key, external_post_id, post_url, title,
+              created_at, created_at_raw, fetched_at, first_seen_at,
+              last_seen_at, qualifies_by
+            ) VALUES (
+              'timestamp-test', 'dcinside-singularity', '1',
+              'https://example.com/1', 'post', 'xxxxxxxxxxxxxxxxxxxx',
+              'raw', '2026-08-29T00:00:00Z', '2026-08-29T00:00:00Z',
+              '2026-08-29T00:00:00Z', 'test'
+            )
+            """
+        )
+
+        with self.assertRaises(SchemaValidationError) as caught:
+            validate_schema(client)
+
+        self.assertTrue(
+            any(
+                "contains non-canonical timestamps" in error
+                for error in caught.exception.report["errors"]
+            )
+        )
 
     def test_multi_archive_migration_backfills_existing_singularity_rows(self) -> None:
         client = SqliteClient(

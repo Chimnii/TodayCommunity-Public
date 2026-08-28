@@ -4,8 +4,8 @@ CREATE TABLE IF NOT EXISTS archives (
   description TEXT NOT NULL DEFAULT '',
   display_order INTEGER NOT NULL DEFAULT 0,
   is_public INTEGER NOT NULL DEFAULT 1 CHECK (is_public IN (0, 1)),
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
   content_kind TEXT NOT NULL DEFAULT 'community'
     CHECK (content_kind IN ('community', 'article'))
 );
@@ -67,8 +67,8 @@ CREATE TABLE IF NOT EXISTS sources (
   board_url TEXT NOT NULL,
   min_upvotes INTEGER NOT NULL DEFAULT 0,
   min_comments INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
   FOREIGN KEY (archive_key) REFERENCES archives(archive_key)
 );
 
@@ -83,6 +83,10 @@ CREATE TABLE IF NOT EXISTS posts (
   title TEXT NOT NULL,
   created_at TEXT NOT NULL,
   created_at_raw TEXT NOT NULL,
+  created_at_basis TEXT NOT NULL DEFAULT 'source'
+    CHECK (created_at_basis IN ('source', 'first_seen')),
+  created_at_precision TEXT NOT NULL DEFAULT 'second'
+    CHECK (created_at_precision IN ('second', 'minute', 'date')),
   upvotes INTEGER NOT NULL DEFAULT 0,
   comments INTEGER NOT NULL DEFAULT 0,
   fetched_at TEXT NOT NULL,
@@ -458,8 +462,8 @@ CREATE TABLE IF NOT EXISTS source_state (
   last_blocked_at TEXT,
   last_block_reason TEXT,
   state_metadata TEXT NOT NULL DEFAULT '{}',
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
   FOREIGN KEY (source_key) REFERENCES sources(source_key)
 );
 
@@ -513,11 +517,13 @@ CREATE INDEX IF NOT EXISTS idx_coverage_absences_source_checked
 
 INSERT OR IGNORE INTO source_state (
   source_key,
+  created_at,
   updated_at
 )
 SELECT
   source_key,
-  CURRENT_TIMESTAMP
+  strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+  strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
 FROM sources;
 
 -- Game-news sources do not use the community crawler's source_state table.

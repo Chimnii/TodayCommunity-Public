@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from crawler.d1 import D1Client
+from crawler.timestamps import canonicalize_utc_text, utc_now
 
 
 @dataclass
@@ -25,29 +25,26 @@ class SourceState:
     updated_at: str = ""
 
 
-def utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-
-
 def source_state_initialization_statement(
     source_key: str,
     updated_at: Optional[str] = None,
 ) -> Tuple[str, List[object]]:
-    timestamp = updated_at or utc_now()
+    timestamp = canonicalize_utc_text(updated_at) if updated_at else utc_now()
     return (
         """
         INSERT OR IGNORE INTO source_state (
           source_key,
+          created_at,
           updated_at
         )
-        SELECT ?, ?
+        SELECT ?, ?, ?
         WHERE EXISTS (
           SELECT 1
           FROM sources
           WHERE source_key = ?
         )
         """,
-        [source_key, timestamp, source_key],
+        [source_key, timestamp, timestamp, source_key],
     )
 
 
@@ -140,11 +137,23 @@ def normalize_state_payload(state: SourceState) -> Dict[str, Any]:
     payload["recovery_mode"] = 1 if state.recovery_mode else 0
     payload["recovery_depth_hint"] = max(1, int(state.recovery_depth_hint or 1))
     payload["backfill_anchor_post_id"] = state.backfill_anchor_post_id or ""
-    payload["backfill_anchor_created_at"] = state.backfill_anchor_created_at or ""
-    payload["blocked_until"] = state.blocked_until or ""
-    payload["last_blocked_at"] = state.last_blocked_at or ""
+    payload["backfill_anchor_created_at"] = (
+        canonicalize_utc_text(state.backfill_anchor_created_at)
+        if state.backfill_anchor_created_at
+        else ""
+    )
+    payload["blocked_until"] = (
+        canonicalize_utc_text(state.blocked_until) if state.blocked_until else ""
+    )
+    payload["last_blocked_at"] = (
+        canonicalize_utc_text(state.last_blocked_at)
+        if state.last_blocked_at
+        else ""
+    )
     payload["last_block_reason"] = state.last_block_reason or ""
-    payload["created_at"] = state.created_at or current
+    payload["created_at"] = (
+        canonicalize_utc_text(state.created_at) if state.created_at else current
+    )
     payload["updated_at"] = current
     return payload
 

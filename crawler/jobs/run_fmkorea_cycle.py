@@ -35,6 +35,7 @@ from crawler.runtime import (
 )
 from crawler.state import SourceState, get_source_state, save_source_state
 from crawler.targets import TargetBoard, get_target
+from crawler.timestamps import canonical_utc
 
 
 CYCLE_MODE_HOT = "hot"
@@ -153,7 +154,7 @@ class FmkoreaCycle:
         self.cycle_started_at = ensure_aware(now or datetime.now(timezone.utc)).replace(
             microsecond=0
         )
-        self.run_started_at = self.cycle_started_at.astimezone(timezone.utc).isoformat()
+        self.run_started_at = canonical_utc(self.cycle_started_at)
         self.transient_fetch_attempts = transient_fetch_attempts
         total_seconds = (
             target.hot_max_seconds
@@ -193,7 +194,7 @@ class FmkoreaCycle:
                 summary=None,
                 error=(
                     "source cooldown remains active until "
-                    f"{blocked_until.astimezone(timezone.utc).isoformat()}"
+                    f"{canonical_utc(blocked_until)}"
                 ),
             )
 
@@ -489,7 +490,7 @@ class FmkoreaCycle:
         summary.scanned_pages += 1
         summary.scanned_posts += len(snapshot.posts)
         summary.pages.append(snapshot.page)
-        oldest = snapshot.oldest_created_at.astimezone(timezone.utc).isoformat()
+        oldest = canonical_utc(snapshot.oldest_created_at)
         if not summary.oldest_seen_at or parse_datetime(oldest) < parse_datetime(
             summary.oldest_seen_at
         ):
@@ -521,11 +522,11 @@ class FmkoreaCycle:
 
     def _record_block(self, summary: FmkoreaPhaseSummary, reason: str) -> None:
         blocked_at = self.cycle_started_at
-        self.source_state.last_blocked_at = blocked_at.astimezone(timezone.utc).isoformat()
+        self.source_state.last_blocked_at = canonical_utc(blocked_at)
         self.source_state.last_block_reason = reason[:500]
-        self.source_state.blocked_until = (
+        self.source_state.blocked_until = canonical_utc(
             blocked_at + timedelta(hours=self.target.block_cooldown_hours)
-        ).astimezone(timezone.utc).isoformat()
+        )
         if self.client:
             try:
                 save_source_state(self.client, self.source_state)

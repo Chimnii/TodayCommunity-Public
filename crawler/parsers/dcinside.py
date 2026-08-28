@@ -7,6 +7,14 @@ from html.parser import HTMLParser
 from typing import Dict, Iterable, List, Optional
 from urllib.parse import parse_qs, urljoin, urlparse
 
+from crawler.timestamps import (
+    DATE_PRECISION,
+    MINUTE_PRECISION,
+    SECOND_PRECISION,
+    SOURCE_TIME_BASIS,
+    canonical_utc,
+)
+
 
 KST = timezone(timedelta(hours=9))
 POST_PATH_SEGMENT = "/mgallery/board/view/"
@@ -52,6 +60,8 @@ class DcinsidePost:
     post_url: str
     created_at: str
     created_at_raw: str
+    created_at_basis: str
+    created_at_precision: str
     upvotes: int
     comments: int
     qualifies_by: str
@@ -1002,8 +1012,10 @@ class DcinsideListParser(HTMLParser):
             )
         comments = int(comment_observations[0]) if comment_observations else 0
 
+        datetime_evidence = created_at_title or created_at_raw
         try:
-            created_at = normalize_dcinside_datetime(created_at_title or created_at_raw, self.now)
+            created_at = normalize_dcinside_datetime(datetime_evidence, self.now)
+            created_at_precision = dcinside_datetime_precision(datetime_evidence)
         except (TypeError, ValueError) as exc:
             return None, DcinsideParseError(
                 external_post_id=external_post_id,
@@ -1019,6 +1031,8 @@ class DcinsideListParser(HTMLParser):
                 post_url=post_url,
                 created_at=created_at,
                 created_at_raw=created_at_raw or created_at_title,
+                created_at_basis=SOURCE_TIME_BASIS,
+                created_at_precision=created_at_precision,
                 upvotes=upvotes,
                 comments=comments,
                 qualifies_by=build_qualifies_by(
@@ -1128,7 +1142,9 @@ def normalize_dcinside_datetime(raw_value: str, now: Optional[datetime] = None) 
     full_datetime_match = FULL_DATETIME_PATTERN.fullmatch(raw_value)
     if full_datetime_match:
         year, month, day, hour, minute, second = map(int, full_datetime_match.groups())
-        return datetime(year, month, day, hour, minute, second, tzinfo=KST).isoformat()
+        return canonical_utc(
+            datetime(year, month, day, hour, minute, second, tzinfo=KST)
+        )
 
     time_match = TIME_PATTERN.fullmatch(raw_value)
     if time_match:
@@ -1141,18 +1157,33 @@ def normalize_dcinside_datetime(raw_value: str, now: Optional[datetime] = None) 
         )
         if candidate > current + timedelta(minutes=1):
             candidate -= timedelta(days=1)
-        return candidate.isoformat()
+        return canonical_utc(candidate)
 
     short_date_match = SHORT_DATE_PATTERN.fullmatch(raw_value)
     if short_date_match:
         year, month, day = map(int, short_date_match.groups())
-        return datetime(2000 + year, month, day, 23, 59, 59, tzinfo=KST).isoformat()
+        return canonical_utc(
+            datetime(2000 + year, month, day, 23, 59, 59, tzinfo=KST)
+        )
 
     full_date_match = FULL_DATE_PATTERN.fullmatch(raw_value)
     if full_date_match:
         year, month, day = map(int, full_date_match.groups())
-        return datetime(year, month, day, 23, 59, 59, tzinfo=KST).isoformat()
+        return canonical_utc(
+            datetime(year, month, day, 23, 59, 59, tzinfo=KST)
+        )
 
+    raise ValueError(f"unsupported DCInside datetime value {raw_value!r}")
+
+
+def dcinside_datetime_precision(raw_value: str) -> str:
+    normalized = str(raw_value).strip()
+    if FULL_DATETIME_PATTERN.fullmatch(normalized):
+        return SECOND_PRECISION
+    if TIME_PATTERN.fullmatch(normalized):
+        return MINUTE_PRECISION
+    if SHORT_DATE_PATTERN.fullmatch(normalized) or FULL_DATE_PATTERN.fullmatch(normalized):
+        return DATE_PRECISION
     raise ValueError(f"unsupported DCInside datetime value {raw_value!r}")
 
 
