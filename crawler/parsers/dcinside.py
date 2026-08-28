@@ -41,8 +41,9 @@ SUPPORTED_COLLECTION_POLICIES = frozenset(
 )
 SUBJECT_CELL_REQUIRED = "required"
 SUBJECT_CELL_ABSENT = "absent"
+SUBJECT_CELL_OPTIONAL = "optional"
 SUPPORTED_SUBJECT_CELL_MODES = frozenset(
-    {SUBJECT_CELL_REQUIRED, SUBJECT_CELL_ABSENT}
+    {SUBJECT_CELL_REQUIRED, SUBJECT_CELL_ABSENT, SUBJECT_CELL_OPTIONAL}
 )
 PAGING_CONTAINER_CLASS = "bottom_paging_box"
 PAGE_NEXT_CLASS = "page_next"
@@ -601,20 +602,39 @@ class DcinsideListParser(HTMLParser):
         row_classes = set(row["row_class_tokens"])
         subject_label = " ".join(row["subject_text_parts"]).strip().casefold()
         normal_view_link_seen = bool(row["normal_view_link_seen"])
-        if self.subject_cell_mode == SUBJECT_CELL_ABSENT:
-            recognized_icon_count = int(row["survey_icon_count"]) + int(
-                row["advertisement_icon_count"]
+        if self.subject_cell_mode in {SUBJECT_CELL_ABSENT, SUBJECT_CELL_OPTIONAL}:
+            survey_icon_count = int(row["survey_icon_count"])
+            advertisement_icon_count = int(row["advertisement_icon_count"])
+            recognized_icon_count = survey_icon_count + advertisement_icon_count
+            subject_cell_count = int(row["subject_cell_count"])
+            legacy_subjectless_auxiliary = (
+                subject_cell_count == 0
+                and subject_label == ""
+                and recognized_icon_count == 1
+            )
+            labeled_auxiliary = (
+                subject_cell_count == 1
+                and (
+                    (
+                        subject_label in SURVEY_SUBJECT_LABELS
+                        and survey_icon_count == 1
+                        and advertisement_icon_count == 0
+                    )
+                    or (
+                        subject_label == "ad"
+                        and advertisement_icon_count == 1
+                        and survey_icon_count == 0
+                    )
+                )
             )
             explicitly_auxiliary = (
                 str(row["external_post_id"]) == ""
                 and data_type == ""
                 and row_classes == {"ub-content"}
-                and int(row["subject_cell_count"]) == 0
-                and subject_label == ""
                 and int(row["title_link_count"]) == 1
                 and not normal_view_link_seen
                 and int(row["title_icon_count"]) == 1
-                and recognized_icon_count == 1
+                and (legacy_subjectless_auxiliary or labeled_auxiliary)
             )
             if explicitly_auxiliary:
                 return
@@ -906,11 +926,23 @@ class DcinsideListParser(HTMLParser):
                     "multiple_subject_cells",
                     "Candidate row must have exactly one subject cell.",
                 )
-        elif subject_cell_count != 0:
+        elif (
+            self.subject_cell_mode == SUBJECT_CELL_ABSENT
+            and subject_cell_count != 0
+        ):
             return None, self._row_error(
                 row,
                 "unexpected_subject_cell",
                 "Candidate row must not have a subject cell for this board layout.",
+            )
+        elif (
+            self.subject_cell_mode == SUBJECT_CELL_OPTIONAL
+            and subject_cell_count > 1
+        ):
+            return None, self._row_error(
+                row,
+                "multiple_subject_cells",
+                "Candidate row may have at most one subject cell.",
             )
 
         subject_inner_count = int(row["subject_inner_count"])

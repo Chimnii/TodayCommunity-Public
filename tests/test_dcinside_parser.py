@@ -151,6 +151,34 @@ SUBJECTLESS_AD_ROW = """
 """
 
 
+SUBJECTLESS_LABELED_SURVEY_ROW = """
+<tr class="ub-content ">
+  <td class="gall_num">-</td>
+  <td class="gall_subject"><b>설문</b></td>
+  <td class="gall_tit ub-word">
+    <a class="font_blue3a7" href="javascript:;">
+      <em class="icon_img icon_n_survey"></em><b>survey title</b>
+    </a>
+  </td>
+  <td class="gall_date">26/08/24</td>
+</tr>
+"""
+
+
+SUBJECTLESS_LABELED_AD_ROW = """
+<tr class="ub-content ">
+  <td class="gall_num">-</td>
+  <td class="gall_subject"><b>AD</b></td>
+  <td class="gall_tit ub-word">
+    <a href="https://ad.example.test/campaign">
+      <em class="icon_img icon_ad"></em><b>advertisement</b>
+    </a>
+  </td>
+  <td class="gall_date">26/08/27</td>
+</tr>
+"""
+
+
 def pagination(
     *,
     current: int = 1,
@@ -509,7 +537,7 @@ class DcinsideListParserTests(unittest.TestCase):
 
     def test_unknown_subject_cell_mode_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
-            DcinsideListParser(BASE_URL, subject_cell_mode="optional")
+            DcinsideListParser(BASE_URL, subject_cell_mode="sometimes")
 
     def test_collection_thresholds_must_be_positive(self) -> None:
         with self.assertRaises(ValueError):
@@ -629,6 +657,47 @@ class DcinsideRowIntegrityTests(unittest.TestCase):
         )
         self.assertFalse(unexpected.diagnostics.is_collection_safe)
         self.assertFalse(unexpected.diagnostics.is_coverage_safe)
+
+    def test_optional_subject_layout_accepts_present_or_absent_subject_cells(self) -> None:
+        parser = DcinsideListParser(
+            BASE_URL,
+            now=FIXED_NOW,
+            subject_cell_mode="optional",
+        )
+        parser.feed(
+            regular_row("105", subject="일반")
+            + regular_row("104", subject_markup="")
+        )
+
+        self.assertEqual(
+            [(post.external_post_id, post.subject) for post in parser.posts],
+            [("105", "일반"), ("104", "")],
+        )
+        self.assertEqual(parser.diagnostics.errors, [])
+        self.assertTrue(parser.diagnostics.is_collection_safe)
+        self.assertTrue(parser.diagnostics.is_coverage_safe)
+
+        duplicate = DcinsideListParser(
+            BASE_URL,
+            now=FIXED_NOW,
+            subject_cell_mode="optional",
+        )
+        duplicate.feed(
+            regular_row(
+                "103",
+                subject_markup=(
+                    '<td class="gall_subject">일반</td>'
+                    '<td class="gall_subject">추가</td>'
+                ),
+            )
+        )
+
+        self.assertEqual(duplicate.posts, [])
+        self.assertEqual(
+            [error.code for error in duplicate.diagnostics.errors],
+            ["multiple_subject_cells"],
+        )
+        self.assertFalse(duplicate.diagnostics.is_collection_safe)
 
     def test_explicit_required_layout_rejects_subjectless_rows(self) -> None:
         parser = DcinsideListParser(
@@ -912,6 +981,75 @@ class DcinsideRowIntegrityTests(unittest.TestCase):
         self.assertTrue(parser.navigation.is_valid)
         self.assertTrue(parser.diagnostics.is_collection_safe)
         self.assertTrue(parser.diagnostics.is_coverage_safe)
+
+    def test_subjectless_layout_recognizes_labeled_survey_and_ad_rows(self) -> None:
+        zeus_url = (
+            "https://gall.dcinside.com/mgallery/board/lists/"
+            "?id=zeusthegodofpride"
+        )
+        numeric_row = regular_row("105", subject_markup="").replace(
+            "thesingularity", "zeusthegodofpride"
+        )
+        parser = DcinsideListParser(
+            zeus_url,
+            now=FIXED_NOW,
+            requested_page=1,
+            expected_board_id="zeusthegodofpride",
+            min_upvotes=3,
+            min_comments=0,
+            policy="upvotes-only",
+            subject_cell_mode="absent",
+        )
+        parser.feed(
+            SUBJECTLESS_LABELED_SURVEY_ROW
+            + SUBJECTLESS_LABELED_AD_ROW
+            + SUBJECTLESS_LABELED_AD_ROW.replace("campaign", "campaign-two")
+            + numeric_row
+            + pagination(board_id="zeusthegodofpride")
+        )
+        parser.close()
+
+        self.assertEqual(parser.diagnostics.non_numeric_rows, 3)
+        self.assertEqual(parser.diagnostics.errors, [])
+        self.assertEqual(
+            [post.external_post_id for post in parser.posts],
+            ["105"],
+        )
+        self.assertTrue(parser.navigation.is_valid)
+        self.assertTrue(parser.diagnostics.is_collection_safe)
+        self.assertTrue(parser.diagnostics.is_coverage_safe)
+
+    def test_subjectless_labeled_auxiliary_near_matches_block_coverage(self) -> None:
+        near_matches = (
+            SUBJECTLESS_LABELED_SURVEY_ROW.replace(
+                "icon_n_survey", "icon_ad"
+            ),
+            SUBJECTLESS_LABELED_SURVEY_ROW.replace("설문", "AD"),
+            SUBJECTLESS_LABELED_AD_ROW.replace("AD", "광고"),
+            SUBJECTLESS_LABELED_AD_ROW.replace(
+                '<em class="icon_img icon_ad"></em>', ""
+            ),
+            SUBJECTLESS_LABELED_AD_ROW.replace(
+                '<td class="gall_subject"><b>AD</b></td>',
+                '<td class="gall_subject"><b>AD</b></td>' * 2,
+            ),
+        )
+        numeric_row = regular_row("104", subject_markup="")
+        for near_match in near_matches:
+            with self.subTest(near_match=near_match):
+                parser = DcinsideListParser(
+                    BASE_URL,
+                    now=FIXED_NOW,
+                    subject_cell_mode="absent",
+                )
+                parser.feed(near_match + numeric_row)
+
+                self.assertIn(
+                    "non_numeric_post_id",
+                    [error.code for error in parser.diagnostics.errors],
+                )
+                self.assertTrue(parser.diagnostics.is_collection_safe)
+                self.assertFalse(parser.diagnostics.is_coverage_safe)
 
     def test_subjectless_auxiliary_icon_near_matches_block_coverage(self) -> None:
         near_matches = (

@@ -283,7 +283,7 @@ class DirectScanLayoutTests(unittest.TestCase):
 
         self.assertEqual(len(constructor_args), 1)
         self.assertEqual(constructor_args[0]["policy"], "upvotes-only")
-        self.assertEqual(constructor_args[0]["subject_cell_mode"], "absent")
+        self.assertEqual(constructor_args[0]["subject_cell_mode"], "optional")
         self.assertEqual(
             [post["external_post_id"] for post in result["posts"]],
             ["3"],

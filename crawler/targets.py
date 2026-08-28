@@ -142,7 +142,7 @@ TARGETS = {
         hot_lookback_minutes=180.0,
         hot_max_seconds=180.0,
         backfill_max_seconds=600.0,
-        subject_cell_mode="absent",
+        subject_cell_mode="optional",
     ),
     "fmkorea-best-munich-search": TargetBoard(
         key="fmkorea-best-munich-search",

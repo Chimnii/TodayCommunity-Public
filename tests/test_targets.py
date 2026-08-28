@@ -47,7 +47,7 @@ class TargetRegistryTests(unittest.TestCase):
         self.assertEqual((agent_stack.min_upvotes, agent_stack.min_comments), (4, 40))
         self.assertEqual((zeus.min_upvotes, zeus.min_comments), (3, 0))
         self.assertEqual(zeus.policy, "upvotes-only")
-        self.assertEqual(zeus.subject_cell_mode, "absent")
+        self.assertEqual(zeus.subject_cell_mode, "optional")
         self.assertEqual(agent_stack.subject_cell_mode, "required")
         self.assertEqual((bayern.min_upvotes, bayern.min_comments), (13, 130))
         for target_key in (
