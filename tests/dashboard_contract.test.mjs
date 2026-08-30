@@ -291,12 +291,17 @@ test("ships reversible hiding and a versioned preference document editor", () =>
   assert.doesNotMatch(app, /innerHTML\s*=/);
 });
 
-test("switches archive targets with clean filters and history-aware URLs", () => {
+test("switches archive targets and pages with history-aware URLs", () => {
   assert.match(app, /target:\s*DEFAULT_TARGET/);
   assert.match(app, /target: state\.target/);
   assert.match(app, /params\.get\("target"\)/);
   assert.match(app, /Object\.assign\(state, DEFAULT_STATE\)[\s\S]*state\.target = normalizedTarget/);
   assert.match(app, /syncStateToUrl\(\{ replace: false \}\)/);
+  assert.match(
+    app,
+    /function goToPage\(page\) \{[\s\S]*?syncStateToUrl\(\{ replace: false \}\);[\s\S]*?loadArchive\(\);/
+  );
+  assert.match(app, /function syncStateToUrl\(\{ replace = true \} = \{\}\)/);
   assert.match(app, /window\.history\[method\]\(null, "", url\)/);
   assert.match(app, /window\.addEventListener\("popstate"/);
   assert.match(app, /state\.page = 1/);

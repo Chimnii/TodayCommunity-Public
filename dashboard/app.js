@@ -2195,7 +2195,7 @@ function parsePageJump(value, totalPages) {
 function goToPage(page) {
   state.page = Math.max(1, page);
   state.focusPageContentAfterLoad = true;
-  syncStateToUrl();
+  syncStateToUrl({ replace: false });
   loadArchive();
   elements.archiveTitle.scrollIntoView({ block: "start" });
 }
