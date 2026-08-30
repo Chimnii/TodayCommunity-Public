@@ -10,6 +10,8 @@ const GAME_NEWS_WORKFLOW = "scan-game-news.yml";
 export const GITHUB_API_VERSION = "2022-11-28";
 export const RECENT_DISPATCH_WINDOW_MS = 10 * 60 * 1000;
 export const STALE_QUEUED_RUN_MS = 45 * 60 * 1000;
+// Ten managed dispatches cover the 45-minute stale window with margin.
+export const RUN_LIST_PAGE_SIZE = 10;
 
 export const SCHEDULES = Object.freeze({
   "7,22,37,52 * * * *": Object.freeze({
@@ -318,7 +320,11 @@ async function dispatchDestination({
   const ref = requireEnv(env, "GITHUB_REF");
   const repositoryPath = `${encodeURIComponent(owner)}/${encodeURIComponent(repository)}`;
 
-  const runsUrl = `${GITHUB_API_ROOT}/repos/${repositoryPath}/actions/runs?per_page=100`;
+  const runsUrl =
+    `${GITHUB_API_ROOT}/repos/${repositoryPath}/actions/runs` +
+    `?per_page=${RUN_LIST_PAGE_SIZE}` +
+    "&event=workflow_dispatch" +
+    `&branch=${encodeURIComponent(ref)}`;
   const runsResponse = await githubRequest(fetchImpl, runsUrl, {
     method: "GET",
     headers: githubHeaders(token),

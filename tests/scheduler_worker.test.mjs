@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   GITHUB_API_VERSION,
+  RUN_LIST_PAGE_SIZE,
   SCHEDULES,
   STALE_QUEUED_RUN_MS,
   ScheduledDispatchError,
@@ -108,7 +109,11 @@ test("an eligible Hot cron dispatches the workflow with hardened GitHub headers"
     ],
   });
   assert.equal(calls.length, 2);
-  assert.match(calls[0].url, /\/actions\/runs\?per_page=100$/);
+  const runsUrl = new URL(calls[0].url);
+  assert.match(runsUrl.pathname, /\/actions\/runs$/);
+  assert.equal(runsUrl.searchParams.get("per_page"), String(RUN_LIST_PAGE_SIZE));
+  assert.equal(runsUrl.searchParams.get("event"), "workflow_dispatch");
+  assert.equal(runsUrl.searchParams.get("branch"), "main");
   assert.equal(calls[0].options.method, "GET");
   assert.equal(calls[1].options.method, "POST");
   assert.match(
