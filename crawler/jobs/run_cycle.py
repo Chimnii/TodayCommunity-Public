@@ -262,8 +262,13 @@ class CrawlCycle:
         if self.client:
             upsert_source(self.client, self.target, self.run_started_at)
             self.source_state = get_source_state(self.client, self.target.key) or self.source_state
-            self.coverage = self.coverage_repository.load(self.target.key)
-            self.coverage_absences = self.absence_repository.load(self.target.key)
+            # Hot-only runs never consult the growing historical state sets.
+            # They look up absence evidence lazily by the bounded IDs observed
+            # on each fetched page. Full/backfill runs still load both sets to
+            # select and prove historical coverage targets.
+            if self.mode in {CYCLE_MODE_FULL, CYCLE_MODE_BACKFILL}:
+                self.coverage = self.coverage_repository.load(self.target.key)
+                self.coverage_absences = self.absence_repository.load(self.target.key)
             self._restore_block_cooldown_from_runs()
 
     def run(self) -> Dict[str, object]:
@@ -1287,9 +1292,16 @@ class CrawlCycle:
     def _invalidate_observed_absences(
         self, page: int, posts: Sequence[DcinsidePost]
     ) -> None:
-        if not self.coverage_absences or not posts:
+        if not posts:
             return
         observed_ids = {int(post.external_post_id) for post in posts}
+        if self.mode == CYCLE_MODE_HOT and self.absence_repository:
+            self.coverage_absences = self.absence_repository.load_matching(
+                self.target.key,
+                observed_ids,
+            )
+        if not self.coverage_absences:
+            return
         invalidated = [
             absence
             for absence in self.coverage_absences

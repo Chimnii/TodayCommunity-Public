@@ -10,6 +10,13 @@ from dataclasses import asdict
 from typing import Callable, Dict, Iterable, List, Optional
 from urllib import error, request
 
+from crawler.archive_stats import (
+    PostStatsTransition,
+    load_subject_counts,
+    normalized_subject,
+    stats_deltas,
+    stats_mutation_statements,
+)
 from crawler.config import get_env, get_required_env, is_truthy
 from crawler.d1 import D1Client, D1Statement
 from crawler.parsers.dcinside import (
@@ -244,6 +251,15 @@ def upsert_source(client: D1Client, target: TargetBoard, run_started_at: str) ->
                 run_started_at,
             ],
         ),
+        (
+            """
+            INSERT OR IGNORE INTO archive_stats (
+              archive_key, active_post_count, latest_seen_at,
+              subject_options_json, stats_version, updated_at
+            ) VALUES (?, 0, '', '[]', 0, ?)
+            """,
+            [archive.key, run_started_at],
+        ),
         source_state_statement,
     ]
 
@@ -432,6 +448,81 @@ def upsert_posts(
             checked_at,
         ]
 
+        external_ids = [str(post["external_post_id"]).strip() for post in chunk]
+        identity_placeholders = ", ".join("?" for _ in chunk)
+        existing_rows = client.query(
+            f"""
+            SELECT id, source_key, archive_key, canonical_post_key,
+                   external_post_id, subject, status
+            FROM posts
+            WHERE (
+              archive_key = ?
+              AND canonical_post_key IN ({identity_placeholders})
+            ) OR (
+              source_key = ?
+              AND external_post_id IN ({identity_placeholders})
+            )
+            """,
+            [
+                target.archive_key,
+                *canonical_keys,
+                target.key,
+                *external_ids,
+            ],
+        )
+        existing_by_canonical = {
+            str(row.get("canonical_post_key") or ""): row
+            for row in existing_rows
+            if str(row.get("canonical_post_key") or "")
+        }
+        existing_by_source_id = {
+            (
+                str(row.get("source_key") or ""),
+                str(row.get("external_post_id") or ""),
+            ): row
+            for row in existing_rows
+        }
+        transitions_by_identity = {}
+        for post, canonical_key, external_id in zip(
+            chunk, canonical_keys, external_ids
+        ):
+            existing = existing_by_canonical.get(canonical_key)
+            if existing is None:
+                existing = existing_by_source_id.get((target.key, external_id))
+            identity = (
+                int(existing.get("id") or 0)
+                if existing is not None and existing.get("id") is not None
+                else canonical_key
+            )
+            old_subject = normalized_subject(
+                existing.get("subject") if existing is not None else ""
+            )
+            transitions_by_identity[identity] = PostStatsTransition(
+                old_status=(existing.get("status") if existing is not None else None),
+                old_subject=old_subject,
+                new_status="active",
+                # Community subjects are deliberately insert-only.
+                new_subject=(
+                    old_subject
+                    if existing is not None
+                    else normalized_subject(post.get("subject"))
+                ),
+            )
+        transitions = list(transitions_by_identity.values())
+        _, subject_deltas = stats_deltas(transitions)
+        subject_counts = load_subject_counts(
+            client,
+            target.archive_key,
+            subject_deltas,
+        )
+        stats_statements = stats_mutation_statements(
+            target.archive_key,
+            transitions,
+            checked_at,
+            latest_seen_at=checked_at,
+            previous_subject_counts=subject_counts,
+        )
+
         # Unchanged rescans update only the non-indexed observation times. New,
         # changed, or restored rows still take the full UPSERT path. Both
         # statements share one D1 request and persistence boundary per chunk.
@@ -440,6 +531,7 @@ def upsert_posts(
             [
                 (upsert_sql, params),
                 (heartbeat_sql, heartbeat_params),
+                *stats_statements,
             ],
         )
         if on_batch_persisted is not None:
@@ -548,7 +640,7 @@ def mark_posts_deleted(
         placeholders = ", ".join("?" for _ in chunk)
         active_rows = client.query(
             f"""
-            SELECT external_post_id
+            SELECT external_post_id, subject, status
             FROM posts
             WHERE source_key = ?
               AND external_post_id IN ({placeholders})
@@ -561,15 +653,42 @@ def mark_posts_deleted(
             continue
 
         active_placeholders = ", ".join("?" for _ in active_ids)
-        client.query(
-            f"""
-            UPDATE posts
-            SET status = 'deleted'
-            WHERE source_key = ?
-              AND external_post_id IN ({active_placeholders})
-              AND status = 'active'
-            """,
-            [target.key, *active_ids],
+        transitions = [
+            PostStatsTransition(
+                old_status="active",
+                old_subject=normalized_subject(row.get("subject")),
+                new_status="deleted",
+                new_subject=normalized_subject(row.get("subject")),
+            )
+            for row in active_rows
+        ]
+        _, subject_deltas = stats_deltas(transitions)
+        subject_counts = load_subject_counts(
+            client,
+            target.archive_key,
+            subject_deltas,
+        )
+        changed_at = utc_now()
+        _execute_statements(
+            client,
+            [
+                (
+                    f"""
+                    UPDATE posts
+                    SET status = 'deleted'
+                    WHERE source_key = ?
+                      AND external_post_id IN ({active_placeholders})
+                      AND status = 'active'
+                    """,
+                    [target.key, *active_ids],
+                ),
+                *stats_mutation_statements(
+                    target.archive_key,
+                    transitions,
+                    changed_at,
+                    previous_subject_counts=subject_counts,
+                ),
+            ],
         )
         deleted_count += len(active_ids)
     return deleted_count

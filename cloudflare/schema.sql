@@ -103,15 +103,6 @@ CREATE TABLE IF NOT EXISTS posts (
 CREATE INDEX IF NOT EXISTS idx_sources_archive
   ON sources (archive_key, source_key);
 
-CREATE INDEX IF NOT EXISTS idx_posts_archive_created_at
-  ON posts (archive_key, created_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_posts_archive_upvotes
-  ON posts (archive_key, upvotes DESC);
-
-CREATE INDEX IF NOT EXISTS idx_posts_archive_comments
-  ON posts (archive_key, comments DESC);
-
 CREATE INDEX IF NOT EXISTS idx_posts_source_created_at
   ON posts (source_key, created_at DESC);
 
@@ -120,6 +111,66 @@ CREATE INDEX IF NOT EXISTS idx_posts_source_upvotes
 
 CREATE INDEX IF NOT EXISTS idx_posts_source_comments
   ON posts (source_key, comments DESC);
+
+-- Page-sized archive reads need both the visibility predicate and the complete
+-- keyset order in the index. Archive-prefixed variants serve one archive;
+-- prefix-free variants serve the public all-archive feed without a sort scan.
+CREATE INDEX IF NOT EXISTS idx_posts_archive_created_at
+  ON posts (archive_key, created_at DESC, id DESC)
+  WHERE status = 'active';
+
+CREATE INDEX IF NOT EXISTS idx_posts_archive_upvotes
+  ON posts (archive_key, upvotes DESC, created_at DESC, id DESC)
+  WHERE status = 'active';
+
+CREATE INDEX IF NOT EXISTS idx_posts_archive_comments
+  ON posts (archive_key, comments DESC, created_at DESC, id DESC)
+  WHERE status = 'active';
+
+CREATE INDEX IF NOT EXISTS idx_posts_active_created
+  ON posts (created_at DESC, id DESC)
+  WHERE status = 'active';
+
+CREATE INDEX IF NOT EXISTS idx_posts_active_upvotes
+  ON posts (upvotes DESC, created_at DESC, id DESC)
+  WHERE status = 'active';
+
+CREATE INDEX IF NOT EXISTS idx_posts_active_comments
+  ON posts (comments DESC, created_at DESC, id DESC)
+  WHERE status = 'active';
+
+CREATE TABLE IF NOT EXISTS archive_stats (
+  archive_key TEXT PRIMARY KEY,
+  active_post_count INTEGER NOT NULL DEFAULT 0
+    CHECK (active_post_count >= 0),
+  latest_seen_at TEXT NOT NULL DEFAULT ''
+    CHECK (length(latest_seen_at) <= 64),
+  subject_options_json TEXT NOT NULL DEFAULT '[]' CHECK (
+    length(subject_options_json) >= 2
+    AND json_valid(subject_options_json)
+    AND json_type(subject_options_json) = 'array'
+  ),
+  stats_version INTEGER NOT NULL DEFAULT 0 CHECK (stats_version >= 0),
+  mutation_token TEXT NOT NULL DEFAULT ''
+    CHECK (length(mutation_token) <= 64),
+  updated_at TEXT NOT NULL
+    DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  FOREIGN KEY (archive_key) REFERENCES archives(archive_key) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS archive_subject_stats (
+  archive_key TEXT NOT NULL,
+  subject TEXT NOT NULL CHECK (length(trim(subject)) > 0),
+  active_post_count INTEGER NOT NULL DEFAULT 0
+    CHECK (active_post_count >= 0),
+  updated_at TEXT NOT NULL
+    DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+  PRIMARY KEY (archive_key, subject),
+  FOREIGN KEY (archive_key) REFERENCES archives(archive_key) ON DELETE CASCADE
+);
+
+INSERT OR IGNORE INTO archive_stats (archive_key)
+SELECT archive_key FROM archives;
 
 CREATE TABLE IF NOT EXISTS community_topics (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

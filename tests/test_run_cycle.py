@@ -158,6 +158,16 @@ class SqliteClient:
         return []
 
 
+class RecordingSqliteClient(SqliteClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sql_queries = []
+
+    def query(self, sql: str, params: Optional[Iterable[object]] = None):
+        self.sql_queries.append(sql)
+        return super().query(sql, params)
+
+
 class FailingPostClient(SqliteClient):
     def query(self, sql: str, params: Optional[Iterable[object]] = None):
         if "INSERT INTO posts" in sql:
@@ -284,6 +294,123 @@ class CrawlCycleTests(unittest.TestCase):
             ["hot_scan"],
         )
         self.assertEqual(cycle.runtime.phase_request_count(BACKFILL_PHASE), 0)
+
+    def test_hot_mode_skips_growing_historical_state_sets(self) -> None:
+        client = RecordingSqliteClient()
+
+        CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=config(),
+            runtime=runtime(config()),
+            client=client,
+            fetcher=MappingFetcher({}),
+            cycle_started_at=FIXED_NOW,
+            mode=CYCLE_MODE_HOT,
+        )
+
+        self.assertFalse(
+            any("FROM coverage_intervals" in sql for sql in client.sql_queries)
+        )
+        self.assertFalse(
+            any("FROM coverage_absences" in sql for sql in client.sql_queries)
+        )
+
+    def test_hot_mode_reloads_and_invalidates_reobserved_absence(self) -> None:
+        client = RecordingSqliteClient()
+        target = get_target("dcinside-singularity")
+        seed_cycle = CrawlCycle(
+            target=target,
+            config=config(),
+            runtime=runtime(config()),
+            client=client,
+            fetcher=MappingFetcher({}),
+            cycle_started_at=FIXED_NOW,
+            mode=CYCLE_MODE_HOT,
+        )
+        evidence = CoverageAbsence(
+            source_key=target.key,
+            post_id=105,
+            newer_page=1,
+            older_page=2,
+            newer_boundary_post_id=106,
+            older_boundary_post_id=104,
+        )
+        seed_cycle.absence_repository.record(evidence)
+        seed_cycle.absence_repository.record(
+            CoverageAbsence(
+                source_key=target.key,
+                post_id=205,
+                newer_page=1,
+                older_page=2,
+                newer_boundary_post_id=206,
+                older_boundary_post_id=204,
+            )
+        )
+        upsert_posts(
+            client,
+            target,
+            [asdict(post(105, "2026-07-15T10:00:00+00:00"))],
+            seed_cycle.run_started_at,
+        )
+        client.query(
+            "UPDATE posts SET status = 'deleted' WHERE external_post_id = ?",
+            ["105"],
+        )
+
+        hot_cycle = CrawlCycle(
+            target=target,
+            config=config(),
+            runtime=runtime(config()),
+            client=client,
+            fetcher=MappingFetcher(
+                {1: page_html(row(105, "2026-07-16 20:59:00"))}
+            ),
+            cycle_started_at=FIXED_NOW,
+            mode=CYCLE_MODE_HOT,
+        )
+
+        self.assertEqual(hot_cycle.coverage, [])
+        self.assertEqual(hot_cycle.coverage_absences, [])
+        client.sql_queries.clear()
+        hot_cycle._fetch_page(1, HOT_PHASE)
+
+        self.assertTrue(
+            any(
+                "FROM coverage_absences" in sql and "post_id IN" in sql
+                for sql in client.sql_queries
+            )
+        )
+        self.assertEqual(
+            client.query("SELECT post_id FROM coverage_absences ORDER BY post_id"),
+            [{"post_id": 205}],
+        )
+        self.assertEqual(
+            client.query(
+                "SELECT status FROM posts WHERE external_post_id = ?",
+                ["105"],
+            ),
+            [{"status": "active"}],
+        )
+
+    def test_backfill_mode_loads_historical_coverage_state(self) -> None:
+        client = RecordingSqliteClient()
+
+        CrawlCycle(
+            target=get_target("dcinside-singularity"),
+            config=config(),
+            runtime=runtime(config()),
+            client=client,
+            fetcher=MappingFetcher({}),
+            cycle_started_at=FIXED_NOW,
+            mode=CYCLE_MODE_BACKFILL,
+        )
+
+        self.assertTrue(
+            any("FROM coverage_intervals" in sql for sql in client.sql_queries)
+        )
+        self.assertTrue(
+            any("FROM coverage_absences" in sql for sql in client.sql_queries)
+        )
 
     def test_full_and_backfill_modes_require_a_history_reservation(self) -> None:
         settings = CycleConfig(

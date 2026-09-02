@@ -81,6 +81,7 @@ const DEFAULT_STATE = Object.freeze({
   sortBy: "created_at",
   page: 1,
   pageSize: 30,
+  cursor: "",
 });
 const VALID_SORTS = new Set(["created_at", "upvotes", "comments"]);
 const VALID_PAGE_SIZES = new Set([20, 30, 50, 100]);
@@ -355,12 +356,14 @@ function buildApiUrl() {
   if (state.topicId > 0) {
     params.set("topic", String(state.topicId));
   }
+  if (hasActivePostFilters() && state.cursor) {
+    params.set("cursor", state.cursor);
+  }
   if (canUseArchiveFilter()) {
     for (const archiveKey of state.excludedArchiveKeys) {
       params.append("exclude_archive", archiveKey);
     }
   }
-
   return `/api/archive?${params.toString()}`;
 }
 
@@ -422,6 +425,16 @@ function isGameNewsPost(post) {
   return post?.archive_key === "game-news";
 }
 
+function hasActivePostFilters() {
+  return Boolean(
+    state.search ||
+    state.subject ||
+    state.topicId > 0 ||
+    state.minUpvotes > 0 ||
+    state.minComments > 0
+  );
+}
+
 function hasSecretLinkSession() {
   return state.feedbackSession?.authentication === "authenticated";
 }
@@ -437,6 +450,9 @@ function canUseArchiveFilter() {
 function normalizeContentState() {
   if (isMixedArchive()) {
     state.topicId = 0;
+    if (!hasActivePostFilters()) {
+      state.cursor = "";
+    }
     return;
   }
   if (!isArticleArchive()) {
@@ -446,6 +462,9 @@ function normalizeContentState() {
   state.minComments = 0;
   state.sortBy = "created_at";
   state.topicId = 0;
+  if (!hasActivePostFilters()) {
+    state.cursor = "";
+  }
 }
 
 function applyContentKindMode() {
@@ -855,14 +874,18 @@ function getViewModel() {
   const posts = Array.isArray(state.archive.posts) ? state.archive.posts : [];
   const pagination = normalizePagination(
     state.archive.pagination,
-    normalizeNonNegativeNumber(summary.filtered_posts, posts.length),
+    summary.filtered_posts,
     posts.length
   );
+  const hasExactFilteredTotal = pagination.mode === "numbered";
 
   return {
     posts,
     totalPosts: normalizeNonNegativeNumber(summary.total_posts, posts.length),
-    filteredPosts: normalizeNonNegativeNumber(summary.filtered_posts, posts.length),
+    filteredPosts: hasExactFilteredTotal
+      ? normalizeNonNegativeNumber(summary.filtered_posts, posts.length)
+      : null,
+    hasExactFilteredTotal,
     pagination,
   };
 }
@@ -909,8 +932,17 @@ function getLocalViewModel() {
     })
     .sort(comparePosts);
 
-  const totalPages = filtered.length === 0 ? 0 : Math.ceil(filtered.length / state.pageSize);
-  const safePage = totalPages === 0 ? 1 : Math.min(state.page, totalPages);
+  const sequentialMode = hasActivePostFilters();
+  const totalPages = sequentialMode
+    ? null
+    : filtered.length === 0
+      ? 0
+      : Math.ceil(filtered.length / state.pageSize);
+  const safePage = sequentialMode
+    ? state.page
+    : totalPages === 0
+      ? 1
+      : Math.min(state.page, totalPages);
   if (safePage !== state.page) {
     state.page = safePage;
     syncStateToUrl();
@@ -922,15 +954,19 @@ function getLocalViewModel() {
   return {
     posts,
     totalPosts: allPosts.length,
-    filteredPosts: filtered.length,
+    filteredPosts: sequentialMode ? null : filtered.length,
+    hasExactFilteredTotal: !sequentialMode,
     pagination: {
+      mode: sequentialMode ? "sequential" : "numbered",
       page: safePage,
       page_size: state.pageSize,
       total_pages: totalPages,
       visible_from: posts.length ? offset + 1 : 0,
       visible_to: posts.length ? offset + posts.length : 0,
       has_previous: safePage > 1,
-      has_next: totalPages > 0 && safePage < totalPages,
+      has_next: sequentialMode
+        ? offset + posts.length < filtered.length
+        : totalPages > 0 && safePage < totalPages,
     },
   };
 }
@@ -987,13 +1023,20 @@ function setSubjectControlValue(value) {
 function normalizePagination(rawPagination, filteredPosts, visibleCount) {
   const page = normalizePositiveNumber(rawPagination?.page, state.page);
   const pageSize = normalizePositiveNumber(rawPagination?.page_size, state.pageSize);
-  const totalPages = normalizeNonNegativeNumber(
-    rawPagination?.total_pages,
-    filteredPosts === 0 ? 0 : Math.ceil(filteredPosts / pageSize)
-  );
+  const mode = rawPagination?.mode === "sequential" ? "sequential" : "numbered";
+  const normalizedFilteredPosts = normalizeNonNegativeNumber(filteredPosts, visibleCount);
+  const totalPages = mode === "sequential"
+    ? null
+    : normalizeNonNegativeNumber(
+        rawPagination?.total_pages,
+        normalizedFilteredPosts === 0
+          ? 0
+          : Math.ceil(normalizedFilteredPosts / pageSize)
+      );
   const fallbackFrom = visibleCount ? (page - 1) * pageSize + 1 : 0;
 
   return {
+    mode,
     page,
     page_size: pageSize,
     total_pages: totalPages,
@@ -1003,7 +1046,15 @@ function normalizePagination(rawPagination, filteredPosts, visibleCount) {
       visibleCount ? fallbackFrom + visibleCount - 1 : 0
     ),
     has_previous: Boolean(rawPagination?.has_previous ?? page > 1),
-    has_next: Boolean(rawPagination?.has_next ?? (totalPages > 0 && page < totalPages)),
+    has_next: Boolean(
+      rawPagination?.has_next ?? (mode === "numbered" && totalPages > 0 && page < totalPages)
+    ),
+    previous_cursor: mode === "sequential"
+      ? String(rawPagination?.previous_cursor || "")
+      : "",
+    next_cursor: mode === "sequential"
+      ? String(rawPagination?.next_cursor || "")
+      : "",
   };
 }
 
@@ -1132,6 +1183,7 @@ function applyTopicFilter(topicId) {
   window.clearTimeout(state.filterTimer);
   state.topicId = normalized;
   state.page = 1;
+  state.cursor = "";
   state.focusPageContentAfterLoad = false;
   state.focusTopicAfterLoad = true;
   syncStateToUrl({ replace: false });
@@ -1986,13 +2038,25 @@ function renderBoardState(message, actionLabel, action) {
 }
 
 function renderResultStatus(view) {
-  const filtered = numberFormatter.format(view.filteredPosts);
   const total = numberFormatter.format(view.totalPosts);
   const { visible_from: from, visible_to: to } = view.pagination;
   const selectedLabel = state.topicId > 0
     ? String(state.archive?.selected_topic?.label || "").trim()
     : "";
 
+  if (!view.hasExactFilteredTotal) {
+    elements.resultCount.textContent = selectedLabel
+      ? `‘${selectedLabel}’ 관련 글 · 전체 저장 글 ${total}개`
+      : `조건에 맞는 글 · 전체 저장 글 ${total}개`;
+    elements.rangeSummary.textContent = view.posts.length === 0
+      ? view.pagination.page === 1
+        ? "조건에 맞는 글이 없습니다."
+        : "이 페이지에 표시할 글이 없습니다."
+      : `${numberFormatter.format(from)}~${numberFormatter.format(to)}번째 글 표시`;
+    return;
+  }
+
+  const filtered = numberFormatter.format(view.filteredPosts);
   if (selectedLabel) {
     elements.resultCount.textContent =
       `‘${selectedLabel}’ 관련 글 ${filtered}개 · 전체 ${total}개`;
@@ -2008,6 +2072,11 @@ function renderResultStatus(view) {
 
 function renderPagination(pagination) {
   elements.pagination.replaceChildren();
+
+  if (pagination.mode === "sequential") {
+    renderSequentialPagination(pagination);
+    return;
+  }
 
   if (pagination.total_pages <= 1) {
     return;
@@ -2041,6 +2110,43 @@ function renderPagination(pagination) {
   }
 
   centerCurrentPage(pageList);
+}
+
+function renderSequentialPagination(pagination) {
+  if (!pagination.has_previous && !pagination.has_next) {
+    return;
+  }
+
+  const pageList = document.createElement("div");
+  pageList.className = "pagination-pages pagination-sequential";
+  pageList.setAttribute("role", "group");
+  pageList.setAttribute("aria-label", "필터 결과 페이지 이동");
+
+  const previous = createCursorPageButton(
+    "이전",
+    pagination.previous_cursor,
+    pagination.page - 1,
+    "pagination-previous"
+  );
+  previous.disabled = !pagination.has_previous;
+  previous.setAttribute("aria-label", "이전 필터 결과 페이지로 이동");
+
+  const current = document.createElement("span");
+  current.className = "pagination-current";
+  current.setAttribute("aria-current", "page");
+  current.textContent = `${numberFormatter.format(pagination.page)}페이지`;
+
+  const next = createCursorPageButton(
+    "다음",
+    pagination.next_cursor,
+    pagination.page + 1,
+    "pagination-next"
+  );
+  next.disabled = !pagination.has_next;
+  next.setAttribute("aria-label", "다음 필터 결과 페이지로 이동");
+
+  pageList.append(previous, current, next);
+  elements.pagination.append(pageList);
 }
 
 function centerCurrentPage(pageList) {
@@ -2086,6 +2192,21 @@ function createPageButton(label, page, className) {
   button.type = "button";
   button.textContent = label;
   button.addEventListener("click", () => goToPage(page));
+  return button;
+}
+
+function createCursorPageButton(label, cursor, page, className) {
+  const button = document.createElement("button");
+  button.className = `pagination-button ${className}`;
+  button.type = "button";
+  button.textContent = label;
+  button.addEventListener("click", () => {
+    if (cursor) {
+      goToCursor(cursor, page);
+    } else {
+      goToPage(page);
+    }
+  });
   return button;
 }
 
@@ -2193,6 +2314,16 @@ function parsePageJump(value, totalPages) {
 }
 
 function goToPage(page) {
+  state.page = Math.max(1, page);
+  state.cursor = "";
+  state.focusPageContentAfterLoad = true;
+  syncStateToUrl({ replace: false });
+  loadArchive();
+  elements.archiveTitle.scrollIntoView({ block: "start" });
+}
+
+function goToCursor(cursor, page) {
+  state.cursor = String(cursor || "");
   state.page = Math.max(1, page);
   state.focusPageContentAfterLoad = true;
   syncStateToUrl({ replace: false });
@@ -2369,6 +2500,7 @@ function scheduleFilterUpdate() {
     const shouldSaveArchiveFilter = state.pendingArchiveFilterSave;
     state.pendingArchiveFilterSave = false;
     state.page = 1;
+    state.cursor = "";
     state.focusPageContentAfterLoad = false;
     syncStateToUrl();
     loadArchive();
@@ -2642,7 +2774,11 @@ function hydrateStateFromUrl() {
   state.sortBy = VALID_SORTS.has(sortBy) ? sortBy : DEFAULT_STATE.sortBy;
   state.page = normalizePositiveNumber(params.get("page"), 1);
   state.pageSize = VALID_PAGE_SIZES.has(pageSize) ? pageSize : DEFAULT_STATE.pageSize;
+  state.cursor = String(params.get("cursor") || "").trim().slice(0, 8192);
   normalizeContentState();
+  if (!hasActivePostFilters()) {
+    state.cursor = "";
+  }
 }
 
 function syncStateToUrl({ replace = true } = {}) {
@@ -2658,6 +2794,7 @@ function syncStateToUrl({ replace = true } = {}) {
     sort: state.sortBy === DEFAULT_STATE.sortBy ? null : state.sortBy,
     page: state.page === 1 ? null : state.page,
     page_size: state.pageSize === DEFAULT_STATE.pageSize ? null : state.pageSize,
+    cursor: hasActivePostFilters() && state.cursor ? state.cursor : null,
   };
 
   for (const [key, value] of Object.entries(values)) {

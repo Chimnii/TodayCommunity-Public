@@ -9,6 +9,8 @@ from crawler.timestamps import canonicalize_utc_text, utc_now
 
 
 NUMERIC_POST_ID_PATTERN = re.compile(r"^[0-9]+$")
+MAX_D1_BOUND_PARAMETERS = 100
+ABSENCE_IDS_PER_QUERY = MAX_D1_BOUND_PARAMETERS - 1
 
 
 def validate_numeric_post_id(value: object) -> int:
@@ -421,6 +423,45 @@ class CoverageAbsenceRepository:
             [source_key],
         )
         return [CoverageAbsence.from_row(row) for row in rows]
+
+    def load_matching(
+        self,
+        source_key: str,
+        post_ids: Iterable[object],
+    ) -> List[CoverageAbsence]:
+        normalized_source_key = str(source_key).strip()
+        if not normalized_source_key:
+            raise ValueError("Coverage absence lookup requires a source key.")
+        normalized_post_ids = tuple(
+            dict.fromkeys(validate_numeric_post_id(post_id) for post_id in post_ids)
+        )
+        if not normalized_post_ids:
+            return []
+        matched: list[CoverageAbsence] = []
+        for offset in range(0, len(normalized_post_ids), ABSENCE_IDS_PER_QUERY):
+            chunk = normalized_post_ids[offset : offset + ABSENCE_IDS_PER_QUERY]
+            placeholders = ", ".join("?" for _ in chunk)
+            rows = self.client.query(
+                f"""
+                SELECT
+                  source_key,
+                  post_id,
+                  newer_page,
+                  older_page,
+                  newer_boundary_post_id,
+                  older_boundary_post_id,
+                  checked_at,
+                  created_at,
+                  updated_at
+                FROM coverage_absences
+                WHERE source_key = ?
+                  AND post_id IN ({placeholders})
+                ORDER BY post_id ASC
+                """,
+                [normalized_source_key, *chunk],
+            )
+            matched.extend(CoverageAbsence.from_row(row) for row in rows)
+        return sorted(matched, key=lambda item: item.post_id)
 
     def record(self, absence: CoverageAbsence) -> CoverageAbsence:
         self.client.query(

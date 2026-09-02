@@ -60,11 +60,14 @@ class SqliteD1Client:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self.connection = connection
         self.operations = []
+        self.parameter_counts = []
 
     def query(self, sql: str, params: Optional[Iterable[object]] = None):
         normalized_sql = " ".join(sql.split())
         self.operations.append(normalized_sql.split(" ", 1)[0].upper())
-        cursor = self.connection.execute(sql, list(params or []))
+        normalized_params = list(params or [])
+        self.parameter_counts.append(len(normalized_params))
+        cursor = self.connection.execute(sql, normalized_params)
         if cursor.description:
             columns = [item[0] for item in cursor.description]
             return [dict(zip(columns, row)) for row in cursor.fetchall()]
@@ -296,6 +299,45 @@ class CoverageRepositoryTests(unittest.TestCase):
         self.absence_repository.delete(SOURCE_KEY, 201)
 
         self.assertEqual(self.absence_repository.load(SOURCE_KEY), [])
+
+    def test_absence_repository_load_matching_reads_only_observed_ids(self) -> None:
+        self.absence_repository.record(absence(post_id=201))
+        self.absence_repository.record(
+            absence(
+                post_id=205,
+                newer_boundary_post_id=206,
+                older_boundary_post_id=204,
+            )
+        )
+
+        loaded = self.absence_repository.load_matching(
+            SOURCE_KEY,
+            [999, 205, 999],
+        )
+
+        self.assertEqual([item.post_id for item in loaded], [205])
+        self.assertEqual(self.absence_repository.load_matching(SOURCE_KEY, []), [])
+
+    def test_absence_repository_load_matching_chunks_d1_bindings(self) -> None:
+        self.absence_repository.record(absence(post_id=201))
+        self.absence_repository.record(
+            absence(
+                post_id=205,
+                newer_boundary_post_id=206,
+                older_boundary_post_id=204,
+            )
+        )
+        self.client.operations.clear()
+        self.client.parameter_counts.clear()
+
+        loaded = self.absence_repository.load_matching(
+            SOURCE_KEY,
+            range(150, 251),
+        )
+
+        self.assertEqual([item.post_id for item in loaded], [201, 205])
+        self.assertEqual(self.client.operations, ["SELECT", "SELECT"])
+        self.assertEqual(self.client.parameter_counts, [100, 3])
 
     def test_absence_schema_checks_reject_invalid_direct_writes(self) -> None:
         with self.assertRaises(sqlite3.IntegrityError):

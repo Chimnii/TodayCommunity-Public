@@ -70,10 +70,32 @@ class MockDatabase {
     this.feedback = [];
     this.visibility = [];
     this.rules = [];
+    this.archiveStats = {
+      active_post_count: 1,
+      subject_options_json: '["industry"]',
+      stats_version: 1,
+    };
+    this.subjectStats = new Map([["industry", 1]]);
+    this.beforeBatch = null;
+    this.batchCount = 0;
   }
 
   prepare(sql) {
     return new MockStatement(this, sql);
+  }
+
+  async batch(statements) {
+    this.batchCount += 1;
+    if (this.beforeBatch) {
+      const callback = this.beforeBatch;
+      this.beforeBatch = null;
+      callback();
+    }
+    const results = [];
+    for (const statement of statements) {
+      results.push(await statement.run());
+    }
+    return results;
   }
 
   all(sql, values) {
@@ -152,6 +174,10 @@ class MockDatabase {
       this.visibility.push(row);
       return [{ id: row.id }];
     }
+    if (sql.includes("FROM archive_subject_stats")) {
+      const count = this.subjectStats.get(values[0]);
+      return count === undefined ? [] : [{ active_post_count: count }];
+    }
     if (sql.includes("FROM game_news_manual_rule_events AS r")) {
       const latest = this.rules.filter((entry) => entry.rule_key === values[0]).at(-1);
       return latest ? [{
@@ -187,10 +213,61 @@ class MockDatabase {
   }
 
   run(sql, values) {
+    const guardMatches = (postId, status, subject) => (
+      postId === this.post.id
+      && status === this.post.status
+      && subject === this.post.subject
+    );
+    if (sql.startsWith("UPDATE archive_stats SET active_post_count")) {
+      const changed = guardMatches(values[2], values[3], values[4]);
+      if (changed) {
+        this.archiveStats.active_post_count += values[0];
+        this.archiveStats.stats_version += 1;
+      }
+      return { success: true, meta: { changes: changed ? 1 : 0 } };
+    }
+    if (sql.startsWith("INSERT INTO archive_subject_stats")) {
+      const changed = guardMatches(values[2], values[3], values[4]);
+      if (changed) {
+        this.subjectStats.set(values[0], (this.subjectStats.get(values[0]) || 0) + 1);
+      }
+      return { success: true, meta: { changes: changed ? 1 : 0 } };
+    }
+    if (sql.startsWith("UPDATE archive_subject_stats")) {
+      const changed = guardMatches(values[2], values[3], values[4]);
+      if (changed) {
+        this.subjectStats.set(values[1], (this.subjectStats.get(values[1]) || 0) - 1);
+      }
+      return { success: true, meta: { changes: changed ? 1 : 0 } };
+    }
+    if (sql.startsWith("DELETE FROM archive_subject_stats")) {
+      const changed = guardMatches(values[1], values[2], values[3])
+        && this.subjectStats.get(values[0]) === 0;
+      if (changed) {
+        this.subjectStats.delete(values[0]);
+      }
+      return { success: true, meta: { changes: changed ? 1 : 0 } };
+    }
+    if (sql.startsWith("UPDATE archive_stats SET subject_options_json")) {
+      const changed = guardMatches(values[0], values[1], values[2]);
+      if (changed) {
+        this.archiveStats.subject_options_json = JSON.stringify(
+          [...this.subjectStats.keys()]
+            .filter((subject) => subject.length <= 100)
+            .sort()
+            .slice(0, 100)
+        );
+      }
+      return { success: true, meta: { changes: changed ? 1 : 0 } };
+    }
     if (sql.startsWith("UPDATE posts SET status")) {
       assert.equal(values[1], this.post.id);
-      this.post.status = values[0];
-      return { success: true, meta: { changes: 1 } };
+      const changed = values.length < 3
+        || guardMatches(values[1], values[2], values[3]);
+      if (changed) {
+        this.post.status = values[0];
+      }
+      return { success: true, meta: { changes: changed ? 1 : 0 } };
     }
     throw new Error(`Unexpected run SQL: ${sql}`);
   }
@@ -348,8 +425,25 @@ test("keeps X visibility separate, reversible, and globally projected", async ()
   });
   assert.equal(hidden.status, 201);
   assert.equal(db.post.status, "hidden");
+  assert.equal(db.archiveStats.active_post_count, 0);
+  assert.equal(db.archiveStats.subject_options_json, "[]");
+  assert.equal(db.subjectStats.size, 0);
   assert.equal(db.feedback.length, 0);
   assert.equal((await body(await request("hidden", { db }))).items.length, 1);
+
+  const hiddenRetry = await request("visibility", {
+    method: "POST",
+    body: {
+      post_key: db.postKey,
+      action: "hide",
+      idempotency_key: "visibility:hide:123456",
+    },
+    headers: writeHeaders,
+    db,
+  });
+  assert.equal(hiddenRetry.status, 201);
+  assert.equal(db.archiveStats.active_post_count, 0);
+  assert.equal(db.archiveStats.stats_version, 2);
 
   const restored = await request("visibility", {
     method: "POST",
@@ -363,7 +457,62 @@ test("keeps X visibility separate, reversible, and globally projected", async ()
   });
   assert.equal(restored.status, 201);
   assert.equal(db.post.status, "active");
+  assert.equal(db.archiveStats.active_post_count, 1);
+  assert.equal(db.archiveStats.subject_options_json, '["industry"]');
+  assert.equal(db.subjectStats.get("industry"), 1);
   assert.equal((await body(await request("hidden", { db }))).items.length, 0);
+});
+
+test("retries owner visibility after a concurrent projection changes subject", async () => {
+  const db = new MockDatabase();
+  db.beforeBatch = () => {
+    db.post.subject = "release";
+    db.subjectStats = new Map([["release", 1]]);
+    db.archiveStats.subject_options_json = '["release"]';
+    db.archiveStats.stats_version += 1;
+  };
+
+  const hidden = await request("visibility", {
+    method: "POST",
+    body: {
+      post_key: db.postKey,
+      action: "hide",
+      idempotency_key: "visibility:hide:subject-race",
+    },
+    headers: writeHeaders,
+    db,
+  });
+
+  assert.equal(hidden.status, 201);
+  assert.equal(db.batchCount, 2);
+  assert.equal(db.post.status, "hidden");
+  assert.equal(db.post.subject, "release");
+  assert.equal(db.archiveStats.active_post_count, 0);
+  assert.equal(db.archiveStats.subject_options_json, "[]");
+  assert.equal(db.subjectStats.size, 0);
+
+  db.beforeBatch = () => {
+    db.post.subject = "patch";
+    db.archiveStats.stats_version += 1;
+  };
+  const restored = await request("visibility", {
+    method: "POST",
+    body: {
+      post_key: db.postKey,
+      action: "restore",
+      idempotency_key: "visibility:restore:subject-race",
+    },
+    headers: writeHeaders,
+    db,
+  });
+
+  assert.equal(restored.status, 201);
+  assert.equal(db.batchCount, 4);
+  assert.equal(db.post.status, "active");
+  assert.equal(db.post.subject, "patch");
+  assert.equal(db.archiveStats.active_post_count, 1);
+  assert.equal(db.archiveStats.subject_options_json, '["patch"]');
+  assert.equal(db.subjectStats.get("patch"), 1);
 });
 
 test("loads, versions, clears, and conflict-checks one preference document", async () => {

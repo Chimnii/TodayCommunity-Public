@@ -383,7 +383,7 @@ test("filters by exact subjects from the complete saved set", () => {
   assert.match(fixtureServer, /!subject \|\| post\.subject === subject/);
   assert.match(
     fixtureServer,
-    /subject_options:\s*articleMode \|\| mixedMode \? archiveSubjectOptions : subjectOptions/
+    /subject_options:\s*articleMode \|\| mixedMode[\s\S]*archiveSubjectOptions[\s\S]*subjectOptions/
   );
 });
 
@@ -443,10 +443,21 @@ test("moves page-change focus to visible content and follows the motion contract
   assert.doesNotMatch(css, /transition\s*:[^;]*,\s*color\s+/s);
 });
 
-test("supports compact direct page jumps and a seven-page window", () => {
+test("uses numbered jumps without filters and accessible previous-next controls with filters", () => {
   assert.match(app, /PAGE_WINDOW_RADIUS\s*=\s*3/);
   assert.match(app, /createPageJumpForm\(pagination\.page, pagination\.total_pages\)/);
-  assert.doesNotMatch(app, /createPageButton\("(?:이전|다음)"/);
+  assert.match(app, /pagination\.mode === "sequential"[\s\S]*renderSequentialPagination/);
+  assert.match(app, /createCursorPageButton\([\s\S]*"이전"[\s\S]*pagination\.previous_cursor/);
+  assert.match(app, /createCursorPageButton\([\s\S]*"다음"[\s\S]*pagination\.next_cursor/);
+  assert.match(app, /previous\.disabled = !pagination\.has_previous/);
+  assert.match(app, /next\.disabled = !pagination\.has_next/);
+  assert.match(app, /pageList\.setAttribute\("aria-label", "필터 결과 페이지 이동"\)/);
+  assert.match(app, /current\.setAttribute\("aria-current", "page"\)/);
+  assert.match(app, /function goToCursor\(cursor, page\)/);
+  assert.match(app, /state\.cursor = String\(cursor \|\| ""\)/);
+  assert.match(app, /params\.set\("cursor", state\.cursor\)/);
+  assert.match(app, /state\.cursor = String\(params\.get\("cursor"\)/);
+  assert.match(app, /cursor: hasActivePostFilters\(\) && state\.cursor \? state\.cursor : null/);
   assert.match(app, /form\.setAttribute\("aria-label", "페이지 직접 이동"\)/);
   assert.match(app, /input\.type = "number"/);
   assert.match(app, /input\.min = "1"/);
@@ -466,6 +477,8 @@ test("supports compact direct page jumps and a seven-page window", () => {
     /\.pagination-button\s*{[^}]*min-width:\s*var\(--pagination-control-size\)[^}]*height:\s*var\(--pagination-control-size\)/s
   );
   assert.doesNotMatch(css, /\.pagination-direction/);
+  assert.match(css, /\.pagination-sequential\s*{[^}]*display:\s*flex/s);
+  assert.match(css, /\.pagination-current\s*{[^}]*font-variant-numeric:\s*tabular-nums/s);
   assert.match(css, /\.pagination-jump\s*{[^}]*margin-right:\s*var\(--space-3\)/s);
   assert.match(css, /\.pagination-jump-input\s*{[^}]*height:\s*var\(--pagination-control-size\)/s);
   assert.match(

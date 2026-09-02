@@ -27,6 +27,20 @@ class MockStatement {
 
   result() {
     if (
+      this.sql.includes("FROM archives AS archive") &&
+      this.sql.includes("LEFT JOIN archive_stats AS stats")
+    ) {
+      return {
+        results: this.database.archiveStats.map((row) => {
+          if (this.sql.includes("stats.subject_options_json")) {
+            return row;
+          }
+          const { subject_options_json: _discardedOptions, ...withoutOptions } = row;
+          return withoutOptions;
+        }),
+      };
+    }
+    if (
       this.sql.includes("SELECT archive_key, display_name, description, content_kind") &&
       this.sql.includes("FROM archives")
     ) {
@@ -37,12 +51,6 @@ class MockStatement {
         return { results: archive ? [archive] : [] };
       }
       return { results: this.database.archives };
-    }
-    if (this.sql.includes("AS total_posts")) {
-      return { results: [this.database.summary] };
-    }
-    if (this.sql.includes("AS filtered_posts")) {
-      return { results: [{ filtered_posts: this.database.filteredPosts }] };
     }
     if (
       this.sql.includes("FROM sources") &&
@@ -109,6 +117,7 @@ class MockDatabase {
     topicSnapshot = null,
     topicItems = [],
     topics = [],
+    archiveStats = null,
   } = {}) {
     this.calls = [];
     this.batchRequests = [];
@@ -162,6 +171,18 @@ class MockDatabase {
         board_name: "Singularity",
       },
     ];
+    const statsTarget = this.sources[0]?.archive_key || "dcinside-singularity";
+    this.archiveStats = archiveStats ?? this.archives.map((archive) => ({
+      ...archive,
+      active_post_count: archive.archive_key === statsTarget ? totalPosts : 0,
+      latest_seen_at: archive.archive_key === statsTarget
+        ? "2026-07-17T01:07:00Z"
+        : "",
+      stats_version: archive.archive_key === statsTarget ? 7 : 0,
+      subject_options_json: archive.archive_key === statsTarget
+        ? subjectOptionsJson
+        : "[]",
+    }));
     this.summary = {
       total_posts: totalPosts,
       latest_seen_at: "2026-07-17T01:07:00Z",
@@ -187,15 +208,21 @@ class MockDatabase {
 
 function makeRows(count, startingId = 1000) {
   return Array.from({ length: count }, (_, index) => ({
+    cursor_id: startingId - index,
     external_post_id: String(startingId - index),
     subject: index === 0 ? "AI 소식" : "",
     title: `post ${startingId - index}`,
+    created_at: new Date(Date.UTC(2026, 0, 1) + (startingId - index) * 1000).toISOString(),
+    upvotes: (startingId - index) % 37,
+    comments: (startingId - index) % 19,
   }));
 }
 
-async function requestArchive(database, search = "") {
+async function requestArchive(database, search = "", headers = {}) {
   const response = await onRequestGet({
-    request: new Request(`https://todaycommunity.pages.dev/api/archive${search}`),
+    request: new Request(`https://todaycommunity.pages.dev/api/archive${search}`, {
+      headers,
+    }),
     env: { DB: database },
   });
   return { response, body: await response.json() };
@@ -230,7 +257,7 @@ test("defaults to the first 30 globally counted posts and preserves recent runs"
   assert.equal(response.status, 200);
   assert.equal(
     response.headers.get("cache-control"),
-    "public, max-age=15, s-maxage=300"
+    "public, max-age=15, s-maxage=120"
   );
   assert.equal(response.headers.get("x-content-type-options"), "nosniff");
   assert.equal(body.target, "dcinside-singularity");
@@ -263,10 +290,12 @@ test("defaults to the first 30 globally counted posts and preserves recent runs"
     total_posts: 75,
     filtered_posts: 75,
     latest_seen_at: "2026-07-17T01:07:00Z",
+    stats_version: "dcinside-singularity:7",
     exported_posts: 30,
     recent_runs: 10,
   });
   assert.deepEqual(body.pagination, {
+    mode: "numbered",
     page: 1,
     page_size: 30,
     total_pages: 3,
@@ -274,28 +303,23 @@ test("defaults to the first 30 globally counted posts and preserves recent runs"
     visible_to: 30,
     has_previous: false,
     has_next: true,
+    previous_cursor: null,
+    next_cursor: null,
   });
   assert.equal(body.posts.length, 30);
   assert.equal(body.runs.length, 10);
 
   assert.equal(database.batchRequests.length, 1);
-  assert.equal(database.batchRequests[0].length, 9);
-  assert.equal(database.calls.filter((call) => call.method === "batch").length, 9);
-  assert.equal(database.calls.filter((call) => call.method === "first").length, 1);
-  assert.equal(database.calls.filter((call) => call.method === "all").length, 0);
+  assert.equal(database.batchRequests[0].length, 6);
+  assert.equal(database.calls.filter((call) => call.method === "batch").length, 6);
+  assert.equal(database.calls.filter((call) => call.method === "first").length, 0);
+  assert.equal(database.calls.filter((call) => call.method === "all").length, 1);
+  assert.ok(database.calls.every(({ sql }) => !/COUNT\(|MAX\(|DISTINCT/i.test(sql)));
 
-  const filteredCountCall = findCall(database, "AS filtered_posts", "batch");
-  assert.deepEqual(filteredCountCall.values, ["dcinside-singularity"]);
-  assert.match(filteredCountCall.sql, /status = 'active'/);
-  assert.doesNotMatch(filteredCountCall.sql, /upvotes >= \?|comments >= \?/);
-
-  const summaryCall = findCall(database, "AS total_posts", "batch");
-  assert.match(summaryCall.sql, /json_group_array\(subject\)/);
-  assert.match(summaryCall.sql, /SELECT DISTINCT TRIM\(subject\) AS subject/);
-  assert.match(summaryCall.sql, /length\(TRIM\(subject\)\) <= 100/);
-  assert.match(summaryCall.sql, /ORDER BY subject COLLATE NOCASE, subject LIMIT 100/);
-  assert.equal(summaryCall.sql.match(/status = 'active'/g)?.length, 2);
-  assert.deepEqual(summaryCall.values, ["dcinside-singularity", "dcinside-singularity"]);
+  const statsCall = findCall(database, "LEFT JOIN archive_stats AS stats", "all");
+  assert.match(statsCall.sql, /stats\.active_post_count/);
+  assert.match(statsCall.sql, /stats\.subject_options_json/);
+  assert.doesNotMatch(statsCall.sql, /FROM posts/);
 
   const postCall = findCall(database, "SELECT archive_key, source_key, external_post_id", "batch");
   assert.match(postCall.sql, /external_post_id, subject, title/);
@@ -361,7 +385,7 @@ test("applies escaped title and numeric filters before paginating with a stable 
   const database = new MockDatabase({
     totalPosts: 120,
     filteredPosts: 45,
-    posts: makeRows(20, 900),
+    posts: makeRows(21, 900),
   });
   const params = new URLSearchParams({
     target,
@@ -378,33 +402,110 @@ test("applies escaped title and numeric filters before paginating with a stable 
 
   assert.equal(body.target, target);
   assert.equal(body.summary.total_posts, 120);
-  assert.equal(body.summary.filtered_posts, 45);
-  assert.deepEqual(body.pagination, {
-    page: 2,
-    page_size: 20,
-    total_pages: 3,
-    visible_from: 21,
-    visible_to: 40,
-    has_previous: true,
-    has_next: true,
-  });
+  assert.equal(body.summary.filtered_posts, null);
+  assert.equal(body.pagination.mode, "sequential");
+  assert.equal(body.pagination.page, 1);
+  assert.equal(body.pagination.page_size, 20);
+  assert.equal(body.pagination.total_pages, null);
+  assert.equal(body.pagination.visible_from, 1);
+  assert.equal(body.pagination.visible_to, 20);
+  assert.equal(body.pagination.has_previous, false);
+  assert.equal(body.pagination.has_next, true);
+  assert.equal(body.pagination.previous_cursor, null);
+  assert.equal(typeof body.pagination.next_cursor, "string");
   assert.equal(database.batchRequests.length, 1);
-  assert.equal(database.batchRequests[0].length, 8);
+  assert.equal(database.batchRequests[0].length, 6);
 
   const selectedSubject = "AI 소식' OR 1=1 --";
   const expectedFilterBindings = [target, 4, 15, selectedSubject, "%100\\%\\_\\\\%"];
-  const filteredCountCall = findCall(database, "AS filtered_posts", "batch");
-  assert.match(filteredCountCall.sql, /upvotes >= \? AND comments >= \?/);
-  assert.match(filteredCountCall.sql, /subject = \?/);
-  assert.ok(filteredCountCall.sql.includes("title LIKE ? ESCAPE '\\'"));
-  assert.deepEqual(filteredCountCall.values, expectedFilterBindings);
-  assert.ok(!filteredCountCall.sql.includes(selectedSubject));
-
-  const postCall = findCall(database, "SELECT archive_key, source_key, external_post_id", "all");
+  assert.ok(database.calls.every(({ sql }) => !sql.includes("COUNT(")));
+  const postCall = findCall(database, "SELECT archive_key, source_key, external_post_id", "batch");
   assert.match(postCall.sql, /ORDER BY upvotes DESC, created_at DESC, id DESC/);
-  assert.deepEqual(postCall.values, [...expectedFilterBindings, 20, 20]);
+  assert.match(postCall.sql, /upvotes >= \? AND comments >= \?/);
+  assert.match(postCall.sql, /subject = \?/);
+  assert.ok(postCall.sql.includes("title LIKE ? ESCAPE '\\'"));
+  assert.deepEqual(postCall.values, [...expectedFilterBindings, 21]);
+  assert.doesNotMatch(postCall.sql, /OFFSET/i);
   assert.ok(!postCall.sql.includes(target));
   assert.ok(!postCall.sql.includes("100%_"));
+});
+
+test("uses deterministic keyset cursors for next and previous filtered pages", async (t) => {
+  for (const sort of ["created_at", "upvotes", "comments"]) {
+    await t.test(sort, async () => {
+      const database = new MockDatabase({ totalPosts: 50, posts: makeRows(3, 1000) });
+      const base = new URLSearchParams({ q: "post", page_size: "2", sort });
+      const first = await requestArchive(database, `?${base}`);
+
+      assert.equal(first.body.pagination.page, 1);
+      assert.equal(first.body.pagination.has_previous, false);
+      assert.equal(first.body.pagination.has_next, true);
+      assert.equal(typeof first.body.pagination.next_cursor, "string");
+      assert.equal(first.body.posts.length, 2);
+      assert.ok(first.body.posts.every((post) => !Object.hasOwn(post, "cursor_id")));
+      const firstPostCall = database.calls.filter(
+        ({ sql }) => sql.includes("SELECT archive_key, source_key, external_post_id")
+      ).at(-1);
+      assert.doesNotMatch(firstPostCall.sql, /OFFSET/i);
+
+      database.posts = makeRows(3, 998);
+      const nextParams = new URLSearchParams(base);
+      nextParams.set("cursor", first.body.pagination.next_cursor);
+      const second = await requestArchive(database, `?${nextParams}`);
+      assert.equal(second.response.status, 200);
+      assert.equal(second.body.pagination.page, 2);
+      assert.equal(second.body.pagination.has_previous, true);
+      assert.equal(typeof second.body.pagination.previous_cursor, "string");
+      const nextPostCall = database.calls.filter(
+        ({ sql }) => sql.includes("SELECT archive_key, source_key, external_post_id")
+      ).at(-1);
+      assert.doesNotMatch(nextPostCall.sql, /OFFSET/i);
+      assert.match(nextPostCall.sql, /posts\.(?:created_at|upvotes|comments) </);
+      assert.match(nextPostCall.sql, new RegExp(`ORDER BY ${sort} DESC`));
+
+      database.posts = makeRows(2, 1000).reverse();
+      const previousParams = new URLSearchParams(base);
+      previousParams.set("cursor", second.body.pagination.previous_cursor);
+      const previous = await requestArchive(database, `?${previousParams}`);
+      assert.equal(previous.response.status, 200);
+      assert.equal(previous.body.pagination.page, 1);
+      assert.equal(previous.body.pagination.has_previous, false);
+      assert.equal(previous.body.pagination.has_next, true);
+      assert.deepEqual(
+        previous.body.posts.map((post) => post.external_post_id),
+        ["1000", "999"]
+      );
+      const previousPostCall = database.calls.filter(
+        ({ sql }) => sql.includes("SELECT archive_key, source_key, external_post_id")
+      ).at(-1);
+      assert.doesNotMatch(previousPostCall.sql, /OFFSET/i);
+      assert.match(previousPostCall.sql, /posts\.(?:created_at|upvotes|comments) >/);
+      assert.match(previousPostCall.sql, new RegExp(`ORDER BY ${sort} ASC`));
+    });
+  }
+});
+
+test("rejects malformed, cross-filter, and unfiltered cursors before D1", async () => {
+  const database = new MockDatabase({ totalPosts: 10, posts: makeRows(3) });
+  const first = await requestArchive(database, "?q=post&page_size=2");
+  const validCursor = first.body.pagination.next_cursor;
+  const callsAfterFirst = database.calls.length;
+
+  const crossFilter = new URLSearchParams({ q: "different", cursor: validCursor });
+  const mismatched = await requestArchive(database, `?${crossFilter}`);
+  assert.equal(mismatched.response.status, 400);
+  assert.equal(mismatched.body.error, "Archive cursor is invalid or expired.");
+  assert.equal(database.calls.length, callsAfterFirst);
+
+  const malformed = await requestArchive(database, "?q=post&cursor=not-a-valid-payload");
+  assert.equal(malformed.response.status, 400);
+  assert.equal(database.calls.length, callsAfterFirst);
+
+  const unfilteredDatabase = new MockDatabase();
+  const unfiltered = await requestArchive(unfilteredDatabase, `?cursor=${validCursor}`);
+  assert.equal(unfiltered.response.status, 400);
+  assert.equal(unfiltered.body.error, "Cursor pagination requires an active filter.");
+  assert.deepEqual(unfilteredDatabase.calls, []);
 });
 
 test("returns the latest topic snapshot and filters every matching archived post by topic", async () => {
@@ -460,12 +561,14 @@ test("returns the latest topic snapshot and filters every matching archived post
     "새 모델 공개"
   );
 
-  const filteredCountCall = findCall(database, "AS filtered_posts", "batch");
-  assert.match(filteredCountCall.sql, /FROM community_post_topics AS selected_post_topic/);
-  assert.match(filteredCountCall.sql, /selected_topic\.archive_key = posts\.archive_key/);
-  assert.deepEqual(filteredCountCall.values, [target, topicId]);
   const postCall = findCall(database, "SELECT archive_key, source_key, external_post_id", "batch");
-  assert.deepEqual(postCall.values, [target, topicId, 30, 0]);
+  assert.match(postCall.sql, /FROM community_post_topics AS selected_post_topic/);
+  assert.match(postCall.sql, /selected_topic\.archive_key = posts\.archive_key/);
+  assert.deepEqual(postCall.values, [target, topicId, 31]);
+  assert.doesNotMatch(postCall.sql, /OFFSET/i);
+  assert.equal(body.summary.filtered_posts, null);
+  assert.equal(body.pagination.mode, "sequential");
+  assert.equal(body.pagination.total_pages, null);
 });
 
 test("rejects malformed and cross-archive topic filters", async () => {
@@ -501,10 +604,10 @@ test("validates well-formed targets against public archives", async () => {
   assert.equal(body.error, "Unknown archive target.");
   assert.equal(database.batchRequests.length, 0);
   assert.equal(database.calls.length, 1);
-  assert.equal(database.calls[0].method, "first");
-  assert.match(database.calls[0].sql, /FROM archives/);
-  assert.match(database.calls[0].sql, /WHERE archive_key = \? AND is_public = 1/);
-  assert.deepEqual(database.calls[0].values, ["missing-archive"]);
+  assert.equal(database.calls[0].method, "all");
+  assert.match(database.calls[0].sql, /LEFT JOIN archive_stats AS stats/);
+  assert.match(database.calls[0].sql, /archive\.is_public = 1/);
+  assert.deepEqual(database.calls[0].values, []);
 });
 
 test("serves the Zeus gallery as its own public community archive", async () => {
@@ -578,9 +681,7 @@ test("combines multiple collection sources under one archive", async () => {
   assert.equal(body.runs[0].source_key, "fmkorea-bayern-board");
   assert.equal(body.runs[0].board_name, "해외축구 바이에른 게시판");
 
-  const countCall = findCall(database, "AS filtered_posts", "batch");
-  assert.deepEqual(countCall.values, [target]);
-  assert.doesNotMatch(countCall.sql, /upvotes >= \?|comments >= \?/);
+  assert.ok(database.calls.every(({ sql }) => !/COUNT\(|MAX\(|DISTINCT/i.test(sql)));
   const sourceCall = findCall(database, "FROM sources", "batch");
   assert.deepEqual(sourceCall.values, [target]);
 });
@@ -626,7 +727,7 @@ test("combines every public archive in the virtual all target", async () => {
   const { response, body } = await requestArchive(database, "?target=all");
 
   assert.equal(response.status, 200);
-  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("cache-control"), "public, max-age=15, s-maxage=120");
   assert.equal(body.target, "all");
   assert.equal(body.archive.archive_key, "all");
   assert.equal(body.archive.content_kind, "mixed");
@@ -643,15 +744,9 @@ test("combines every public archive in the virtual all target", async () => {
   assert.match(sourceCall.sql, /source_archive\.is_public = 1/);
   assert.deepEqual(sourceCall.values, []);
 
-  const summaryCall = findCall(database, "AS total_posts", "batch");
-  assert.match(summaryCall.sql, /INNER JOIN archives AS summary_archive/);
-  assert.match(summaryCall.sql, /INNER JOIN archives AS subject_archive/);
-  assert.deepEqual(summaryCall.values, []);
-
-  const countCall = findCall(database, "AS filtered_posts", "batch");
-  assert.match(countCall.sql, /public_archive\.archive_key = posts\.archive_key/);
-  assert.match(countCall.sql, /public_archive\.is_public = 1/);
-  assert.deepEqual(countCall.values, []);
+  const statsCall = findCall(database, "LEFT JOIN archive_stats AS stats", "all");
+  assert.doesNotMatch(statsCall.sql, /FROM posts/);
+  assert.ok(database.calls.every(({ sql }) => !/COUNT\(|MAX\(|DISTINCT/i.test(sql)));
 
   const postCall = findCall(
     database,
@@ -660,6 +755,9 @@ test("combines every public archive in the virtual all target", async () => {
   );
   assert.match(postCall.sql, /public_archive\.archive_key = posts\.archive_key/);
   assert.deepEqual(postCall.values, [30, 0]);
+  assert.equal(body.summary.total_posts, 2);
+  assert.equal(body.summary.filtered_posts, 2);
+  assert.equal(body.pagination.mode, "numbered");
 });
 
 test("excludes selected archives before counting and paginating the all target", async () => {
@@ -668,6 +766,17 @@ test("excludes selected archives before counting and paginating the all target",
     filteredPosts: 7,
     posts: makeRows(7),
   });
+  database.archiveStats = database.archiveStats.map((row) => ({
+    ...row,
+    active_post_count: row.archive_key === "dcinside-singularity"
+      ? 7
+      : row.archive_key === "game-news"
+        ? 8
+        : row.archive_key === "dcinside-agent-stack"
+          ? 5
+          : 0,
+    stats_version: 1,
+  }));
   const params = new URLSearchParams({ target: "all" });
   params.append("exclude_archive", "game-news");
   params.append("exclude_archive", "dcinside-agent-stack");
@@ -677,17 +786,17 @@ test("excludes selected archives before counting and paginating the all target",
 
   assert.equal(response.status, 200);
   assert.equal(body.summary.filtered_posts, 7);
-  const countCall = findCall(database, "AS filtered_posts", "batch");
-  assert.match(countCall.sql, /archive_key IN \(/);
-  assert.match(countCall.sql, /public_archive\.is_public = 1/);
-  assert.match(countCall.sql, /public_archive\.archive_key NOT IN \(\?, \?\)/);
-  assert.deepEqual(countCall.values, ["game-news", "dcinside-agent-stack"]);
+  assert.equal(body.summary.total_posts, 7);
+  assert.equal(body.pagination.mode, "numbered");
+  assert.ok(database.calls.every(({ sql }) => !/COUNT\(|MAX\(|DISTINCT/i.test(sql)));
 
   const postCall = findCall(
     database,
     "SELECT archive_key, source_key, external_post_id",
     "batch"
   );
+  assert.match(postCall.sql, /public_archive\.archive_key = posts\.archive_key/);
+  assert.match(postCall.sql, /public_archive\.archive_key NOT IN \(\?, \?\)/);
   assert.deepEqual(postCall.values, [
     "game-news",
     "dcinside-agent-stack",
@@ -771,13 +880,13 @@ test("serves article archives from published posts without exposing curation dat
   assert.equal(body.posts.length, 1);
   assert.equal(body.posts[0].qualifies_by, "llm-include");
   assert.equal(body.posts[0].feedback_key, "a".repeat(32));
-  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("cache-control"), "public, max-age=15, s-maxage=120");
   assert.equal(JSON.stringify(body).includes("game_news_candidates"), false);
   assert.equal(JSON.stringify(body).includes("model_id"), false);
   assert.ok(database.calls.every(({ sql }) => !sql.includes("game_news_")));
 });
 
-test("normalizes cache keys and reuses a five-minute edge response", async () => {
+test("normalizes cache keys and reuses a short-lived edge response", async () => {
   const database = new MockDatabase({ totalPosts: 1, posts: makeRows(1) });
   const stored = new Map();
   const cache = {
@@ -795,7 +904,11 @@ test("normalizes cache keys and reuses a five-minute edge response", async () =>
   try {
     const first = await requestArchive(database, "?page=01&page_size=30&junk=ignored");
     const callsAfterFirst = database.calls.length;
-    const second = await requestArchive(database, "?page=1&page_size=030");
+    const second = await requestArchive({
+      prepare() {
+        throw new Error("cache hit must not prepare D1");
+      },
+    }, "?page=1&page_size=030");
 
     assert.equal(first.response.status, 200);
     assert.equal(second.response.status, 200);
@@ -811,7 +924,76 @@ test("normalizes cache keys and reuses a five-minute edge response", async () =>
   }
 });
 
-test("clamps an out-of-range page to the last filtered page before querying rows", async () => {
+test("serves all and game-news public cache hits without touching D1", async (t) => {
+  for (const target of ["all", "game-news"]) {
+    await t.test(target, async () => {
+      const sources = target === "game-news"
+        ? [{ source_key: "game-news-inven", archive_key: "game-news" }]
+        : undefined;
+      const database = new MockDatabase({ totalPosts: 1, posts: makeRows(1), sources });
+      const stored = new Map();
+      const originalCaches = globalThis.caches;
+      globalThis.caches = {
+        default: {
+          async match(request) {
+            return stored.get(request.url)?.clone();
+          },
+          async put(request, response) {
+            stored.set(request.url, response.clone());
+          },
+        },
+      };
+
+      try {
+        const search = `?target=${target}`;
+        const first = await requestArchive(database, search);
+        const callsAfterMiss = database.calls.length;
+        const second = await requestArchive(database, search);
+        assert.equal(first.response.status, 200);
+        assert.equal(second.response.status, 200);
+        assert.deepEqual(second.body, first.body);
+        assert.equal(database.calls.length, callsAfterMiss);
+      } finally {
+        if (originalCaches === undefined) delete globalThis.caches;
+        else globalThis.caches = originalCaches;
+      }
+    });
+  }
+});
+
+test("bypasses edge caching for owner sessions so hide and restore stay fresh", async () => {
+  const database = new MockDatabase({ totalPosts: 1, posts: makeRows(1) });
+  let cacheCalls = 0;
+  const originalCaches = globalThis.caches;
+  globalThis.caches = {
+    default: {
+      async match() {
+        cacheCalls += 1;
+        return null;
+      },
+      async put() {
+        cacheCalls += 1;
+      },
+    },
+  };
+
+  try {
+    const { response } = await requestArchive(
+      database,
+      "?target=game-news",
+      { cookie: "__Host-tc_authenticated=session-token" }
+    );
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(cacheCalls, 0);
+    assert.ok(database.calls.length > 0);
+  } finally {
+    if (originalCaches === undefined) delete globalThis.caches;
+    else globalThis.caches = originalCaches;
+  }
+});
+
+test("clamps an out-of-range unfiltered page using the stats total", async () => {
   const database = new MockDatabase({
     totalPosts: 90,
     filteredPosts: 65,
@@ -821,9 +1003,10 @@ test("clamps an out-of-range page to the last filtered page before querying rows
   const { body } = await requestArchive(database, "?page=999&page_size=30");
 
   assert.equal(database.batchRequests.length, 1);
-  assert.equal(database.batchRequests[0].length, 8);
-  assert.equal(body.summary.filtered_posts, 65);
+  assert.equal(database.batchRequests[0].length, 6);
+  assert.equal(body.summary.filtered_posts, 90);
   assert.deepEqual(body.pagination, {
+    mode: "numbered",
     page: 3,
     page_size: 30,
     total_pages: 3,
@@ -831,9 +1014,11 @@ test("clamps an out-of-range page to the last filtered page before querying rows
     visible_to: 65,
     has_previous: true,
     has_next: false,
+    previous_cursor: null,
+    next_cursor: null,
   });
 
-  const postCall = findCall(database, "SELECT archive_key, source_key, external_post_id", "all");
+  const postCall = findCall(database, "SELECT archive_key, source_key, external_post_id", "batch");
   assert.deepEqual(postCall.values, ["dcinside-singularity", 30, 60]);
 });
 
@@ -867,7 +1052,8 @@ test("bounds query controls and allowlists every sort expression", async (t) => 
 
       assert.equal(body.pagination.page, 1);
       assert.equal(body.pagination.page_size, 100);
-      assert.equal(body.pagination.total_pages, 0);
+      assert.equal(body.pagination.mode, "sequential");
+      assert.equal(body.pagination.total_pages, null);
       assert.equal(body.pagination.visible_from, 0);
       assert.equal(body.pagination.visible_to, 0);
       assert.ok(postCall.sql.includes(expectedOrder));
@@ -876,9 +1062,9 @@ test("bounds query controls and allowlists every sort expression", async (t) => 
         "dcinside-singularity",
         "😀".repeat(100),
         `%${"x".repeat(100)}%`,
-        100,
-        0,
+        101,
       ]);
+      assert.doesNotMatch(postCall.sql, /OFFSET/i);
     });
   }
 });
@@ -924,6 +1110,31 @@ test("returns no subject options when D1 aggregation is malformed", async () => 
 
   assert.equal(response.status, 200);
   assert.deepEqual(body.subject_options, []);
+});
+
+test("merges capped subject JSON from fixed archive stats rows for the all view", async () => {
+  const database = new MockDatabase();
+  database.archiveStats = database.archiveStats.map((row, index) => ({
+    ...row,
+    subject_options_json: JSON.stringify([
+      `공통 말머리`,
+      ...Array.from({ length: 30 }, (_, optionIndex) => (
+        `${index}-${String(optionIndex).padStart(2, "0")}`
+      )),
+    ]),
+  }));
+
+  const { body } = await requestArchive(database, "?target=all");
+
+  assert.equal(body.subject_options.length, 100);
+  assert.equal(new Set(body.subject_options).size, 100);
+  const statsCall = findCall(database, "LEFT JOIN archive_stats AS stats", "all");
+  assert.match(statsCall.sql, /stats\.subject_options_json/);
+  assert.doesNotMatch(statsCall.sql, /archive_subject_stats|FROM posts/i);
+  assert.equal(
+    database.calls.filter(({ sql }) => sql.includes("archive_stats AS stats")).length,
+    1
+  );
 });
 
 test("returns a generic non-cacheable response when D1 fails", async () => {
@@ -979,6 +1190,6 @@ test("returns a generic non-cacheable response when the D1 read batch fails", as
   assert.equal(body.error, "Failed to load archive data from D1.");
   assert.ok(!JSON.stringify(body).includes("D1 batch unavailable"));
   assert.equal(database.calls.length, 1);
-  assert.equal(database.calls[0].method, "first");
+  assert.equal(database.calls[0].method, "all");
   assert.match(String(loggedError[1]), /D1 batch unavailable/);
 });

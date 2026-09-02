@@ -1175,6 +1175,24 @@ body[data-content-kind="mixed"] .cell-source {
   display: contents;
 }
 
+.pagination-sequential {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.pagination-current {
+  display: inline-flex;
+  min-width: var(--space-14);
+  height: var(--pagination-control-size);
+  align-items: center;
+  justify-content: center;
+  color: var(--color-ink-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
 .pagination-jump {
   display: flex;
   align-items: center;

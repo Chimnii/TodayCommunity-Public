@@ -22,7 +22,7 @@ const context = {
 };
 
 vm.runInNewContext(
-  `${appWithoutInitialization}\nglobalThis.__dashboardPaginationFunctions = {\n  getPageSequence: typeof getPageSequence === "function" ? getPageSequence : undefined,\n  parsePageJump: typeof parsePageJump === "function" ? parsePageJump : undefined,\n  normalizeSignedInteger: typeof normalizeSignedInteger === "function" ? normalizeSignedInteger : undefined,\n  createSubjectPreview: typeof createSubjectPreview === "function" ? createSubjectPreview : undefined,\n  splitSubjectGraphemes: typeof splitSubjectGraphemes === "function" ? splitSubjectGraphemes : undefined,\n  getArticleSourceLabel: typeof getArticleSourceLabel === "function" ? getArticleSourceLabel : undefined,\n  getArticleSubjectLabel: typeof getArticleSubjectLabel === "function" ? getArticleSubjectLabel : undefined,\n};`,
+  `${appWithoutInitialization}\nglobalThis.__dashboardPaginationFunctions = {\n  getPageSequence: typeof getPageSequence === "function" ? getPageSequence : undefined,\n  parsePageJump: typeof parsePageJump === "function" ? parsePageJump : undefined,\n  normalizeSignedInteger: typeof normalizeSignedInteger === "function" ? normalizeSignedInteger : undefined,\n  createSubjectPreview: typeof createSubjectPreview === "function" ? createSubjectPreview : undefined,\n  splitSubjectGraphemes: typeof splitSubjectGraphemes === "function" ? splitSubjectGraphemes : undefined,\n  getArticleSourceLabel: typeof getArticleSourceLabel === "function" ? getArticleSourceLabel : undefined,\n  getArticleSubjectLabel: typeof getArticleSubjectLabel === "function" ? getArticleSubjectLabel : undefined,\n  normalizePagination: typeof normalizePagination === "function" ? normalizePagination : undefined,\n};`,
   context,
   { filename: appUrl.pathname }
 );
@@ -35,6 +35,7 @@ const {
   splitSubjectGraphemes,
   getArticleSourceLabel,
   getArticleSubjectLabel,
+  normalizePagination,
 } =
   context.__dashboardPaginationFunctions;
 
@@ -46,6 +47,36 @@ test("loads the dashboard's pagination helpers without running initialize", () =
   assert.equal(typeof getPageSequence, "function");
   assert.equal(typeof parsePageJump, "function");
   assert.equal(typeof normalizeSignedInteger, "function");
+  assert.equal(typeof normalizePagination, "function");
+});
+
+test("normalizePagination keeps cursor navigation without inventing a total", () => {
+  assert.deepEqual(
+    { ...normalizePagination({
+      mode: "sequential",
+      page: 3,
+      page_size: 20,
+      total_pages: null,
+      visible_from: 41,
+      visible_to: 60,
+      has_previous: true,
+      has_next: true,
+      previous_cursor: "previous-token",
+      next_cursor: "next-token",
+    }, null, 20) },
+    {
+      mode: "sequential",
+      page: 3,
+      page_size: 20,
+      total_pages: null,
+      visible_from: 41,
+      visible_to: 60,
+      has_previous: true,
+      has_next: true,
+      previous_cursor: "previous-token",
+      next_cursor: "next-token",
+    }
+  );
 });
 
 test("normalizeSignedInteger preserves valid negative recommendation counts", () => {

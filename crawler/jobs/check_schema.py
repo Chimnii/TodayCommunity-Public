@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import argparse
 import json
+import re
 from typing import Dict, Iterable, List, Sequence, Tuple
 
 from crawler.config import get_required_env
@@ -48,6 +50,21 @@ REQUIRED_COLUMNS: Dict[str, Tuple[str, ...]] = {
         "last_seen_at",
         "qualifies_by",
         "status",
+    ),
+    "archive_stats": (
+        "archive_key",
+        "active_post_count",
+        "latest_seen_at",
+        "subject_options_json",
+        "stats_version",
+        "mutation_token",
+        "updated_at",
+    ),
+    "archive_subject_stats": (
+        "archive_key",
+        "subject",
+        "active_post_count",
+        "updated_at",
     ),
     "crawl_runs": (
         "id",
@@ -103,6 +120,8 @@ REQUIRED_PRIMARY_KEYS: Dict[str, Tuple[str, ...]] = {
     "archives": ("archive_key",),
     "sources": ("source_key",),
     "posts": ("id",),
+    "archive_stats": ("archive_key",),
+    "archive_subject_stats": ("archive_key", "subject"),
     "crawl_runs": ("id",),
     "source_state": ("source_key",),
     "coverage_intervals": (
@@ -126,6 +145,62 @@ REQUIRED_INDEXES: Dict[str, Dict[str, Tuple[str, ...]]] = {
         "idx_crawl_runs_source_id": ("source_key", "id"),
     },
 }
+
+REQUIRED_PARTIAL_INDEXES: Dict[str, Dict[str, Tuple[str, ...]]] = {
+    "posts": {
+        "idx_posts_active_created": ("created_at", "id"),
+        "idx_posts_active_upvotes": ("upvotes", "created_at", "id"),
+        "idx_posts_active_comments": ("comments", "created_at", "id"),
+    },
+}
+
+REQUIRED_INDEX_DIRECTIONS: Dict[str, Dict[str, Tuple[str, ...]]] = {
+    "crawl_runs": {
+        "idx_crawl_runs_source_status_id": ("ASC", "ASC", "DESC"),
+        "idx_crawl_runs_source_id": ("ASC", "DESC"),
+    },
+    "posts": {
+        "idx_posts_active_created": ("DESC", "DESC"),
+        "idx_posts_active_upvotes": ("DESC", "DESC", "DESC"),
+        "idx_posts_active_comments": ("DESC", "DESC", "DESC"),
+    },
+}
+
+IndexVariant = Tuple[Tuple[str, ...], Tuple[str, ...], int]
+
+REQUIRED_INDEX_VARIANTS: Dict[
+    str,
+    Dict[str, Tuple[IndexVariant, ...]],
+] = {
+    "posts": {
+        "idx_posts_archive_created_at": (
+            (("archive_key", "created_at"), ("ASC", "DESC"), 0),
+            (
+                ("archive_key", "created_at", "id"),
+                ("ASC", "DESC", "DESC"),
+                1,
+            ),
+        ),
+        "idx_posts_archive_upvotes": (
+            (("archive_key", "upvotes"), ("ASC", "DESC"), 0),
+            (
+                ("archive_key", "upvotes", "created_at", "id"),
+                ("ASC", "DESC", "DESC", "DESC"),
+                1,
+            ),
+        ),
+        "idx_posts_archive_comments": (
+            (("archive_key", "comments"), ("ASC", "DESC"), 0),
+            (
+                ("archive_key", "comments", "created_at", "id"),
+                ("ASC", "DESC", "DESC", "DESC"),
+                1,
+            ),
+        ),
+    },
+}
+
+REQUIRED_PARTIAL_INDEX_PREDICATE = "status='active'"
 
 REQUIRED_COLUMN_PROPERTIES = {
     "sources": {
@@ -157,6 +232,40 @@ REQUIRED_COLUMN_PROPERTIES = {
             "default": "'second'",
         },
     },
+    "archive_stats": {
+        "active_post_count": {
+            "type": "INTEGER",
+            "notnull": 1,
+            "default": "0",
+        },
+        "latest_seen_at": {
+            "type": "TEXT",
+            "notnull": 1,
+            "default": "''",
+        },
+        "subject_options_json": {
+            "type": "TEXT",
+            "notnull": 1,
+            "default": "'[]'",
+        },
+        "stats_version": {
+            "type": "INTEGER",
+            "notnull": 1,
+            "default": "0",
+        },
+        "mutation_token": {
+            "type": "TEXT",
+            "notnull": 1,
+            "default": "''",
+        },
+    },
+    "archive_subject_stats": {
+        "active_post_count": {
+            "type": "INTEGER",
+            "notnull": 1,
+            "default": "0",
+        },
+    },
 }
 
 REQUIRED_TABLES = tuple(REQUIRED_COLUMNS)
@@ -169,7 +278,7 @@ class SchemaValidationError(RuntimeError):
         super().__init__("; ".join(str(error) for error in errors))
 
 
-def inspect_schema(client: D1Client) -> dict:
+def inspect_schema(client: D1Client, *, deep_data_audit: bool = False) -> dict:
     """Inspect the runtime-critical D1 schema without modifying it."""
 
     table_rows = client.query("PRAGMA table_list")
@@ -194,10 +303,22 @@ def inspect_schema(client: D1Client) -> dict:
             f"PRAGMA index_list({_quote_identifier(table_name)})"
         )
         unique_keys = _unique_keys(client, index_rows)
+        fixed_index_columns = {
+            **REQUIRED_INDEXES.get(table_name, {}),
+            **REQUIRED_PARTIAL_INDEXES.get(table_name, {}),
+        }
+        index_variants = REQUIRED_INDEX_VARIANTS.get(table_name, {})
+        required_index_columns = {
+            **fixed_index_columns,
+            **{
+                index_name: variants[-1][0]
+                for index_name, variants in index_variants.items()
+            },
+        }
         required_indexes = _required_index_details(
             client,
             index_rows,
-            REQUIRED_INDEXES.get(table_name, {}),
+            required_index_columns,
         )
 
         details[table_name] = {
@@ -255,10 +376,11 @@ def inspect_schema(client: D1Client) -> dict:
                     f"found {found}"
                 )
 
-        for index_name, expected_columns in REQUIRED_INDEXES.get(
-            table_name, {}
-        ).items():
+        for index_name, expected_columns in fixed_index_columns.items():
             actual = required_indexes.get(index_name)
+            expected_partial = int(
+                index_name in REQUIRED_PARTIAL_INDEXES.get(table_name, {})
+            )
             if actual is None:
                 errors.append(
                     f"table {table_name!r} is missing required index "
@@ -266,11 +388,103 @@ def inspect_schema(client: D1Client) -> dict:
                 )
                 continue
             actual_columns = tuple(actual["columns"])
-            if actual_columns != expected_columns or actual["partial"] != 0:
+            if (
+                actual_columns != expected_columns
+                or actual["partial"] != expected_partial
+            ):
+                index_kind = "partial" if expected_partial else "non-partial"
                 errors.append(
                     f"table {table_name!r} index {index_name!r} must be a "
-                    f"non-partial index on {_format_key(expected_columns)}; found "
+                    f"{index_kind} index on {_format_key(expected_columns)}; found "
                     f"{_format_key(actual_columns)} (partial={actual['partial']})"
+                )
+                continue
+            expected_directions = REQUIRED_INDEX_DIRECTIONS[table_name][index_name]
+            actual_directions = tuple(actual["directions"])
+            if actual_directions != expected_directions:
+                errors.append(
+                    f"table {table_name!r} index {index_name!r} must order "
+                    f"{_format_index_order(expected_columns, expected_directions)}; "
+                    f"found {_format_index_order(actual_columns, actual_directions)}"
+                )
+                continue
+            actual_collations = tuple(actual["collations"])
+            expected_collations = ("BINARY",) * len(expected_columns)
+            if actual_collations != expected_collations:
+                errors.append(
+                    f"table {table_name!r} index {index_name!r} must use BINARY "
+                    "collation for every key column; found "
+                    f"{_format_key(actual_collations)}"
+                )
+                continue
+            if (
+                expected_partial
+                and actual["predicate"] != REQUIRED_PARTIAL_INDEX_PREDICATE
+            ):
+                errors.append(
+                    f"table {table_name!r} index {index_name!r} must use "
+                    "WHERE status = 'active'; found "
+                    f"{_format_index_predicate(actual['predicate'])}"
+                )
+
+        for index_name, accepted_variants in index_variants.items():
+            actual = required_indexes.get(index_name)
+            accepted = ", or ".join(
+                f"{'partial' if partial else 'non-partial'} index on "
+                f"{_format_key(columns)}"
+                for columns, _, partial in accepted_variants
+            )
+            if actual is None:
+                errors.append(
+                    f"table {table_name!r} is missing required index "
+                    f"{index_name!r}; accepted variants: {accepted}"
+                )
+                continue
+            actual_shape = (
+                tuple(actual["columns"]),
+                actual["partial"],
+            )
+            matched_variant = next(
+                (
+                    variant
+                    for variant in accepted_variants
+                    if (variant[0], variant[2]) == actual_shape
+                ),
+                None,
+            )
+            if matched_variant is None:
+                errors.append(
+                    f"table {table_name!r} index {index_name!r} must be a "
+                    f"{accepted}; found {_format_key(actual_shape[0])} "
+                    f"(partial={actual_shape[1]})"
+                )
+                continue
+            expected_directions = matched_variant[1]
+            actual_directions = tuple(actual["directions"])
+            if actual_directions != expected_directions:
+                errors.append(
+                    f"table {table_name!r} index {index_name!r} must order "
+                    f"{_format_index_order(actual_shape[0], expected_directions)}; "
+                    f"found {_format_index_order(actual_shape[0], actual_directions)}"
+                )
+                continue
+            actual_collations = tuple(actual["collations"])
+            expected_collations = ("BINARY",) * len(actual_shape[0])
+            if actual_collations != expected_collations:
+                errors.append(
+                    f"table {table_name!r} index {index_name!r} must use BINARY "
+                    "collation for every key column; found "
+                    f"{_format_key(actual_collations)}"
+                )
+                continue
+            if (
+                actual_shape[1]
+                and actual["predicate"] != REQUIRED_PARTIAL_INDEX_PREDICATE
+            ):
+                errors.append(
+                    f"table {table_name!r} index {index_name!r} must use "
+                    "WHERE status = 'active'; found "
+                    f"{_format_index_predicate(actual['predicate'])}"
                 )
 
     post_columns = set(details.get("posts", {}).get("columns", []))
@@ -282,7 +496,7 @@ def inspect_schema(client: D1Client) -> dict:
         "created_at_basis",
         "created_at_precision",
     }
-    if required_post_time_columns.issubset(post_columns):
+    if deep_data_audit and required_post_time_columns.issubset(post_columns):
         time_audit = client.query(
             """
             SELECT
@@ -318,6 +532,96 @@ def inspect_schema(client: D1Client) -> dict:
                 f"timestamp metadata: {audit}"
             )
 
+        stats_audit_rows = client.query(
+            """
+            WITH actual_archive AS (
+              SELECT archive_key, count(*) AS active_post_count
+              FROM posts
+              WHERE status = 'active'
+              GROUP BY archive_key
+            ),
+            actual_subject AS (
+              SELECT archive_key, trim(subject) AS subject,
+                     count(*) AS active_post_count
+              FROM posts
+              WHERE status = 'active' AND trim(subject) <> ''
+              GROUP BY archive_key, trim(subject)
+            ),
+            archive_mismatches AS (
+              SELECT archive.archive_key
+              FROM archives AS archive
+              LEFT JOIN archive_stats AS stored
+                ON stored.archive_key = archive.archive_key
+              LEFT JOIN actual_archive AS actual
+                ON actual.archive_key = archive.archive_key
+              WHERE stored.archive_key IS NULL
+                 OR stored.active_post_count
+                    <> coalesce(actual.active_post_count, 0)
+              UNION ALL
+              SELECT stored.archive_key
+              FROM archive_stats AS stored
+              LEFT JOIN archives AS archive
+                ON archive.archive_key = stored.archive_key
+              WHERE archive.archive_key IS NULL
+            ),
+            subject_mismatches AS (
+              SELECT actual.archive_key, actual.subject
+              FROM actual_subject AS actual
+              LEFT JOIN archive_subject_stats AS stored
+                ON stored.archive_key = actual.archive_key
+               AND stored.subject = actual.subject
+              WHERE stored.archive_key IS NULL
+                 OR stored.active_post_count <> actual.active_post_count
+              UNION ALL
+              SELECT stored.archive_key, stored.subject
+              FROM archive_subject_stats AS stored
+              LEFT JOIN actual_subject AS actual
+                ON actual.archive_key = stored.archive_key
+               AND actual.subject = stored.subject
+              WHERE actual.archive_key IS NULL
+            ),
+            expected_options AS (
+              SELECT archive.archive_key,
+                     coalesce((
+                       SELECT json_group_array(subject)
+                       FROM (
+                         SELECT subject
+                         FROM actual_subject
+                         WHERE archive_key = archive.archive_key
+                           AND length(subject) <= 100
+                         ORDER BY subject COLLATE NOCASE ASC, subject ASC
+                         LIMIT 100
+                       )
+                     ), '[]') AS subject_options_json
+              FROM archives AS archive
+            )
+            SELECT
+              (SELECT count(*) FROM archive_mismatches)
+                AS archive_count_mismatches,
+              (SELECT count(*) FROM subject_mismatches)
+                AS subject_count_mismatches,
+              (
+                SELECT count(*)
+                FROM expected_options AS expected
+                LEFT JOIN archive_stats AS stored
+                  ON stored.archive_key = expected.archive_key
+                WHERE stored.archive_key IS NULL
+                   OR json(stored.subject_options_json)
+                      IS NOT json(expected.subject_options_json)
+              ) AS subject_options_mismatches
+            """
+        )
+        stats_audit = stats_audit_rows[0] if stats_audit_rows else {}
+        details["archive_stats"]["data_audit"] = stats_audit
+        stats_mismatch_total = sum(
+            _pragma_int(value) for value in stats_audit.values()
+        )
+        if stats_mismatch_total:
+            errors.append(
+                "archive statistics do not match active posts; rerun "
+                f"cloudflare/migrations/013_archive_stats.sql: {stats_audit}"
+            )
+
     return {
         "valid": not errors,
         "required_tables": list(REQUIRED_TABLES),
@@ -327,8 +631,8 @@ def inspect_schema(client: D1Client) -> dict:
     }
 
 
-def validate_schema(client: D1Client) -> dict:
-    report = inspect_schema(client)
+def validate_schema(client: D1Client, *, deep_data_audit: bool = False) -> dict:
+    report = inspect_schema(client, deep_data_audit=deep_data_audit)
     if not report["valid"]:
         raise SchemaValidationError(report)
     return report
@@ -386,15 +690,82 @@ def _required_index_details(
         index_row = by_name.get(index_name)
         if index_row is None:
             continue
-        column_rows = client.query(
-            f"PRAGMA index_info({_quote_identifier(index_name)})"
+        index_column_rows = client.query(
+            f"PRAGMA index_xinfo({_quote_identifier(index_name)})"
         )
-        ordered = sorted(column_rows, key=lambda row: _pragma_int(row.get("seqno")))
+        definition_rows = client.query(
+            "SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = ?",
+            [index_name],
+        )
+        definition_sql = (
+            str(definition_rows[0].get("sql") or "")
+            if definition_rows
+            else ""
+        )
+        key_rows = [
+            row
+            for row in index_column_rows
+            if _pragma_int(row.get("key")) == 1
+        ]
+        ordered = sorted(key_rows, key=lambda row: _pragma_int(row.get("seqno")))
         details[index_name] = {
             "columns": tuple(str(row.get("name") or "") for row in ordered),
+            "directions": tuple(
+                "DESC" if _pragma_int(row.get("desc")) else "ASC"
+                for row in ordered
+            ),
+            "collations": tuple(
+                str(row.get("coll") or "").upper()
+                for row in ordered
+            ),
             "partial": _pragma_int(index_row.get("partial")),
+            "predicate": _normalized_index_predicate(definition_sql),
         }
     return details
+
+
+def _normalized_index_predicate(definition_sql: str) -> str:
+    match = re.search(r"\bWHERE\b(?P<predicate>.+)$", definition_sql, re.I | re.S)
+    if match is None:
+        return ""
+
+    predicate = match.group("predicate").strip().rstrip(";").strip()
+    normalized = []
+    in_string = False
+    index = 0
+    while index < len(predicate):
+        character = predicate[index]
+        if character == "'":
+            normalized.append(character)
+            if in_string and index + 1 < len(predicate) and predicate[index + 1] == "'":
+                normalized.append("'")
+                index += 2
+                continue
+            in_string = not in_string
+        elif not in_string and character.isspace():
+            index += 1
+            continue
+        elif in_string:
+            normalized.append(character)
+        else:
+            normalized.append(character.casefold())
+        index += 1
+    return "".join(normalized)
+
+
+def _format_index_predicate(predicate: object) -> str:
+    normalized = str(predicate or "")
+    return f"WHERE {normalized}" if normalized else "no WHERE predicate"
+
+
+def _format_index_order(
+    columns: Sequence[str],
+    directions: Sequence[str],
+) -> str:
+    return _format_key(
+        f"{column} {direction}"
+        for column, direction in zip(columns, directions)
+    )
 
 
 def _pragma_int(value: object) -> int:
@@ -413,13 +784,20 @@ def _format_key(columns: Iterable[str]) -> str:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Validate the crawler D1 schema.")
+    parser.add_argument(
+        "--deep-data-audit",
+        action="store_true",
+        help="Scan post rows for canonical timestamp data after migrations.",
+    )
+    args = parser.parse_args()
     client = D1Client(
         account_id=get_required_env("TC_CF_ACCOUNT_ID"),
         database_id=get_required_env("TC_CF_DATABASE_ID"),
         api_token=get_required_env("TC_CF_API_TOKEN"),
     )
     try:
-        report = validate_schema(client)
+        report = validate_schema(client, deep_data_audit=args.deep_data_audit)
     except SchemaValidationError as exc:
         print(json.dumps(exc.report, ensure_ascii=False, indent=2))
         raise SystemExit(f"D1 schema preflight failed: {exc}") from exc

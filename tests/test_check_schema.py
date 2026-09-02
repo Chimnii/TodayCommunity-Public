@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import unittest
 from pathlib import Path
 from typing import Iterable, Optional
 
-from crawler.jobs.check_schema import SchemaValidationError, validate_schema
+from crawler.jobs.check_schema import (
+    SchemaValidationError,
+    inspect_schema,
+    validate_schema,
+)
 
 
 SCHEMA_PATH = Path(__file__).resolve().parents[1] / "cloudflare" / "schema.sql"
@@ -59,6 +64,32 @@ ARCHIVE_FILTER_MIGRATION_PATH = (
     / "012_secret_link_archive_filters.sql"
 )
 ARCHIVE_FILTER_MIGRATION = ARCHIVE_FILTER_MIGRATION_PATH.read_text(encoding="utf-8")
+ARCHIVE_STATS_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "cloudflare"
+    / "migrations"
+    / "013_archive_stats.sql"
+)
+ARCHIVE_STATS_MIGRATION = ARCHIVE_STATS_MIGRATION_PATH.read_text(encoding="utf-8")
+ARCHIVE_KEYSET_MIGRATION_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "cloudflare"
+    / "migrations"
+    / "014_archive_keyset_indexes.sql"
+)
+ARCHIVE_KEYSET_MIGRATION = ARCHIVE_KEYSET_MIGRATION_PATH.read_text(encoding="utf-8")
+LEGACY_ARCHIVE_INDEX_DEFINITIONS = """
+DROP INDEX IF EXISTS idx_posts_archive_created_at;
+DROP INDEX IF EXISTS idx_posts_archive_upvotes;
+DROP INDEX IF EXISTS idx_posts_archive_comments;
+
+CREATE INDEX idx_posts_archive_created_at
+  ON posts (archive_key, created_at DESC);
+CREATE INDEX idx_posts_archive_upvotes
+  ON posts (archive_key, upvotes DESC);
+CREATE INDEX idx_posts_archive_comments
+  ON posts (archive_key, comments DESC);
+"""
 POST_TIME_METADATA_DEFINITION = """  created_at_basis TEXT NOT NULL DEFAULT 'source'
     CHECK (created_at_basis IN ('source', 'first_seen')),
   created_at_precision TEXT NOT NULL DEFAULT 'second'
@@ -255,6 +286,343 @@ class SchemaPreflightTests(unittest.TestCase):
         self.assertEqual(canonical_column["type"], "TEXT")
         self.assertEqual(canonical_column["notnull"], 0)
         self.assertIsNone(canonical_column["dflt_value"])
+
+    def test_default_preflight_does_not_scan_post_rows(self) -> None:
+        client = SqliteClient()
+        calls = []
+        original_query = client.query
+
+        def recording_query(sql, params=None):
+            calls.append(sql)
+            return original_query(sql, params)
+
+        client.query = recording_query
+        report = validate_schema(client)
+
+        self.assertTrue(report["valid"])
+        self.assertNotIn("timestamp_audit", report["tables"]["posts"])
+        self.assertFalse(any("FROM posts" in sql for sql in calls))
+
+    def test_deep_data_audit_detects_archive_stats_drift(self) -> None:
+        client = SqliteClient()
+        client.query(
+            """
+            UPDATE archive_stats
+            SET active_post_count = 1
+            WHERE archive_key = 'dcinside-singularity'
+            """
+        )
+
+        self.assertTrue(validate_schema(client)["valid"])
+        with self.assertRaises(SchemaValidationError) as caught:
+            validate_schema(client, deep_data_audit=True)
+
+        self.assertEqual(
+            caught.exception.report["tables"]["archive_stats"]["data_audit"],
+            {
+                "archive_count_mismatches": 1,
+                "subject_count_mismatches": 0,
+                "subject_options_mismatches": 0,
+            },
+        )
+        self.assertTrue(
+            any(
+                "archive statistics do not match active posts" in error
+                for error in caught.exception.report["errors"]
+            )
+        )
+
+    def test_archive_stats_migration_backfills_once_and_caps_subject_options(self) -> None:
+        marker = "CREATE TABLE IF NOT EXISTS archive_stats"
+        self.assertIn(marker, SCHEMA)
+        client = SqliteClient(SCHEMA.split(marker, 1)[0])
+        rows = []
+        for index in range(105):
+            rows.append(
+                (
+                    "migration-source",
+                    "dcinside-singularity",
+                    str(index),
+                    f"subject-{index:03d}",
+                    "active",
+                )
+            )
+        rows.append(
+            (
+                "migration-source",
+                "dcinside-singularity",
+                "long-subject",
+                "!" * 101,
+                "active",
+            )
+        )
+        rows.append(
+            (
+                "migration-source",
+                "dcinside-singularity",
+                "deleted",
+                "not-active",
+                "deleted",
+            )
+        )
+        client.connection.executemany(
+            """
+            INSERT INTO posts (
+              source_key, archive_key, external_post_id, post_url, subject,
+              title, created_at, created_at_raw, fetched_at, first_seen_at,
+              last_seen_at, qualifies_by, status
+            ) VALUES (
+              ?, ?, ?, 'https://example.com', ?, 'post',
+              '2026-08-29T00:00:00Z', 'raw', '2026-08-29T00:00:00Z',
+              '2026-08-29T00:00:00Z', '2026-08-29T00:00:00Z', 'test', ?
+            )
+            """,
+            rows,
+        )
+
+        client.connection.executescript(ARCHIVE_STATS_MIGRATION)
+        client.connection.executescript(ARCHIVE_STATS_MIGRATION)
+
+        stats = client.query(
+            """
+            SELECT active_post_count, subject_options_json
+            FROM archive_stats WHERE archive_key = 'dcinside-singularity'
+            """
+        )[0]
+        self.assertEqual(stats["active_post_count"], 106)
+        subject_options = json.loads(stats["subject_options_json"])
+        self.assertEqual(len(subject_options), 100)
+        self.assertNotIn("!" * 101, subject_options)
+        self.assertEqual(
+            client.query(
+                """
+                SELECT count(*) AS count
+                FROM archive_subject_stats
+                WHERE archive_key = 'dcinside-singularity'
+                """
+            ),
+            [{"count": 106}],
+        )
+        audit_report = inspect_schema(client, deep_data_audit=True)
+        self.assertEqual(
+            audit_report["tables"]["archive_stats"]["data_audit"],
+            {
+                "archive_count_mismatches": 0,
+                "subject_count_mismatches": 0,
+                "subject_options_mismatches": 0,
+            },
+        )
+
+    def test_staged_archive_indexes_accept_legacy_then_final_forms(self) -> None:
+        self.assertNotIn(
+            "DROP INDEX IF EXISTS idx_posts_archive_created_at",
+            ARCHIVE_STATS_MIGRATION,
+        )
+        self.assertNotIn(
+            "CREATE INDEX IF NOT EXISTS idx_posts_archive_created_at",
+            ARCHIVE_STATS_MIGRATION,
+        )
+        client = SqliteClient()
+        client.connection.executescript(LEGACY_ARCHIVE_INDEX_DEFINITIONS)
+
+        legacy_report = validate_schema(client)
+        self.assertTrue(legacy_report["valid"])
+        client.connection.executescript(ARCHIVE_STATS_MIGRATION)
+        self.assertTrue(validate_schema(client)["valid"])
+        legacy_rows = {
+            row["name"]: row
+            for row in client.query("PRAGMA index_list(posts)")
+            if row["name"].startswith("idx_posts_archive_")
+        }
+        self.assertEqual(
+            {
+                name: row["partial"]
+                for name, row in legacy_rows.items()
+                if name != "idx_posts_archive_canonical"
+            },
+            {
+                "idx_posts_archive_created_at": 0,
+                "idx_posts_archive_upvotes": 0,
+                "idx_posts_archive_comments": 0,
+            },
+        )
+
+        client.connection.executescript(ARCHIVE_KEYSET_MIGRATION)
+
+        final_report = validate_schema(client)
+        self.assertTrue(final_report["valid"])
+        final_rows = {
+            row["name"]: row
+            for row in client.query("PRAGMA index_list(posts)")
+            if row["name"] in {
+                "idx_posts_archive_created_at",
+                "idx_posts_archive_upvotes",
+                "idx_posts_archive_comments",
+            }
+        }
+        self.assertEqual(
+            {name: row["partial"] for name, row in final_rows.items()},
+            {
+                "idx_posts_archive_created_at": 1,
+                "idx_posts_archive_upvotes": 1,
+                "idx_posts_archive_comments": 1,
+            },
+        )
+        self.assertEqual(
+            final_report["tables"]["posts"]["required_indexes"]
+            ["idx_posts_archive_upvotes"],
+            ["archive_key", "upvotes", "created_at", "id"],
+        )
+
+    def test_archive_index_mixed_legacy_partial_shape_fails_preflight(self) -> None:
+        client = SqliteClient()
+        client.connection.execute("DROP INDEX idx_posts_archive_created_at")
+        client.connection.execute(
+            """
+            CREATE INDEX idx_posts_archive_created_at
+            ON posts (archive_key, created_at DESC)
+            WHERE status = 'active'
+            """
+        )
+
+        with self.assertRaises(SchemaValidationError) as caught:
+            validate_schema(client)
+
+        self.assertTrue(
+            any(
+                "index 'idx_posts_archive_created_at' must be a non-partial "
+                "index on (archive_key, created_at), or partial index on "
+                "(archive_key, created_at, id)" in error
+                for error in caught.exception.report["errors"]
+            )
+        )
+
+    def test_required_partial_indexes_reject_wrong_status_predicates(self) -> None:
+        cases = (
+            (
+                "idx_posts_active_created",
+                "created_at DESC, id DESC",
+            ),
+            (
+                "idx_posts_archive_created_at",
+                "archive_key, created_at DESC, id DESC",
+            ),
+        )
+
+        for index_name, columns in cases:
+            with self.subTest(index=index_name):
+                client = SqliteClient()
+                client.connection.execute(f"DROP INDEX {index_name}")
+                client.connection.execute(
+                    f"""
+                    CREATE INDEX {index_name}
+                    ON posts ({columns})
+                    WHERE status = 'deleted'
+                    """
+                )
+
+                with self.assertRaises(SchemaValidationError) as caught:
+                    validate_schema(client)
+
+                self.assertIn(
+                    f"table 'posts' index '{index_name}' must use "
+                    "WHERE status = 'active'; found WHERE status='deleted'",
+                    caught.exception.report["errors"],
+                )
+
+    def test_required_partial_predicate_normalizes_sql_whitespace_and_case(self) -> None:
+        client = SqliteClient()
+        client.connection.execute("DROP INDEX idx_posts_active_created")
+        client.connection.execute(
+            """
+            CREATE INDEX idx_posts_active_created
+            ON posts (created_at DESC, id DESC)
+            WHERE STATUS    =    'active'
+            """
+        )
+
+        self.assertTrue(validate_schema(client)["valid"])
+
+    def test_required_indexes_reject_mixed_sort_directions(self) -> None:
+        cases = (
+            (
+                "idx_posts_archive_created_at",
+                "archive_key DESC, created_at DESC",
+                "",
+                "(archive_key ASC, created_at DESC)",
+                "(archive_key DESC, created_at DESC)",
+            ),
+            (
+                "idx_posts_archive_upvotes",
+                "archive_key, upvotes DESC, created_at ASC, id DESC",
+                "WHERE status = 'active'",
+                "(archive_key ASC, upvotes DESC, created_at DESC, id DESC)",
+                "(archive_key ASC, upvotes DESC, created_at ASC, id DESC)",
+            ),
+            (
+                "idx_posts_active_comments",
+                "comments DESC, created_at ASC, id DESC",
+                "WHERE status = 'active'",
+                "(comments DESC, created_at DESC, id DESC)",
+                "(comments DESC, created_at ASC, id DESC)",
+            ),
+        )
+
+        for index_name, columns, predicate, expected, actual in cases:
+            with self.subTest(index=index_name):
+                client = SqliteClient()
+                client.connection.execute(f"DROP INDEX {index_name}")
+                client.connection.execute(
+                    f"""
+                    CREATE INDEX {index_name}
+                    ON posts ({columns})
+                    {predicate}
+                    """
+                )
+
+                with self.assertRaises(SchemaValidationError) as caught:
+                    validate_schema(client)
+
+                self.assertIn(
+                    f"table 'posts' index '{index_name}' must order {expected}; "
+                    f"found {actual}",
+                    caught.exception.report["errors"],
+                )
+
+    def test_required_indexes_reject_non_binary_key_collations(self) -> None:
+        cases = (
+            (
+                "idx_posts_active_created",
+                "created_at COLLATE NOCASE DESC, id DESC",
+            ),
+            (
+                "idx_posts_archive_created_at",
+                "archive_key, created_at COLLATE NOCASE DESC, id DESC",
+            ),
+        )
+
+        for index_name, columns in cases:
+            with self.subTest(index=index_name):
+                client = SqliteClient()
+                client.connection.execute(f"DROP INDEX {index_name}")
+                client.connection.execute(
+                    f"""
+                    CREATE INDEX {index_name}
+                    ON posts ({columns})
+                    WHERE status = 'active'
+                    """
+                )
+
+                with self.assertRaises(SchemaValidationError) as caught:
+                    validate_schema(client)
+
+                self.assertTrue(
+                    any(
+                        f"index '{index_name}' must use BINARY collation"
+                        in error
+                        for error in caught.exception.report["errors"]
+                    )
+                )
 
     def test_utc_migration_normalizes_existing_rows_without_losing_source_time(self) -> None:
         self.assertIn(POST_TIME_METADATA_DEFINITION, SCHEMA)
@@ -492,7 +860,8 @@ class SchemaPreflightTests(unittest.TestCase):
                 }
             ],
         )
-        report = validate_schema(client)
+        client.connection.executescript(ARCHIVE_STATS_MIGRATION)
+        report = validate_schema(client, deep_data_audit=True)
         self.assertTrue(report["valid"])
         self.assertEqual(
             {
@@ -533,8 +902,9 @@ class SchemaPreflightTests(unittest.TestCase):
             """
         )
 
+        client.connection.executescript(ARCHIVE_STATS_MIGRATION)
         with self.assertRaises(SchemaValidationError) as caught:
-            validate_schema(client)
+            validate_schema(client, deep_data_audit=True)
 
         self.assertTrue(
             any(
@@ -876,13 +1246,14 @@ class SchemaPreflightTests(unittest.TestCase):
             EXPLAIN QUERY PLAN
             SELECT id
             FROM posts
-            WHERE archive_key IN (
-              SELECT archive_key
+            WHERE EXISTS (
+              SELECT 1
               FROM archives
-              WHERE is_public = 1
+              WHERE archives.archive_key = posts.archive_key
+                AND is_public = 1
                 AND archive_key NOT IN (?, ?)
             )
-              AND status = 'active'
+              AND posts.status = 'active'
             ORDER BY created_at DESC, id DESC
             LIMIT 30
             """,
@@ -891,11 +1262,87 @@ class SchemaPreflightTests(unittest.TestCase):
 
         self.assertTrue(
             any(
-                "SEARCH posts USING INDEX idx_posts_archive_" in row["detail"]
+                "idx_posts_active_created" in row["detail"]
                 for row in plan
             )
         )
-        self.assertFalse(any("SCAN posts" in row["detail"] for row in plan))
+        self.assertFalse(any("TEMP B-TREE" in row["detail"] for row in plan))
+
+    def test_archive_keyset_plans_use_active_partial_sort_indexes(self) -> None:
+        client = SqliteClient()
+        cases = (
+            (
+                "archive_key = ? AND status = 'active'",
+                "created_at DESC, id DESC",
+                "idx_posts_archive_created_at",
+                ["dcinside-singularity"],
+            ),
+            (
+                "archive_key = ? AND status = 'active'",
+                "upvotes DESC, created_at DESC, id DESC",
+                "idx_posts_archive_upvotes",
+                ["dcinside-singularity"],
+            ),
+            (
+                "archive_key = ? AND status = 'active'",
+                "comments DESC, created_at DESC, id DESC",
+                "idx_posts_archive_comments",
+                ["dcinside-singularity"],
+            ),
+            (
+                "status = 'active'",
+                "created_at DESC, id DESC",
+                "idx_posts_active_created",
+                [],
+            ),
+            (
+                "status = 'active'",
+                "upvotes DESC, created_at DESC, id DESC",
+                "idx_posts_active_upvotes",
+                [],
+            ),
+            (
+                "status = 'active'",
+                "comments DESC, created_at DESC, id DESC",
+                "idx_posts_active_comments",
+                [],
+            ),
+        )
+
+        for where_sql, order_sql, index_name, params in cases:
+            with self.subTest(index=index_name):
+                plan = client.query(
+                    f"""
+                    EXPLAIN QUERY PLAN
+                    SELECT id
+                    FROM posts
+                    WHERE {where_sql}
+                    ORDER BY {order_sql}
+                    LIMIT 51
+                    """,
+                    params,
+                )
+                details = "\n".join(row["detail"] for row in plan)
+                self.assertIn(index_name, details)
+                self.assertNotIn("TEMP B-TREE", details)
+
+    def test_missing_active_keyset_index_fails_preflight(self) -> None:
+        definition = """CREATE INDEX IF NOT EXISTS idx_posts_active_created
+  ON posts (created_at DESC, id DESC)
+  WHERE status = 'active';
+
+"""
+        self.assertIn(definition, SCHEMA)
+        client = SqliteClient(SCHEMA.replace(definition, "", 1))
+
+        with self.assertRaises(SchemaValidationError) as caught:
+            validate_schema(client)
+
+        self.assertIn(
+            "table 'posts' is missing required index "
+            "'idx_posts_active_created' on (created_at, id)",
+            caught.exception.report["errors"],
+        )
 
     def test_missing_archive_canonical_unique_constraint_fails(self) -> None:
         fragment = "  UNIQUE(archive_key, canonical_post_key),\n"

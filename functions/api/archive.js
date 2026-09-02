@@ -16,6 +16,7 @@ const MAX_SUBJECT_LENGTH = 100;
 const MAX_SUBJECT_OPTIONS = 100;
 const MAX_ARCHIVE_FILTER_KEYS = 50;
 const MAX_TOPIC_ITEMS = 6;
+const MAX_CURSOR_LENGTH = 8192;
 const TARGET_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const TOPIC_TREND_STATES = new Set(["new", "rising", "active"]);
 
@@ -29,7 +30,7 @@ function jsonResponse(body, status = 200, cacheable = true) {
   const cacheControl =
     status >= 400 || !cacheable
       ? "no-store"
-      : "public, max-age=15, s-maxage=300";
+      : "public, max-age=15, s-maxage=120";
   return new Response(JSON.stringify(body, null, 2), {
     status,
     headers: {
@@ -159,10 +160,11 @@ function buildPostFilter(
   if (target === ALL_TARGET && excludedArchives.length > 0) {
     const placeholders = excludedArchives.map(() => "?").join(", ");
     clauses = [
-      `archive_key IN (
-        SELECT public_archive.archive_key
+      `EXISTS (
+        SELECT 1
         FROM archives AS public_archive
-        WHERE public_archive.is_public = 1
+        WHERE public_archive.archive_key = posts.archive_key
+          AND public_archive.is_public = 1
           AND public_archive.archive_key NOT IN (${placeholders})
       )`,
       "status = 'active'",
@@ -225,12 +227,13 @@ function buildPostFilter(
   };
 }
 
-function buildOrderClause(sort) {
+function buildOrderClause(sort, direction = "next") {
   const primaryColumn = SORT_COLUMNS[sort] ?? SORT_COLUMNS.created_at;
+  const order = direction === "previous" ? "ASC" : "DESC";
   if (primaryColumn === "created_at") {
-    return "created_at DESC, id DESC";
+    return `created_at ${order}, id ${order}`;
   }
-  return `${primaryColumn} DESC, created_at DESC, id DESC`;
+  return `${primaryColumn} ${order}, created_at ${order}, id ${order}`;
 }
 
 function buildCacheKey(
@@ -246,6 +249,7 @@ function buildCacheKey(
     topicId,
     sort,
     excludedArchives,
+    cursor,
   }
 ) {
   const cacheUrl = new URL(url.pathname, url.origin);
@@ -259,6 +263,7 @@ function buildCacheKey(
     subject,
     topic: topicId ? String(topicId) : "",
     sort,
+    cursor,
   };
 
   for (const [name, value] of Object.entries(normalized)) {
@@ -270,6 +275,176 @@ function buildCacheKey(
     cacheUrl.searchParams.append("exclude_archive", archiveKey);
   }
   return new Request(cacheUrl.toString(), { method: "GET" });
+}
+
+function hasPostFilters({ query, minUpvotes, minComments, subject, topicId }) {
+  return Boolean(query || minUpvotes > 0 || minComments > 0 || subject || topicId > 0);
+}
+
+function selectStatsRows(rows, target, excludedArchives) {
+  const excluded = new Set(excludedArchives);
+  if (target === ALL_TARGET) {
+    return rows.filter((row) => !excluded.has(String(row.archive_key || "")));
+  }
+  return rows.filter((row) => row.archive_key === target);
+}
+
+function summarizeStats(rows) {
+  let totalPosts = 0;
+  let latestSeenAt = "";
+  const versions = [];
+  const subjectValues = [];
+
+  for (const row of rows) {
+    totalPosts += normalizeCount(row.active_post_count);
+    const latest = String(row.latest_seen_at || "");
+    if (latest > latestSeenAt) {
+      latestSeenAt = latest;
+    }
+    versions.push(`${row.archive_key}:${normalizeCount(row.stats_version)}`);
+    subjectValues.push(...normalizeSubjectOptions(row.subject_options_json));
+  }
+
+  return {
+    totalPosts,
+    latestSeenAt,
+    statsVersion: versions.sort().join(",") || "empty:0",
+    subjectOptions: normalizeSubjectOptions(subjectValues),
+  };
+}
+
+function cursorFilterSignature({
+  target,
+  query,
+  minUpvotes,
+  minComments,
+  subject,
+  topicId,
+  sort,
+  excludedArchives,
+}) {
+  return JSON.stringify({
+    target,
+    query,
+    minUpvotes,
+    minComments,
+    subject,
+    topicId,
+    sort,
+    excludedArchives: [...excludedArchives].sort(),
+  });
+}
+
+function encodeCursor(payload) {
+  const bytes = new TextEncoder().encode(JSON.stringify(payload));
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+function decodeCursor(rawValue, expectedSignature, sort) {
+  const raw = String(rawValue || "").trim();
+  if (!raw) {
+    return null;
+  }
+  if (raw.length > MAX_CURSOR_LENGTH || !/^[A-Za-z0-9_-]+$/.test(raw)) {
+    return false;
+  }
+
+  try {
+    const padded = raw.replace(/-/g, "+").replace(/_/g, "/")
+      .padEnd(Math.ceil(raw.length / 4) * 4, "=");
+    const binary = atob(padded);
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    const payload = JSON.parse(new TextDecoder().decode(bytes));
+    const expectedKeyLength = sort === "created_at" ? 2 : 3;
+    if (
+      payload?.version !== 1 ||
+      !["next", "previous"].includes(payload.direction) ||
+      payload.signature !== expectedSignature ||
+      payload.sort !== sort ||
+      !Number.isSafeInteger(payload.page) ||
+      payload.page < 1 ||
+      !Array.isArray(payload.key) ||
+      payload.key.length !== expectedKeyLength
+    ) {
+      return false;
+    }
+
+    const id = Number(payload.key.at(-1));
+    const createdAt = String(payload.key.at(-2) || "");
+    const metric = sort === "created_at" ? null : Number(payload.key[0]);
+    if (
+      !Number.isSafeInteger(id) ||
+      id < 1 ||
+      !createdAt ||
+      createdAt.length > 40 ||
+      (sort !== "created_at" && !Number.isSafeInteger(metric))
+    ) {
+      return false;
+    }
+    return {
+      direction: payload.direction,
+      page: payload.page,
+      key: sort === "created_at" ? [createdAt, id] : [metric, createdAt, id],
+    };
+  } catch {
+    return false;
+  }
+}
+
+function buildCursorBoundary(sort, cursor) {
+  if (!cursor) {
+    return { sql: "", bindings: [] };
+  }
+  const operator = cursor.direction === "previous" ? ">" : "<";
+  if (sort === "created_at") {
+    const [createdAt, id] = cursor.key;
+    return {
+      sql: `(posts.created_at ${operator} ? OR (posts.created_at = ? AND posts.id ${operator} ?))`,
+      bindings: [createdAt, createdAt, id],
+    };
+  }
+
+  const [metric, createdAt, id] = cursor.key;
+  const column = SORT_COLUMNS[sort];
+  return {
+    sql: `(
+      posts.${column} ${operator} ?
+      OR (
+        posts.${column} = ?
+        AND (
+          posts.created_at ${operator} ?
+          OR (posts.created_at = ? AND posts.id ${operator} ?)
+        )
+      )
+    )`,
+    bindings: [metric, metric, createdAt, createdAt, id],
+  };
+}
+
+function cursorKeyForRow(row, sort) {
+  const id = Number(row.cursor_id);
+  const createdAt = String(row.created_at || "");
+  return sort === "created_at"
+    ? [createdAt, id]
+    : [Number(row[SORT_COLUMNS[sort]]), createdAt, id];
+}
+
+function makeCursor(direction, page, row, sort, signature) {
+  return encodeCursor({
+    version: 1,
+    direction,
+    page,
+    sort,
+    signature,
+    key: cursorKeyForRow(row, sort),
+  });
 }
 
 function parseJsonArray(value) {
@@ -402,10 +577,15 @@ export async function onRequestGet(context) {
       topicId,
       excludedArchives
     );
-    const cacheKey = buildCacheKey(url, {
+    const filteredMode = hasPostFilters({
+      query,
+      minUpvotes,
+      minComments,
+      subject,
+      topicId,
+    });
+    const signature = cursorFilterSignature({
       target,
-      pageSize,
-      requestedPage,
       query,
       minUpvotes,
       minComments,
@@ -414,8 +594,33 @@ export async function onRequestGet(context) {
       sort,
       excludedArchives,
     });
-    const cacheable = target !== "game-news" && !allArchives;
+    const rawCursor = String(url.searchParams.get("cursor") || "").trim();
+    if (!filteredMode && rawCursor) {
+      return jsonResponse({ error: "Cursor pagination requires an active filter." }, 400);
+    }
+    const cursor = filteredMode ? decodeCursor(rawCursor, signature, sort) : null;
+    if (cursor === false) {
+      return jsonResponse({ error: "Archive cursor is invalid or expired." }, 400);
+    }
+
+    const hasOwnerSession = /(?:^|;\s*)__Host-tc_(?:authenticated|admin)=/u.test(
+      context.request.headers.get("cookie") || ""
+    );
+    const cacheable = !hasOwnerSession;
     const edgeCache = cacheable ? globalThis.caches?.default : null;
+    const cacheKey = buildCacheKey(url, {
+      target,
+      pageSize,
+      requestedPage: filteredMode ? cursor?.page ?? 1 : requestedPage,
+      query,
+      minUpvotes,
+      minComments,
+      subject,
+      topicId,
+      sort,
+      excludedArchives,
+      cursor: filteredMode ? rawCursor : "",
+    });
     if (edgeCache) {
       const cached = await edgeCache.match(cacheKey);
       if (cached) {
@@ -423,26 +628,44 @@ export async function onRequestGet(context) {
       }
     }
 
-    const db = context.env.DB;
-    const archive = allArchives
-      ? ALL_ARCHIVE
-      : publicArchive(
-          await db
-            .prepare(
-              `
-              SELECT archive_key, display_name, description, content_kind,
-                     display_order, updated_at
-              FROM archives
-              WHERE archive_key = ? AND is_public = 1
-              LIMIT 1
-              `
-            )
-            .bind(target)
-            .first()
-        );
+    const statsResult = await context.env.DB
+      .prepare(
+        `
+        SELECT archive.archive_key, archive.display_name, archive.description,
+               archive.content_kind, archive.display_order, archive.updated_at,
+               COALESCE(stats.active_post_count, 0) AS active_post_count,
+               COALESCE(stats.latest_seen_at, '') AS latest_seen_at,
+               COALESCE(stats.stats_version, 0) AS stats_version,
+               COALESCE(stats.subject_options_json, '[]') AS subject_options_json
+        FROM archives AS archive
+        LEFT JOIN archive_stats AS stats
+          ON stats.archive_key = archive.archive_key
+        WHERE archive.is_public = 1
+        ORDER BY archive.display_order ASC, archive.archive_key ASC
+        `
+      )
+      .all();
+    const publicStatsRows = statsResult.results ?? [];
+    const selectedArchiveRow = allArchives
+      ? null
+      : publicStatsRows.find((row) => row.archive_key === target);
+    const archive = allArchives ? ALL_ARCHIVE : publicArchive(selectedArchiveRow);
     if (!archive) {
       return jsonResponse({ error: "Unknown archive target." }, 400);
     }
+    const relevantStatsRows = selectStatsRows(
+      publicStatsRows,
+      target,
+      excludedArchives
+    );
+    const statsSummary = summarizeStats(relevantStatsRows);
+    const totalPosts = statsSummary.totalPosts;
+    const totalPages = filteredMode ? null : Math.ceil(totalPosts / pageSize);
+    const page = filteredMode
+      ? cursor?.page ?? 1
+      : Math.min(requestedPage, Math.max(totalPages, 1));
+
+    const db = context.env.DB;
     const communityArchive = archive.content_kind === "community";
     if (!communityArchive && topicId > 0) {
       return jsonResponse({ error: "Topic filters are unavailable for this archive." }, 400);
@@ -472,59 +695,6 @@ export async function onRequestGet(context) {
             `
           )
           .bind(target);
-    const summaryStatement = allArchives
-      ? db.prepare(
-          `
-          SELECT
-            COUNT(*) AS total_posts,
-            COALESCE(MAX(summary_posts.last_seen_at), '') AS latest_seen_at,
-            (
-              SELECT COALESCE(json_group_array(subject), '[]')
-              FROM (
-                SELECT DISTINCT TRIM(subject_posts.subject) AS subject
-                FROM posts AS subject_posts
-                INNER JOIN archives AS subject_archive
-                  ON subject_archive.archive_key = subject_posts.archive_key
-                WHERE subject_archive.is_public = 1
-                  AND subject_posts.status = 'active'
-                  AND TRIM(subject_posts.subject) <> ''
-                  AND length(TRIM(subject_posts.subject)) <= ${MAX_SUBJECT_LENGTH}
-                ORDER BY subject COLLATE NOCASE, subject
-                LIMIT ${MAX_SUBJECT_OPTIONS}
-              )
-            ) AS subject_options_json
-          FROM posts AS summary_posts
-          INNER JOIN archives AS summary_archive
-            ON summary_archive.archive_key = summary_posts.archive_key
-          WHERE summary_archive.is_public = 1
-            AND summary_posts.status = 'active'
-          `
-        )
-      : db
-          .prepare(
-            `
-            SELECT
-              COUNT(*) AS total_posts,
-              COALESCE(MAX(last_seen_at), '') AS latest_seen_at,
-              (
-                SELECT COALESCE(json_group_array(subject), '[]')
-                FROM (
-                  SELECT DISTINCT TRIM(subject) AS subject
-                  FROM posts
-                  WHERE archive_key = ?
-                    AND status = 'active'
-                    AND TRIM(subject) <> ''
-                    AND length(TRIM(subject)) <= ${MAX_SUBJECT_LENGTH}
-                  ORDER BY subject COLLATE NOCASE, subject
-                  LIMIT ${MAX_SUBJECT_OPTIONS}
-                )
-              ) AS subject_options_json
-            FROM posts
-            WHERE archive_key = ?
-              AND status = 'active'
-            `
-          )
-          .bind(target, target);
     const runsStatement = allArchives
       ? db.prepare(
           `
@@ -590,29 +760,8 @@ export async function onRequestGet(context) {
             `
           )
           .bind(target);
-    const batchStatements = [
-      db.prepare(
-        `
-        SELECT archive_key, display_name, description, content_kind,
-               display_order, updated_at
-        FROM archives
-        WHERE is_public = 1
-        ORDER BY display_order ASC, archive_key ASC
-        `
-      ),
-      sourceStatement,
-      summaryStatement,
-      db
-        .prepare(
-          `
-          SELECT COUNT(*) AS filtered_posts
-          FROM posts
-          WHERE ${filter.sql}
-          `
-        )
-        .bind(...filter.bindings),
-      runsStatement,
-    ];
+    const offset = (page - 1) * pageSize;
+    const batchStatements = [sourceStatement, runsStatement];
     let selectedTopicIndex = -1;
     let topicSnapshotIndex = -1;
     let topicItemsIndex = -1;
@@ -693,36 +842,39 @@ export async function onRequestGet(context) {
           .bind(target)
       );
     }
-    let requestedPostIndex = -1;
-    if (requestedPage === 1) {
-      requestedPostIndex = batchStatements.length;
-      batchStatements.push(
-        db
-          .prepare(
-            `
-            SELECT archive_key, source_key, external_post_id, subject, title, post_url,
-                   created_at, created_at_raw, created_at_basis,
-                   created_at_precision, upvotes, comments, qualifies_by,
-                   fetched_at, first_seen_at, last_seen_at, status
-            FROM posts
-            WHERE ${filter.sql}
-            ORDER BY ${buildOrderClause(sort)}
-            LIMIT ? OFFSET ?
-            `
-          )
-          .bind(...filter.bindings, pageSize, 0)
-      );
-    }
+    const requestedPostIndex = batchStatements.length;
+    const cursorBoundary = buildCursorBoundary(sort, cursor);
+    const postFilterSql = cursorBoundary.sql
+      ? `${filter.sql}\n            AND ${cursorBoundary.sql}`
+      : filter.sql;
+    const postBindings = [
+      ...filter.bindings,
+      ...cursorBoundary.bindings,
+      pageSize + (filteredMode ? 1 : 0),
+      ...(filteredMode ? [] : [offset]),
+    ];
+    batchStatements.push(
+      db
+        .prepare(
+          `
+          SELECT archive_key, source_key, external_post_id, subject, title, post_url,
+                 created_at, created_at_raw, created_at_basis,
+                 created_at_precision, upvotes, comments, qualifies_by,
+                 fetched_at, first_seen_at, last_seen_at, status,
+                 id AS cursor_id
+          FROM posts
+          WHERE ${postFilterSql}
+          ORDER BY ${buildOrderClause(sort, cursor?.direction)}
+          LIMIT ?${filteredMode ? "" : " OFFSET ?"}
+          `
+        )
+        .bind(...postBindings)
+    );
 
     const batchResults = await db.batch(batchStatements);
-    const archiveResult = batchResults[0];
-    const sourceResult = batchResults[1];
-    const summaryResult = batchResults[2];
-    const filteredSummaryResult = batchResults[3];
-    const runResult = batchResults[4];
-    const requestedPostResult = requestedPostIndex >= 0
-      ? batchResults[requestedPostIndex]
-      : null;
+    const sourceResult = batchResults[0];
+    const runResult = batchResults[1];
+    const requestedPostResult = batchResults[requestedPostIndex];
     const selectedTopicResult = selectedTopicIndex >= 0
       ? batchResults[selectedTopicIndex]
       : null;
@@ -734,42 +886,16 @@ export async function onRequestGet(context) {
       : null;
 
     const archives = [
-      ...(archiveResult.results ?? [])
+      ...publicStatsRows
         .map(publicArchive)
         .filter((candidate) => candidate?.archive_key !== ALL_TARGET),
       ALL_ARCHIVE,
     ];
     const sources = sourceResult.results ?? [];
-    const summary = firstResult(summaryResult);
-    const filteredSummary = firstResult(filteredSummaryResult);
-    const filteredPosts = normalizeCount(filteredSummary?.filtered_posts);
     const selectedTopic = firstResult(selectedTopicResult);
     if (topicId > 0 && !selectedTopic) {
       return jsonResponse({ error: "Unknown topic filter." }, 400);
     }
-    const totalPages = Math.ceil(filteredPosts / pageSize);
-    const page = Math.min(requestedPage, Math.max(totalPages, 1));
-    const offset = (page - 1) * pageSize;
-
-    let postResult = requestedPostResult;
-    if (!postResult) {
-      postResult = await db
-        .prepare(
-          `
-          SELECT archive_key, source_key, external_post_id, subject, title, post_url,
-                 created_at, created_at_raw, created_at_basis,
-                 created_at_precision, upvotes, comments, qualifies_by,
-                 fetched_at, first_seen_at, last_seen_at, status
-          FROM posts
-          WHERE ${filter.sql}
-          ORDER BY ${buildOrderClause(sort)}
-          LIMIT ? OFFSET ?
-          `
-        )
-        .bind(...filter.bindings, pageSize, offset)
-        .all();
-    }
-
     const runs = (runResult.results ?? []).map(
       ({ had_error: hadError, error_message: _discardedError, ...run }) => ({
         ...run,
@@ -778,12 +904,29 @@ export async function onRequestGet(context) {
           : null,
       })
     );
-    const posts = (postResult.results ?? []).map((post) => (
+    const postRows = requestedPostResult.results ?? [];
+    const hasExtraRow = postRows.length > pageSize;
+    const visibleRows = postRows.slice(0, pageSize);
+    if (cursor?.direction === "previous") {
+      visibleRows.reverse();
+    }
+    const hasPrevious = page > 1;
+    const hasNext = filteredMode
+      ? cursor?.direction === "previous"
+        ? visibleRows.length > 0
+        : hasExtraRow
+      : page < totalPages;
+    const previousCursor = filteredMode && hasPrevious && visibleRows[0]
+      ? makeCursor("previous", page - 1, visibleRows[0], sort, signature)
+      : null;
+    const nextCursor = filteredMode && hasNext && visibleRows.at(-1)
+      ? makeCursor("next", page + 1, visibleRows.at(-1), sort, signature)
+      : null;
+    const posts = visibleRows.map(({ cursor_id: _cursorId, ...post }) => (
       post.archive_key === "game-news"
         ? { ...post, feedback_key: String(post.external_post_id || "") }
         : post
     ));
-    const totalPosts = normalizeCount(summary?.total_posts);
     const visibleFrom = posts.length > 0 ? offset + 1 : 0;
     const visibleTo = posts.length > 0 ? offset + posts.length : 0;
 
@@ -793,7 +936,7 @@ export async function onRequestGet(context) {
       archive,
       sources,
       source: sources[0] ?? null,
-      subject_options: normalizeSubjectOptions(summary?.subject_options_json),
+      subject_options: statsSummary.subjectOptions,
       selected_topic: selectedTopic
         ? {
             topic_id: Number(selectedTopic.topic_id),
@@ -808,19 +951,23 @@ export async function onRequestGet(context) {
         : null,
       summary: {
         total_posts: totalPosts,
-        filtered_posts: filteredPosts,
-        latest_seen_at: summary?.latest_seen_at ?? "",
+        filtered_posts: filteredMode ? null : totalPosts,
+        latest_seen_at: statsSummary.latestSeenAt,
+        stats_version: statsSummary.statsVersion,
         exported_posts: posts.length,
         recent_runs: runs.length,
       },
       pagination: {
+        mode: filteredMode ? "sequential" : "numbered",
         page,
         page_size: pageSize,
         total_pages: totalPages,
         visible_from: visibleFrom,
         visible_to: visibleTo,
-        has_previous: page > 1,
-        has_next: page < totalPages,
+        has_previous: hasPrevious,
+        has_next: hasNext,
+        previous_cursor: previousCursor,
+        next_cursor: nextCursor,
       },
       runs,
       posts,

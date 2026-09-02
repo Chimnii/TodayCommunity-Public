@@ -326,14 +326,24 @@ function handleArchive(requestUrl, response) {
     ? requestUrl.searchParams.get("sort")
     : "created_at";
   const pageSize = Math.min(normalizePositive(requestUrl.searchParams.get("page_size"), 30), 100);
-  const requestedPage = normalizePositive(requestUrl.searchParams.get("page"), 1);
+  const cursorMatch = /^fixture-page-(\d+)$/.exec(
+    String(requestUrl.searchParams.get("cursor") || "")
+  );
+  const requestedPage = cursorMatch
+    ? normalizePositive(cursorMatch[1], 1)
+    : normalizePositive(requestUrl.searchParams.get("page"), 1);
   const topicId = normalizePositive(requestUrl.searchParams.get("topic"), 0);
   const excludedArchives = new Set(requestUrl.searchParams.getAll("exclude_archive"));
+  const filteredMode = Boolean(
+    search || subject || topicId || minUpvotes > 0 || minComments > 0
+  );
 
-  const filtered = archivePosts
+  const includedPosts = archivePosts.filter(
+    (post) => !mixedMode || !excludedArchives.has(post.archive_key)
+  );
+  const filtered = includedPosts
     .filter((post) => {
       return (
-        (!mixedMode || !excludedArchives.has(post.archive_key)) &&
         post.upvotes >= minUpvotes &&
         post.comments >= minComments &&
         (!subject || post.subject === subject) &&
@@ -343,8 +353,16 @@ function handleArchive(requestUrl, response) {
     })
     .sort((left, right) => comparePosts(left, right, sortBy));
 
-  const totalPages = filtered.length === 0 ? 0 : Math.ceil(filtered.length / pageSize);
-  const page = totalPages === 0 ? 1 : Math.min(requestedPage, totalPages);
+  const totalPages = filteredMode
+    ? null
+    : filtered.length === 0
+      ? 0
+      : Math.ceil(filtered.length / pageSize);
+  const page = filteredMode
+    ? requestedPage
+    : totalPages === 0
+      ? 1
+      : Math.min(requestedPage, totalPages);
   const offset = (page - 1) * pageSize;
   const visiblePosts = filtered.slice(offset, offset + pageSize);
   const selectedTopic = topicFixtures.find((topic) => topic.topic_id === topicId) || null;
@@ -386,22 +404,34 @@ function handleArchive(requestUrl, response) {
     selected_topic: selectedTopic,
     topic_trends: topicTrends,
     summary: {
-      total_posts: archivePosts.length,
-      filtered_posts: filtered.length,
+      total_posts: includedPosts.length,
+      filtered_posts: filteredMode ? null : filtered.length,
       latest_seen_at: posts[0].last_seen_at,
+      stats_version: `${target}:fixture-v1`,
       exported_posts: visiblePosts.length,
       recent_runs: runs.length,
     },
     pagination: {
+      mode: filteredMode ? "sequential" : "numbered",
       page,
       page_size: pageSize,
       total_pages: totalPages,
       visible_from: visiblePosts.length ? offset + 1 : 0,
       visible_to: visiblePosts.length ? offset + visiblePosts.length : 0,
       has_previous: page > 1,
-      has_next: totalPages > 0 && page < totalPages,
+      has_next: filteredMode
+        ? offset + visiblePosts.length < filtered.length
+        : totalPages > 0 && page < totalPages,
+      previous_cursor: filteredMode && page > 1
+        ? `fixture-page-${page - 1}`
+        : null,
+      next_cursor: filteredMode && offset + visiblePosts.length < filtered.length
+        ? `fixture-page-${page + 1}`
+        : null,
     },
-    subject_options: articleMode || mixedMode ? archiveSubjectOptions : subjectOptions,
+    subject_options: articleMode || mixedMode
+      ? archiveSubjectOptions
+      : subjectOptions,
     runs: runs.map((run, index) => ({
       ...run,
       source_key: sources[index % sources.length].source_key,

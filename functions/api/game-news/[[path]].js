@@ -371,14 +371,15 @@ async function postVisibility(request, db, actor) {
   if (!postKey || !idempotencyKey || !["hide", "restore"].includes(action)) {
     throw new RequestError(400, "숨김 요청이 올바르지 않습니다.");
   }
-  const post = await findPost(db, postKey);
+  let post = await findPost(db, postKey);
+  const changedAt = new Date().toISOString();
   const values = [
     Number(post.candidate_id),
     post.evaluation_id === null ? null : Number(post.evaluation_id),
     action,
     actor,
     idempotencyKey,
-    new Date().toISOString(),
+    changedAt,
   ];
   const existing = await queryAll(
     db,
@@ -422,9 +423,135 @@ async function postVisibility(request, db, actor) {
       ], values.slice(0, 4));
     }
   }
-  await db.prepare(
-    "UPDATE posts SET status = ? WHERE id = ? AND archive_key = 'game-news'"
-  ).bind(action === "hide" ? "hidden" : "active", Number(post.post_id)).run();
+  const desiredStatus = action === "hide" ? "hidden" : "active";
+  const expectedStatus = action === "hide" ? "active" : "hidden";
+  for (let attempt = 0; attempt < 3 && post.status === expectedStatus; attempt += 1) {
+    const rawSubject = String(post.subject || "");
+    const subject = String(post.subject || "").trim();
+    const countDelta = action === "hide" ? -1 : 1;
+    const statusGuard = `
+      EXISTS (
+        SELECT 1 FROM posts
+        WHERE id = ? AND archive_key = 'game-news' AND status = ?
+          AND subject IS ?
+      )
+    `;
+    const statements = [
+      db.prepare(`
+        UPDATE archive_stats
+        SET active_post_count = active_post_count + ?,
+            stats_version = stats_version + 1,
+            updated_at = ?
+        WHERE archive_key = 'game-news'
+          AND ${statusGuard}
+      `).bind(
+        countDelta,
+        changedAt,
+        Number(post.post_id),
+        expectedStatus,
+        rawSubject
+      ),
+    ];
+    if (subject && action === "restore") {
+      statements.push(
+        db.prepare(`
+          INSERT INTO archive_subject_stats (
+            archive_key, subject, active_post_count, updated_at
+          )
+          SELECT 'game-news', ?, 1, ?
+          WHERE ${statusGuard}
+          ON CONFLICT(archive_key, subject) DO UPDATE SET
+            active_post_count = archive_subject_stats.active_post_count + 1,
+            updated_at = excluded.updated_at
+        `).bind(
+          subject,
+          changedAt,
+          Number(post.post_id),
+          expectedStatus,
+          rawSubject
+        )
+      );
+    } else if (subject) {
+      statements.push(
+        db.prepare(`
+          UPDATE archive_subject_stats
+          SET active_post_count = active_post_count - 1,
+              updated_at = ?
+          WHERE archive_key = 'game-news'
+            AND subject = ?
+            AND ${statusGuard}
+        `).bind(
+          changedAt,
+          subject,
+          Number(post.post_id),
+          expectedStatus,
+          rawSubject
+        ),
+        db.prepare(`
+          DELETE FROM archive_subject_stats
+          WHERE archive_key = 'game-news'
+            AND subject = ?
+            AND active_post_count = 0
+            AND ${statusGuard}
+        `).bind(
+          subject,
+          Number(post.post_id),
+          expectedStatus,
+          rawSubject
+        )
+      );
+    }
+    if (subject) {
+      statements.push(
+        db.prepare(`
+          UPDATE archive_stats
+          SET subject_options_json = coalesce((
+            SELECT json_group_array(subject)
+            FROM (
+              SELECT subject
+              FROM archive_subject_stats
+              WHERE archive_key = 'game-news'
+                AND active_post_count > 0
+                AND length(subject) <= 100
+              ORDER BY subject COLLATE NOCASE ASC, subject ASC
+              LIMIT 100
+            )
+          ), '[]')
+          WHERE archive_key = 'game-news'
+            AND ${statusGuard}
+        `).bind(Number(post.post_id), expectedStatus, rawSubject)
+      );
+    }
+    statements.push(
+      db.prepare(`
+        UPDATE posts
+        SET status = ?
+        WHERE id = ? AND archive_key = 'game-news' AND status = ?
+          AND subject IS ?
+      `).bind(
+        desiredStatus,
+        Number(post.post_id),
+        expectedStatus,
+        rawSubject
+      )
+    );
+    const results = await db.batch(statements);
+    const statusResult = results[results.length - 1];
+    const statusChanges = Number(
+      statusResult?.meta?.changes ?? statusResult?.changes ?? 0
+    );
+    if (statusChanges > 0) {
+      post = { ...post, status: desiredStatus };
+      break;
+    }
+    post = await findPost(db, postKey);
+    if (attempt === 2 && post.status === expectedStatus) {
+      throw new RequestError(
+        409,
+        "게시글이 동시에 갱신되어 숨김 상태를 변경하지 못했습니다."
+      );
+    }
+  }
   return jsonResponse({
     item: {
       post_key: postKey,

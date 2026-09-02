@@ -48,6 +48,9 @@ class BatchRecordingClient:
         self.batches.append(batch)
         return [{"success": True, "results": []} for _ in batch]
 
+    def query(self, sql, params=None):
+        return []
+
 
 class SqliteClient:
     def __init__(self) -> None:
@@ -62,6 +65,20 @@ class SqliteClient:
             return []
         columns = [item[0] for item in cursor.description]
         return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    def batch(self, statements):
+        results = []
+        with self.connection:
+            for sql, params in statements:
+                cursor = self.connection.execute(sql, list(params or []))
+                if cursor.description is None:
+                    results.append([])
+                    continue
+                columns = [item[0] for item in cursor.description]
+                results.append(
+                    [dict(zip(columns, row)) for row in cursor.fetchall()]
+                )
+        return results
 
 
 def sample_post(post_id: int) -> dict:
@@ -330,10 +347,11 @@ class SourceBootstrapTests(unittest.TestCase):
 
         self.assertEqual(len(client.batches), 1)
         statements = client.batches[0]
-        self.assertEqual(len(statements), 3)
+        self.assertEqual(len(statements), 4)
         self.assertIn("INSERT INTO archives", statements[0][0])
         self.assertIn("INSERT INTO sources", statements[1][0])
-        self.assertIn("INSERT OR IGNORE INTO source_state", statements[2][0])
+        self.assertIn("INSERT OR IGNORE INTO archive_stats", statements[2][0])
+        self.assertIn("INSERT OR IGNORE INTO source_state", statements[3][0])
         self.assertNotIn("SELECT source_key", "\n".join(sql for sql, _ in statements))
         self.assertEqual(
             statements[0][1],
@@ -363,6 +381,10 @@ class SourceBootstrapTests(unittest.TestCase):
         )
         self.assertEqual(
             statements[2][1],
+            ["dcinside-agent-stack", "2026-07-25T00:00:00Z"],
+        )
+        self.assertEqual(
+            statements[3][1],
             [
                 "dcinside-ai-utilize",
                 "2026-07-25T00:00:00Z",
@@ -456,6 +478,117 @@ class BatchedPostUpsertTests(unittest.TestCase):
             ),
             [{"status": "active", "upvotes": 9, "comments": 3}],
         )
+        self.assertEqual(
+            client.query(
+                """
+                SELECT active_post_count, subject_options_json
+                FROM archive_stats WHERE archive_key = ?
+                """,
+                [target.archive_key],
+            ),
+            [{"active_post_count": 2, "subject_options_json": '["일반"]'}],
+        )
+        self.assertEqual(
+            client.query(
+                """
+                SELECT subject, active_post_count
+                FROM archive_subject_stats WHERE archive_key = ?
+                """,
+                [target.archive_key],
+            ),
+            [{"subject": "일반", "active_post_count": 2}],
+        )
+
+    def test_subject_stats_are_created_automatically_and_drop_zero_rows(self) -> None:
+        client = SqliteClient()
+        target = get_target("dcinside-singularity")
+        checked_at = "2026-07-16T00:00:00+00:00"
+        upsert_source(client, target, checked_at)
+        upsert_posts(
+            client,
+            target,
+            [
+                {**sample_post(1), "subject": "공지"},
+                {**sample_post(2), "subject": "일반"},
+            ],
+            checked_at,
+        )
+
+        self.assertEqual(mark_posts_deleted(client, target, ["1"]), 1)
+        self.assertEqual(
+            client.query(
+                """
+                SELECT subject, active_post_count
+                FROM archive_subject_stats
+                WHERE archive_key = ? ORDER BY subject
+                """,
+                [target.archive_key],
+            ),
+            [{"subject": "일반", "active_post_count": 1}],
+        )
+        self.assertEqual(
+            client.query(
+                """
+                SELECT active_post_count, subject_options_json
+                FROM archive_stats WHERE archive_key = ?
+                """,
+                [target.archive_key],
+            ),
+            [{"active_post_count": 1, "subject_options_json": '["일반"]'}],
+        )
+
+    def test_long_subject_stays_in_stats_but_not_subject_options(self) -> None:
+        client = SqliteClient()
+        target = get_target("dcinside-singularity")
+        checked_at = "2026-07-16T00:00:00+00:00"
+        long_subject = "가" * 101
+        upsert_source(client, target, checked_at)
+        upsert_posts(
+            client,
+            target,
+            [{**sample_post(1), "subject": long_subject}],
+            checked_at,
+        )
+
+        self.assertEqual(
+            client.query(
+                """
+                SELECT active_post_count, subject_options_json
+                FROM archive_stats WHERE archive_key = ?
+                """,
+                [target.archive_key],
+            ),
+            [{"active_post_count": 1, "subject_options_json": "[]"}],
+        )
+        self.assertEqual(
+            client.query(
+                """
+                SELECT subject, active_post_count
+                FROM archive_subject_stats WHERE archive_key = ?
+                """,
+                [target.archive_key],
+            ),
+            [{"subject": long_subject, "active_post_count": 1}],
+        )
+
+    def test_post_and_stats_batch_roll_back_together(self) -> None:
+        client = SqliteClient()
+        target = get_target("dcinside-singularity")
+        checked_at = "2026-07-16T00:00:00+00:00"
+        upsert_source(client, target, checked_at)
+        upsert_posts(client, target, [sample_post(1)], checked_at)
+        client.query(
+            "UPDATE archive_stats SET active_post_count = 0 WHERE archive_key = ?",
+            [target.archive_key],
+        )
+
+        with self.assertRaises(sqlite3.IntegrityError):
+            mark_posts_deleted(client, target, ["1"])
+
+        self.assertEqual(
+            client.query("SELECT status FROM posts WHERE external_post_id = '1'"),
+            [{"status": "active"}],
+        )
 
     def test_finalizer_applies_combined_rule_only_to_new_posts(self) -> None:
         client = RecordingClient()
@@ -536,7 +669,7 @@ class BatchedPostUpsertTests(unittest.TestCase):
 
         self.assertEqual(post_upsert_query_count(len(posts)), 2)
         self.assertEqual(len(client.batches), 2)
-        self.assertEqual([len(batch) for batch in client.batches], [2, 2])
+        self.assertEqual([len(batch) for batch in client.batches], [6, 6])
         upserts = [batch[0] for batch in client.batches]
         heartbeats = [batch[1] for batch in client.batches]
         self.assertEqual([len(params) for _, params in upserts], [97, 17])
@@ -556,7 +689,11 @@ class BatchedPostUpsertTests(unittest.TestCase):
             "2026-07-16T00:00:00+00:00",
         )
 
-        sql, params = client.calls[0]
+        sql, params = next(
+            (sql, params)
+            for sql, params in client.calls
+            if "INSERT INTO posts" in sql
+        )
         insert_clause, update_clause = sql.split(
             "ON CONFLICT DO UPDATE SET",
             1,
