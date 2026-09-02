@@ -3,10 +3,38 @@ from __future__ import annotations
 import json
 import sqlite3
 from typing import Iterable, List, Optional, Tuple
-from urllib import request
+from urllib import error, request
 
 
 D1Statement = Tuple[str, Optional[Iterable[object]]]
+
+
+def _summarize_http_error(exc: error.HTTPError) -> str:
+    detail = "Cloudflare D1 API rejected the request"
+    try:
+        payload = json.loads(exc.read().decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        payload = None
+
+    messages: List[str] = []
+    if isinstance(payload, dict):
+        raw_errors = payload.get("errors") or []
+        if isinstance(raw_errors, list):
+            for item in raw_errors:
+                if isinstance(item, str) and item.strip():
+                    messages.append(item.strip())
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                message = item.get("message")
+                if not isinstance(message, str) or not message.strip():
+                    continue
+                code = item.get("code")
+                prefix = f"[{code}] " if isinstance(code, int) else ""
+                messages.append(prefix + message.strip())
+    if messages:
+        detail = "; ".join(messages)
+    return f"D1 request failed with HTTP {exc.code}: {detail[:600]}"
 
 
 class D1Client:
@@ -40,8 +68,11 @@ class D1Client:
             },
             method="POST",
         )
-        with request.urlopen(http_request, timeout=self.timeout_seconds) as response:
-            data = json.loads(response.read().decode("utf-8"))
+        try:
+            with request.urlopen(http_request, timeout=self.timeout_seconds) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except error.HTTPError as exc:
+            raise RuntimeError(_summarize_http_error(exc)) from exc
 
         if not data.get("success", False):
             raise RuntimeError(f"D1 query failed: {data}")

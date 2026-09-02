@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import sqlite3
 import unittest
+from io import BytesIO
+from urllib import error
 from unittest.mock import patch
 
 from crawler.d1 import D1Client, split_sql_statements
@@ -68,6 +70,39 @@ class D1ClientResponseTests(unittest.TestCase):
 
         self.assertEqual(self.client.timeout_seconds, 30.0)
         self.assertEqual(urlopen.call_args.kwargs["timeout"], 30.0)
+
+    def test_http_error_surfaces_the_d1_quota_message_without_request_data(self) -> None:
+        payload = {
+            "success": False,
+            "errors": [
+                {
+                    "code": 7500,
+                    "message": (
+                        "Your account has exceeded D1's free tier daily row write "
+                        "limit. Upgrade to a paid plan or wait until tomorrow."
+                    ),
+                }
+            ],
+        }
+        http_error = error.HTTPError(
+            "https://api.cloudflare.com/client/v4/d1",
+            400,
+            "Bad Request",
+            {},
+            BytesIO(json.dumps(payload).encode("utf-8")),
+        )
+
+        with patch(
+            "crawler.d1.request.urlopen",
+            side_effect=http_error,
+        ), self.assertRaisesRegex(
+            RuntimeError,
+            "free tier daily row write limit",
+        ) as raised:
+            self.client.execute("INSERT INTO private_table VALUES (?)", ["secret"])
+
+        self.assertNotIn("private_table", str(raised.exception))
+        self.assertNotIn("secret", str(raised.exception))
 
     def test_batch_sends_exact_statement_payload_and_returns_ordered_results(self) -> None:
         payload = {

@@ -39,7 +39,7 @@ function noContentResponse() {
 }
 
 test("cron strings map to the intended workflows", () => {
-  assert.deepEqual(workflowForCron("7,22,37,52 * * * *"), {
+  assert.deepEqual(workflowForCron("7,37 * * * *"), {
     kind: "hot",
     workflow: "scan-dcinside.yml",
     destinations: ["dcinside", "fmkorea"],
@@ -88,7 +88,7 @@ test("an eligible Hot cron dispatches the workflow with hardened GitHub headers"
   };
 
   const result = await dispatchScheduledWorkflow({
-    cron: "7,22,37,52 * * * *",
+    cron: "7,37 * * * *",
     env: ENV,
     fetchImpl,
     now: () => NOW,
@@ -152,7 +152,7 @@ test("a recently completed dispatch of the same workflow suppresses a duplicate"
   };
 
   const result = await dispatchScheduledWorkflow({
-    cron: "7,22,37,52 * * * *",
+    cron: "7,37 * * * *",
     env: ENV,
     fetchImpl,
     now: () => NOW,
@@ -189,7 +189,7 @@ test("FM dispatch is opt-in and disabled mode needs no private repository bindin
   };
 
   const result = await dispatchScheduledWorkflow({
-    cron: "7,22,37,52 * * * *",
+    cron: "7,37 * * * *",
     env,
     fetchImpl,
     now: () => {
@@ -221,7 +221,7 @@ test("enabled Hot dispatches public DC and private FM independently with one cap
   };
 
   const result = await dispatchScheduledWorkflow({
-    cron: "7,22,37,52 * * * *",
+    cron: "7,37 * * * *",
     env,
     fetchImpl,
     now: () => {
@@ -391,7 +391,7 @@ test("FM and game-news managed runs remain independent in the same private repos
 
   const hotCalls = [];
   const hotResult = await dispatchScheduledWorkflow({
-    cron: "7,22,37,52 * * * *",
+    cron: "7,37 * * * *",
     env: {
       ...ENV,
       FM_DISPATCH_ENABLED: "1",
@@ -466,7 +466,7 @@ test("a fresh queued game-news run suppresses only a new game-news dispatch", as
 test("a stale queued run is canceled before its replacement is dispatched", async () => {
   const calls = [];
   const result = await dispatchScheduledWorkflow({
-    cron: "7,22,37,52 * * * *",
+    cron: "7,37 * * * *",
     env: ENV,
     fetchImpl: async (url, options) => {
       calls.push({ url, options });
@@ -513,7 +513,7 @@ test("a failed stale-run cancellation does not create a replacement", async () =
   const calls = [];
   await assert.rejects(
     dispatchScheduledWorkflow({
-      cron: "7,22,37,52 * * * *",
+      cron: "7,37 * * * *",
       env: ENV,
       fetchImpl: async (url, options) => {
         calls.push({ url, options });
@@ -548,7 +548,7 @@ test("a non-server cancellation failure stays fail-closed", async () => {
   const calls = [];
   await assert.rejects(
     dispatchScheduledWorkflow({
-      cron: "7,22,37,52 * * * *",
+      cron: "7,37 * * * *",
       env: ENV,
       fetchImpl: async (url, options) => {
         calls.push({ url, options });
@@ -582,7 +582,7 @@ test("a non-server cancellation failure stays fail-closed", async () => {
 test("an exact not-yet-queued conflict dispatches around the orphaned run", async () => {
   const calls = [];
   const result = await dispatchScheduledWorkflow({
-    cron: "7,22,37,52 * * * *",
+    cron: "7,37 * * * *",
     env: ENV,
     fetchImpl: async (url, options) => {
       calls.push({ url, options });
@@ -634,7 +634,7 @@ test("an exact not-yet-queued conflict dispatches around the orphaned run", asyn
 test("a cancel server failure uses force-cancel before replacement", async () => {
   const calls = [];
   const result = await dispatchScheduledWorkflow({
-    cron: "7,22,37,52 * * * *",
+    cron: "7,37 * * * *",
     env: ENV,
     fetchImpl: async (url, options) => {
       calls.push({ url, options });
@@ -743,7 +743,7 @@ test("game news dispatches around a stale run when both cancel APIs return 5xx",
 test("FM dispatches around server-side cancel failures using its freshness gate", async () => {
   const calls = [];
   const result = await dispatchScheduledWorkflow({
-    cron: "7,22,37,52 * * * *",
+    cron: "7,37 * * * *",
     env: {
       ...ENV,
       FM_DISPATCH_ENABLED: "1",
@@ -814,7 +814,7 @@ test("FM dispatches around server-side cancel failures using its freshness gate"
 test("a fresh queued FM run does not suppress an eligible public DC dispatch", async () => {
   const calls = [];
   const result = await dispatchScheduledWorkflow({
-    cron: "7,22,37,52 * * * *",
+    cron: "7,37 * * * *",
     env: {
       ...ENV,
       FM_DISPATCH_ENABLED: "1",
@@ -874,7 +874,7 @@ test("a fresh queued FM run does not suppress an eligible public DC dispatch", a
 test("a recent completed FM dispatch suppresses only the FM lane", async () => {
   const calls = [];
   const result = await dispatchScheduledWorkflow({
-    cron: "7,22,37,52 * * * *",
+    cron: "7,37 * * * *",
     env: {
       ...ENV,
       FM_DISPATCH_ENABLED: "1",
@@ -921,7 +921,7 @@ test("a recent completed FM dispatch suppresses only the FM lane", async () => {
 test("a public active run does not suppress an eligible private FM dispatch", async () => {
   const calls = [];
   const result = await dispatchScheduledWorkflow({
-    cron: "7,22,37,52 * * * *",
+    cron: "7,37 * * * *",
     env: {
       ...ENV,
       FM_DISPATCH_ENABLED: "1",
@@ -963,7 +963,7 @@ test("a public active run does not suppress an eligible private FM dispatch", as
 });
 
 test("Hot skips while another managed workflow is active", () => {
-  const schedule = SCHEDULES["7,22,37,52 * * * *"];
+  const schedule = SCHEDULES["7,37 * * * *"];
   const decision = decideDispatch({
     runs: [
       {
@@ -986,7 +986,7 @@ test("Hot skips while another managed workflow is active", () => {
 });
 
 test("a stale queued run on another ref is never canceled", () => {
-  const schedule = SCHEDULES["7,22,37,52 * * * *"];
+  const schedule = SCHEDULES["7,37 * * * *"];
   const decision = decideDispatch({
     runs: [
       {
@@ -1083,7 +1083,7 @@ test("a failing FM destination is reported only after the public dispatch is att
   const calls = [];
   await assert.rejects(
     dispatchScheduledWorkflow({
-      cron: "7,22,37,52 * * * *",
+      cron: "7,37 * * * *",
       env: {
         ...ENV,
         FM_DISPATCH_ENABLED: "1",
@@ -1132,7 +1132,7 @@ test("invalid FM enable flag is isolated after the public DC dispatch is attempt
   const calls = [];
   await assert.rejects(
     dispatchScheduledWorkflow({
-      cron: "7,22,37,52 * * * *",
+      cron: "7,37 * * * *",
       env: { ...ENV, FM_DISPATCH_ENABLED: "yes" },
       fetchImpl: async (url, options) => {
         calls.push({ url, options });

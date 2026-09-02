@@ -874,7 +874,7 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertIn("if ($restartExistingTask)", script)
 
         self.assertIn("Get-Command codex.cmd -CommandType Application", script)
-        self.assertIn('$RequiredCodexVersion = "0.147.0"', script)
+        self.assertIn('$RequiredCodexVersion = "0.152.1"', script)
         self.assertIn("function Assert-CodexVersion", script)
         self.assertIn("codex-cli $RequiredCodexVersion", script)
         self.assertIn("Write-CodexCommandMarker", script)
