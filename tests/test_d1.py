@@ -7,7 +7,13 @@ from io import BytesIO
 from urllib import error
 from unittest.mock import patch
 
-from crawler.d1 import D1Client, split_sql_statements
+from crawler.d1 import (
+    D1Client,
+    d1_usage_label,
+    d1_usage_snapshot,
+    d1_usage_summary,
+    split_sql_statements,
+)
 
 
 class FakeResponse:
@@ -48,6 +54,47 @@ class D1ClientResponseTests(unittest.TestCase):
             rows = self.client.query("SELECT 1 AS value")
 
         self.assertEqual(rows, [{"value": 1}])
+
+    def test_query_collects_rows_by_label_without_changing_return_value(self) -> None:
+        payload = {
+            "success": True,
+            "errors": [],
+            "result": [
+                {
+                    "success": True,
+                    "results": [{"value": 1}],
+                    "meta": {"rows_read": 7, "rows_written": 2},
+                }
+            ],
+        }
+
+        with patch(
+            "crawler.d1.request.urlopen",
+            return_value=FakeResponse(payload),
+        ):
+            rows = self.client.query("SELECT 1 AS value", label="coverage")
+
+        self.assertEqual(rows, [{"value": 1}])
+        self.assertEqual(
+            self.client.usage_summary(),
+            {
+                "request_count": 1,
+                "failed_request_count": 0,
+                "statement_count": 1,
+                "rows_read": 7,
+                "rows_written": 2,
+                "incomplete_meta_count": 0,
+                "labels": {
+                    "coverage": {
+                        "statement_count": 1,
+                        "rows_read": 7,
+                        "rows_written": 2,
+                        "incomplete_meta_count": 0,
+                        "failed_request_count": 0,
+                    }
+                },
+            },
+        )
 
     def test_default_timeout_is_forwarded_to_urlopen(self) -> None:
         payload = {
@@ -153,6 +200,178 @@ class D1ClientResponseTests(unittest.TestCase):
             },
         )
         self.assertEqual(results, payload["result"])
+
+    def test_batch_collects_each_statement_under_its_own_label(self) -> None:
+        payload = {
+            "success": True,
+            "errors": [],
+            "result": [
+                {
+                    "success": True,
+                    "results": [],
+                    "meta": {"rows_read": 3, "rows_written": 1},
+                },
+                {
+                    "success": True,
+                    "results": [],
+                    "meta": {"rows_read": 5, "rows_written": 2},
+                },
+                {
+                    "success": True,
+                    "results": [],
+                    "meta": {"rows_read": 0, "rows_written": 1},
+                },
+            ],
+        }
+
+        with patch(
+            "crawler.d1.request.urlopen",
+            return_value=FakeResponse(payload),
+        ):
+            results = self.client.batch(
+                [
+                    ("INSERT INTO posts DEFAULT VALUES", []),
+                    ("UPDATE posts SET fetched_at = NULL", []),
+                    ("UPDATE archive_stats SET active_post_count = 1", []),
+                ],
+                labels=("post.upsert", "post.heartbeat", "stats"),
+            )
+
+        self.assertEqual(results, payload["result"])
+        summary = self.client.usage_summary()
+        self.assertEqual(summary["request_count"], 1)
+        self.assertEqual(summary["statement_count"], 3)
+        self.assertEqual(summary["rows_read"], 8)
+        self.assertEqual(summary["rows_written"], 4)
+        self.assertEqual(
+            summary["labels"]["post.heartbeat"]["rows_read"],
+            5,
+        )
+        self.assertEqual(summary["labels"]["stats"]["rows_written"], 1)
+
+    def test_missing_and_partial_meta_are_counted_without_guessing(self) -> None:
+        payload = {
+            "success": True,
+            "errors": [],
+            "result": [
+                {"success": True, "results": []},
+                {
+                    "success": True,
+                    "results": [],
+                    "meta": {"rows_read": 4},
+                },
+                {
+                    "success": True,
+                    "results": [],
+                    "meta": {"rows_read": 1, "rows_written": "2"},
+                },
+            ],
+        }
+
+        with patch(
+            "crawler.d1.request.urlopen",
+            return_value=FakeResponse(payload),
+        ):
+            self.client.batch(
+                [
+                    ("SELECT 1", []),
+                    ("SELECT 2", []),
+                    ("SELECT 3", []),
+                ],
+                label="stats",
+            )
+
+        summary = self.client.usage_summary()
+        self.assertEqual(summary["rows_read"], 5)
+        self.assertEqual(summary["rows_written"], 0)
+        self.assertEqual(summary["incomplete_meta_count"], 3)
+        self.assertEqual(summary["labels"]["stats"]["statement_count"], 3)
+
+    def test_failed_response_records_only_safe_aggregate_counters(self) -> None:
+        payload = {
+            "success": True,
+            "errors": [],
+            "result": [
+                {
+                    "success": False,
+                    "error": "constraint failed",
+                    "results": [],
+                }
+            ],
+        }
+
+        with patch(
+            "crawler.d1.request.urlopen",
+            return_value=FakeResponse(payload),
+        ), self.assertRaisesRegex(RuntimeError, "constraint failed"):
+            self.client.query(
+                "INSERT INTO private_table VALUES (?)",
+                ["secret-value"],
+                label="post.upsert",
+            )
+
+        summary = self.client.usage_summary()
+        self.assertEqual(summary["request_count"], 1)
+        self.assertEqual(summary["failed_request_count"], 1)
+        self.assertEqual(summary["statement_count"], 0)
+        self.assertEqual(
+            summary["labels"]["post.upsert"]["failed_request_count"],
+            1,
+        )
+        serialized = json.dumps(summary)
+        self.assertNotIn("private_table", serialized)
+        self.assertNotIn("secret-value", serialized)
+        self.assertNotIn("token", serialized)
+
+    def test_snapshot_exposes_one_callers_total_across_work_labels(self) -> None:
+        def response(rows_read: int, rows_written: int) -> FakeResponse:
+            return FakeResponse(
+                {
+                    "success": True,
+                    "errors": [],
+                    "result": [
+                        {
+                            "success": True,
+                            "results": [],
+                            "meta": {
+                                "rows_read": rows_read,
+                                "rows_written": rows_written,
+                            },
+                        }
+                    ],
+                }
+            )
+
+        with patch(
+            "crawler.d1.request.urlopen",
+            side_effect=[
+                response(2, 3),
+                response(4, 5),
+                response(6, 1),
+                response(7, 2),
+                response(8, 3),
+            ],
+        ):
+            self.client.execute("bootstrap", label="source.bootstrap")
+            checkpoint = d1_usage_snapshot(self.client)
+            self.assertIsNotNone(checkpoint)
+            self.client.execute("upsert", label="post.upsert")
+            self.client.execute("stats", label="stats")
+            with d1_usage_label(self.client, "game-news.candidate"):
+                self.client.execute("game-news")
+            with d1_usage_label(self.client, "topic"):
+                self.client.execute("topic")
+
+        summary = d1_usage_summary(self.client, checkpoint)
+        self.assertIsNotNone(summary)
+        self.assertEqual(summary["request_count"], 4)
+        self.assertEqual(summary["statement_count"], 4)
+        self.assertEqual(summary["rows_read"], 25)
+        self.assertEqual(summary["rows_written"], 11)
+        self.assertEqual(
+            set(summary["labels"]),
+            {"post.upsert", "stats", "game-news.candidate", "topic"},
+        )
 
     def test_batch_requires_one_result_for_each_statement(self) -> None:
         payload = {

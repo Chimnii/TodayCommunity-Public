@@ -18,7 +18,12 @@ from crawler.archive_stats import (
     stats_mutation_statements,
 )
 from crawler.config import get_env, get_required_env, is_truthy
-from crawler.d1 import D1Client, D1Statement
+from crawler.d1 import (
+    D1Client,
+    D1Statement,
+    d1_usage_label,
+    d1_usage_summary,
+)
 from crawler.parsers.dcinside import (
     DcinsideListParser,
     is_qualifying_post,
@@ -178,20 +183,42 @@ def scan_target(target: TargetBoard, pages: int, page_delay_seconds: float) -> D
 def _execute_statements(
     client: D1Client,
     statements: Iterable[D1Statement],
+    *,
+    label: Optional[str] = None,
+    labels: Optional[Iterable[str]] = None,
 ) -> None:
     prepared = list(statements)
     if not prepared:
         return
+    prepared_labels = tuple(labels) if labels is not None else None
+    if prepared_labels is not None and len(prepared_labels) != len(prepared):
+        raise ValueError("D1 statement labels must match the statement count")
 
     # D1 executes the ordered statements in one REST request. Query-only
     # SQLite/local clients keep the same SQL path for tests and local tools.
     batch = getattr(client, "batch", None)
     if callable(batch):
-        batch(prepared)
+        labeled_batch = getattr(client, "batch_with_labels", None)
+        if prepared_labels is not None and callable(labeled_batch):
+            labeled_batch(prepared, prepared_labels)
+        elif label is not None:
+            with d1_usage_label(client, label):
+                batch(prepared)
+        else:
+            batch(prepared)
         return
 
-    for sql, params in prepared:
-        client.query(sql, params)
+    for index, (sql, params) in enumerate(prepared):
+        statement_label = (
+            prepared_labels[index]
+            if prepared_labels is not None
+            else label
+        )
+        if statement_label is not None:
+            with d1_usage_label(client, statement_label):
+                client.query(sql, params)
+        else:
+            client.query(sql, params)
 
 
 def upsert_source(client: D1Client, target: TargetBoard, run_started_at: str) -> None:
@@ -263,7 +290,7 @@ def upsert_source(client: D1Client, target: TargetBoard, run_started_at: str) ->
         source_state_statement,
     ]
 
-    _execute_statements(client, statements)
+    _execute_statements(client, statements, label="source.bootstrap")
 
 
 def record_run(
@@ -281,24 +308,25 @@ def record_run(
     run_started_at = canonicalize_utc_text(run_started_at)
     if ensure_source:
         upsert_source(client, target, run_started_at)
-    client.query(
-        """
-        INSERT INTO crawl_runs (
-          source_key, run_type, status, scanned_pages, scanned_posts, matched_posts, started_at, finished_at, error_message
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        [
-            target.key,
-            run_type,
-            status,
-            scanned_pages,
-            scanned_posts,
-            matched_posts,
-            run_started_at,
-            utc_now(),
-            error_message[:500],
-        ],
-    )
+    with d1_usage_label(client, "run.log"):
+        client.query(
+            """
+            INSERT INTO crawl_runs (
+              source_key, run_type, status, scanned_pages, scanned_posts, matched_posts, started_at, finished_at, error_message
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                target.key,
+                run_type,
+                status,
+                scanned_pages,
+                scanned_posts,
+                matched_posts,
+                run_started_at,
+                utc_now(),
+                error_message[:500],
+            ],
+        )
 
 
 def persist_posts(
@@ -450,26 +478,27 @@ def upsert_posts(
 
         external_ids = [str(post["external_post_id"]).strip() for post in chunk]
         identity_placeholders = ", ".join("?" for _ in chunk)
-        existing_rows = client.query(
-            f"""
-            SELECT id, source_key, archive_key, canonical_post_key,
-                   external_post_id, subject, status
-            FROM posts
-            WHERE (
-              archive_key = ?
-              AND canonical_post_key IN ({identity_placeholders})
-            ) OR (
-              source_key = ?
-              AND external_post_id IN ({identity_placeholders})
+        with d1_usage_label(client, "post.lookup"):
+            existing_rows = client.query(
+                f"""
+                SELECT id, source_key, archive_key, canonical_post_key,
+                       external_post_id, subject, status
+                FROM posts
+                WHERE (
+                  archive_key = ?
+                  AND canonical_post_key IN ({identity_placeholders})
+                ) OR (
+                  source_key = ?
+                  AND external_post_id IN ({identity_placeholders})
+                )
+                """,
+                [
+                    target.archive_key,
+                    *canonical_keys,
+                    target.key,
+                    *external_ids,
+                ],
             )
-            """,
-            [
-                target.archive_key,
-                *canonical_keys,
-                target.key,
-                *external_ids,
-            ],
-        )
         existing_by_canonical = {
             str(row.get("canonical_post_key") or ""): row
             for row in existing_rows
@@ -533,6 +562,11 @@ def upsert_posts(
                 (heartbeat_sql, heartbeat_params),
                 *stats_statements,
             ],
+            labels=(
+                "post.upsert",
+                "post.heartbeat",
+                *("stats" for _ in stats_statements),
+            ),
         )
         if on_batch_persisted is not None:
             on_batch_persisted(len(chunk))
@@ -588,15 +622,16 @@ def update_finalized_posts(
             for post in chunk
         ]
         placeholders = ", ".join("?" for _ in chunk)
-        existing_rows = client.query(
-            f"""
-            SELECT canonical_post_key
-            FROM posts
-            WHERE archive_key = ?
-              AND canonical_post_key IN ({placeholders})
-            """,
-            [target.archive_key, *canonical_keys],
-        )
+        with d1_usage_label(client, "post.lookup"):
+            existing_rows = client.query(
+                f"""
+                SELECT canonical_post_key
+                FROM posts
+                WHERE archive_key = ?
+                  AND canonical_post_key IN ({placeholders})
+                """,
+                [target.archive_key, *canonical_keys],
+            )
         existing_canonical_keys.update(
             str(row["canonical_post_key"])
             for row in existing_rows
@@ -638,16 +673,17 @@ def mark_posts_deleted(
     for offset in range(0, len(normalized_ids), EXISTING_POST_IDS_PER_QUERY):
         chunk = normalized_ids[offset : offset + EXISTING_POST_IDS_PER_QUERY]
         placeholders = ", ".join("?" for _ in chunk)
-        active_rows = client.query(
-            f"""
-            SELECT external_post_id, subject, status
-            FROM posts
-            WHERE source_key = ?
-              AND external_post_id IN ({placeholders})
-              AND status = 'active'
-            """,
-            [target.key, *chunk],
-        )
+        with d1_usage_label(client, "post.lookup"):
+            active_rows = client.query(
+                f"""
+                SELECT external_post_id, subject, status
+                FROM posts
+                WHERE source_key = ?
+                  AND external_post_id IN ({placeholders})
+                  AND status = 'active'
+                """,
+                [target.key, *chunk],
+            )
         active_ids = [str(row["external_post_id"]) for row in active_rows]
         if not active_ids:
             continue
@@ -669,6 +705,12 @@ def mark_posts_deleted(
             subject_deltas,
         )
         changed_at = utc_now()
+        stats_statements = stats_mutation_statements(
+            target.archive_key,
+            transitions,
+            changed_at,
+            previous_subject_counts=subject_counts,
+        )
         _execute_statements(
             client,
             [
@@ -682,13 +724,12 @@ def mark_posts_deleted(
                     """,
                     [target.key, *active_ids],
                 ),
-                *stats_mutation_statements(
-                    target.archive_key,
-                    transitions,
-                    changed_at,
-                    previous_subject_counts=subject_counts,
-                ),
+                *stats_statements,
             ],
+            labels=(
+                "post.update",
+                *("stats" for _ in stats_statements),
+            ),
         )
         deleted_count += len(active_ids)
     return deleted_count
@@ -730,19 +771,19 @@ def main() -> None:
             "matched_posts": len(posts),
             "posts": posts,
         }
+        if client:
+            persist_posts(
+                client,
+                target=target,
+                posts=posts,
+                scanned_pages=scanned_pages,
+                scanned_posts=scanned_posts,
+                run_started_at=run_started_at,
+            )
+            usage = d1_usage_summary(client)
+            if usage is not None:
+                result["d1_usage"] = usage
         print(json.dumps(result, ensure_ascii=False, indent=2))
-
-        if not client:
-            return
-
-        persist_posts(
-            client,
-            target=target,
-            posts=posts,
-            scanned_pages=scanned_pages,
-            scanned_posts=scanned_posts,
-            run_started_at=run_started_at,
-        )
     except CrawlBlockedError as exc:
         if client:
             record_run(
@@ -756,16 +797,17 @@ def main() -> None:
                 error_message=str(exc),
             )
 
+        failure = {
+            "target": target.key,
+            "status": "blocked",
+            "error": str(exc),
+        }
+        if client:
+            usage = d1_usage_summary(client)
+            if usage is not None:
+                failure["d1_usage"] = usage
         print(
-            json.dumps(
-                {
-                    "target": target.key,
-                    "status": "blocked",
-                    "error": str(exc),
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
+            json.dumps(failure, ensure_ascii=False, indent=2),
             file=sys.stderr,
         )
         raise SystemExit(1) from exc
@@ -782,16 +824,17 @@ def main() -> None:
                 error_message=str(exc),
             )
 
+        failure = {
+            "target": target.key,
+            "status": "failed",
+            "error": str(exc),
+        }
+        if client:
+            usage = d1_usage_summary(client)
+            if usage is not None:
+                failure["d1_usage"] = usage
         print(
-            json.dumps(
-                {
-                    "target": target.key,
-                    "status": "failed",
-                    "error": str(exc),
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
+            json.dumps(failure, ensure_ascii=False, indent=2),
             file=sys.stderr,
         )
         raise SystemExit(1) from exc

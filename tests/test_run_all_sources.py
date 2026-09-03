@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import os
 import unittest
 from unittest.mock import patch
 
+from crawler.d1 import D1Client
 from crawler.jobs.run_all_sources import (
     CYCLE_MODE_BACKFILL,
     CYCLE_MODE_HOT,
@@ -14,7 +16,58 @@ from crawler.jobs.run_all_sources import (
 from crawler.targets import get_target, iter_targets
 
 
+class FakeResponse:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+
+    def __enter__(self) -> "FakeResponse":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return json.dumps(self.payload).encode("utf-8")
+
+
 class RunAllSourcesTests(unittest.TestCase):
+    def test_sweep_result_exposes_the_callers_aggregate_d1_usage(self) -> None:
+        client = D1Client("account", "database", "token")
+        payload = {
+            "success": True,
+            "errors": [],
+            "result": [
+                {
+                    "success": True,
+                    "results": [],
+                    "meta": {"rows_read": 9, "rows_written": 2},
+                }
+            ],
+        }
+
+        def runner(target, mode, run_client):
+            run_client.query("SELECT private_value", label="coverage")
+            return {"target": target.key, "status": "completed"}
+
+        with patch(
+            "crawler.d1.request.urlopen",
+            return_value=FakeResponse(payload),
+        ):
+            result = run_all_targets(
+                mode=CYCLE_MODE_HOT,
+                client=client,
+                targets=(get_target("dcinside-singularity"),),
+                runner=runner,
+            )
+
+        self.assertEqual(result["d1_usage"]["request_count"], 1)
+        self.assertEqual(result["d1_usage"]["rows_read"], 9)
+        self.assertEqual(result["d1_usage"]["rows_written"], 2)
+        self.assertEqual(
+            result["d1_usage"]["labels"]["coverage"]["rows_read"],
+            9,
+        )
+
     def test_github_scheduled_sweeps_run_only_dc_targets(self) -> None:
         scheduled_keys = [target.key for target in iter_github_scheduled_targets()]
         self.assertEqual(

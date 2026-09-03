@@ -4,7 +4,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from crawler.d1 import D1Client
+from crawler.d1 import D1Client, d1_usage_label
 from crawler.timestamps import canonicalize_utc_text, utc_now
 
 
@@ -50,83 +50,86 @@ def source_state_initialization_statement(
 
 def ensure_source_state(client: D1Client, source_key: str, updated_at: Optional[str] = None) -> None:
     sql, params = source_state_initialization_statement(source_key, updated_at)
-    client.query(sql, params)
+    with d1_usage_label(client, "source.state"):
+        client.query(sql, params)
 
 
 def get_source_state(client: D1Client, source_key: str) -> Optional[SourceState]:
-    rows = client.query(
-        """
-        SELECT
-          source_key,
-          head_anchor_history,
-          recovery_mode,
-          recovery_depth_hint,
-          backfill_anchor_post_id,
-          backfill_anchor_created_at,
-          backfill_page_hint,
-          blocked_until,
-          last_blocked_at,
-          last_block_reason,
-          state_metadata,
-          created_at,
-          updated_at
-        FROM source_state
-        WHERE source_key = ?
-        LIMIT 1
-        """,
-        [source_key],
-    )
+    with d1_usage_label(client, "source.state"):
+        rows = client.query(
+            """
+            SELECT
+              source_key,
+              head_anchor_history,
+              recovery_mode,
+              recovery_depth_hint,
+              backfill_anchor_post_id,
+              backfill_anchor_created_at,
+              backfill_page_hint,
+              blocked_until,
+              last_blocked_at,
+              last_block_reason,
+              state_metadata,
+              created_at,
+              updated_at
+            FROM source_state
+            WHERE source_key = ?
+            LIMIT 1
+            """,
+            [source_key],
+        )
     return row_to_source_state(rows[0]) if rows else None
 
 
 def save_source_state(client: D1Client, state: SourceState) -> None:
     payload = normalize_state_payload(state)
-    client.query(
-        """
-        INSERT INTO source_state (
-          source_key,
-          head_anchor_history,
-          recovery_mode,
-          recovery_depth_hint,
-          backfill_anchor_post_id,
-          backfill_anchor_created_at,
-          backfill_page_hint,
-          blocked_until,
-          last_blocked_at,
-          last_block_reason,
-          state_metadata,
-          created_at,
-          updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(source_key) DO UPDATE SET
-          head_anchor_history = excluded.head_anchor_history,
-          recovery_mode = excluded.recovery_mode,
-          recovery_depth_hint = excluded.recovery_depth_hint,
-          backfill_anchor_post_id = excluded.backfill_anchor_post_id,
-          backfill_anchor_created_at = excluded.backfill_anchor_created_at,
-          backfill_page_hint = excluded.backfill_page_hint,
-          blocked_until = excluded.blocked_until,
-          last_blocked_at = excluded.last_blocked_at,
-          last_block_reason = excluded.last_block_reason,
-          state_metadata = excluded.state_metadata,
-          updated_at = excluded.updated_at
-        """,
-        [
-            payload["source_key"],
-            payload["head_anchor_history"],
-            payload["recovery_mode"],
-            payload["recovery_depth_hint"],
-            payload["backfill_anchor_post_id"],
-            payload["backfill_anchor_created_at"],
-            payload["backfill_page_hint"],
-            payload["blocked_until"],
-            payload["last_blocked_at"],
-            payload["last_block_reason"],
-            payload["state_metadata"],
-            payload["created_at"],
-            payload["updated_at"],
-        ],
-    )
+    with d1_usage_label(client, "source.state"):
+        client.query(
+            """
+            INSERT INTO source_state (
+              source_key,
+              head_anchor_history,
+              recovery_mode,
+              recovery_depth_hint,
+              backfill_anchor_post_id,
+              backfill_anchor_created_at,
+              backfill_page_hint,
+              blocked_until,
+              last_blocked_at,
+              last_block_reason,
+              state_metadata,
+              created_at,
+              updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(source_key) DO UPDATE SET
+              head_anchor_history = excluded.head_anchor_history,
+              recovery_mode = excluded.recovery_mode,
+              recovery_depth_hint = excluded.recovery_depth_hint,
+              backfill_anchor_post_id = excluded.backfill_anchor_post_id,
+              backfill_anchor_created_at = excluded.backfill_anchor_created_at,
+              backfill_page_hint = excluded.backfill_page_hint,
+              blocked_until = excluded.blocked_until,
+              last_blocked_at = excluded.last_blocked_at,
+              last_block_reason = excluded.last_block_reason,
+              state_metadata = excluded.state_metadata,
+              updated_at = excluded.updated_at
+            """,
+            [
+                payload["source_key"],
+                payload["head_anchor_history"],
+                payload["recovery_mode"],
+                payload["recovery_depth_hint"],
+                payload["backfill_anchor_post_id"],
+                payload["backfill_anchor_created_at"],
+                payload["backfill_page_hint"],
+                payload["blocked_until"],
+                payload["last_blocked_at"],
+                payload["last_block_reason"],
+                payload["state_metadata"],
+                payload["created_at"],
+                payload["updated_at"],
+            ],
+        )
 
 
 def normalize_state_payload(state: SourceState) -> Dict[str, Any]:

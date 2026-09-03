@@ -6,7 +6,7 @@ import re
 from typing import Dict, Iterable, List, Sequence, Tuple
 
 from crawler.config import get_required_env
-from crawler.d1 import D1Client
+from crawler.d1 import D1Client, d1_usage_label, d1_usage_summary
 
 
 REQUIRED_COLUMNS: Dict[str, Tuple[str, ...]] = {
@@ -797,10 +797,17 @@ def main() -> None:
         api_token=get_required_env("TC_CF_API_TOKEN"),
     )
     try:
-        report = validate_schema(client, deep_data_audit=args.deep_data_audit)
+        with d1_usage_label(client, "schema"):
+            report = validate_schema(client, deep_data_audit=args.deep_data_audit)
     except SchemaValidationError as exc:
+        usage = d1_usage_summary(client)
+        if usage is not None:
+            exc.report["d1_usage"] = usage
         print(json.dumps(exc.report, ensure_ascii=False, indent=2))
         raise SystemExit(f"D1 schema preflight failed: {exc}") from exc
+    usage = d1_usage_summary(client)
+    if usage is not None:
+        report["d1_usage"] = usage
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 

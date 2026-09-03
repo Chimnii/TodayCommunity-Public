@@ -4,6 +4,8 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Iterable, Mapping, Optional, Sequence
 
+from crawler.d1 import d1_usage_label
+
 
 ARCHIVE_STATS_COLUMNS = (
     "archive_key",
@@ -76,15 +78,16 @@ def load_subject_counts(
     if not normalized:
         return {}
     placeholders = ", ".join("?" for _ in normalized)
-    rows = client.query(
-        f"""
-        SELECT subject, active_post_count
-        FROM archive_subject_stats
-        WHERE archive_key = ?
-          AND subject IN ({placeholders})
-        """,
-        [archive_key, *normalized],
-    )
+    with d1_usage_label(client, "stats"):
+        rows = client.query(
+            f"""
+            SELECT subject, active_post_count
+            FROM archive_subject_stats
+            WHERE archive_key = ?
+              AND subject IN ({placeholders})
+            """,
+            [archive_key, *normalized],
+        )
     return {
         normalized_subject(row.get("subject")): int(
             row.get("active_post_count") or 0

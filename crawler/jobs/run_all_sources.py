@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List, Optional
 
 from crawler.config import get_env, get_required_env, is_truthy
-from crawler.d1 import D1Client
+from crawler.d1 import D1Client, d1_usage_snapshot, d1_usage_summary
 from crawler.jobs.run_cycle import (
     CYCLE_MODE_BACKFILL,
     CYCLE_MODE_HOT,
@@ -217,6 +217,7 @@ def run_all_targets(
     if mode not in VALID_MODES:
         raise ValueError(f"unsupported sweep mode: {mode!r}")
 
+    d1_usage_start = d1_usage_snapshot(client) if client else None
     started_at = canonical_utc(datetime.now(timezone.utc))
     target_list = tuple(
         iter_github_scheduled_targets() if targets is None else targets
@@ -295,7 +296,7 @@ def run_all_targets(
     failure_count = sum(
         1 for result in results if str(result.get("status", "")) in FAILURE_STATUSES
     )
-    return {
+    sweep_result: Dict[str, object] = {
         "mode": mode,
         "started_at": started_at,
         "finished_at": canonical_utc(datetime.now(timezone.utc)),
@@ -304,6 +305,11 @@ def run_all_targets(
         "failure_count": failure_count,
         "results": results,
     }
+    if client:
+        usage = d1_usage_summary(client, d1_usage_start)
+        if usage is not None:
+            sweep_result["d1_usage"] = usage
+    return sweep_result
 
 
 def main() -> None:

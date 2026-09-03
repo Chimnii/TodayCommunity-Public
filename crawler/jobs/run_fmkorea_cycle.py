@@ -9,7 +9,7 @@ from typing import Callable, Dict, List, Optional
 from urllib import error, request
 
 from crawler.config import get_env, get_required_env, is_truthy
-from crawler.d1 import D1Client
+from crawler.d1 import D1Client, d1_usage_snapshot, d1_usage_summary
 from crawler.jobs.scan_new_posts import (
     CrawlBlockedError,
     CrawlSourceError,
@@ -150,6 +150,7 @@ class FmkoreaCycle:
         self.target = target
         self.mode = mode
         self.client = client
+        self._d1_usage_start = d1_usage_snapshot(client) if client else None
         self.fetcher = fetcher or FmkoreaHttpSession()
         self.cycle_started_at = ensure_aware(now or datetime.now(timezone.utc)).replace(
             microsecond=0
@@ -542,7 +543,7 @@ class FmkoreaCycle:
         summary: Optional[FmkoreaPhaseSummary],
         error: str = "",
     ) -> Dict[str, object]:
-        return {
+        result: Dict[str, object] = {
             "target": self.target.key,
             "archive": self.target.archive_key,
             "mode": self.mode,
@@ -555,6 +556,11 @@ class FmkoreaCycle:
             "error": error,
             "phase": asdict(summary) if summary is not None else None,
         }
+        if self.client:
+            usage = d1_usage_summary(self.client, self._d1_usage_start)
+            if usage is not None:
+                result["d1_usage"] = usage
+        return result
 
 
 def run_fmkorea_target(

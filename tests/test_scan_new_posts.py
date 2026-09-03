@@ -4,6 +4,7 @@ import http.client
 import sqlite3
 import socket
 import unittest
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
@@ -42,10 +43,28 @@ class RecordingClient:
 class BatchRecordingClient:
     def __init__(self) -> None:
         self.batches = []
+        self.batch_labels = []
+        self._usage_labels = []
+
+    @contextmanager
+    def usage_label(self, label):
+        self._usage_labels.append(label)
+        try:
+            yield
+        finally:
+            self._usage_labels.pop()
 
     def batch(self, statements):
         batch = [(sql, list(params or [])) for sql, params in statements]
         self.batches.append(batch)
+        active = self._usage_labels[-1] if self._usage_labels else None
+        self.batch_labels.append(tuple(active for _ in batch))
+        return [{"success": True, "results": []} for _ in batch]
+
+    def batch_with_labels(self, statements, labels):
+        batch = [(sql, list(params or [])) for sql, params in statements]
+        self.batches.append(batch)
+        self.batch_labels.append(tuple(labels))
         return [{"success": True, "results": []} for _ in batch]
 
     def query(self, sql, params=None):
@@ -353,6 +372,10 @@ class SourceBootstrapTests(unittest.TestCase):
         self.assertIn("INSERT OR IGNORE INTO archive_stats", statements[2][0])
         self.assertIn("INSERT OR IGNORE INTO source_state", statements[3][0])
         self.assertNotIn("SELECT source_key", "\n".join(sql for sql, _ in statements))
+        self.assertEqual(
+            client.batch_labels[0],
+            ("source.bootstrap",) * len(statements),
+        )
         self.assertEqual(
             statements[0][1],
             [
@@ -677,6 +700,27 @@ class BatchedPostUpsertTests(unittest.TestCase):
         self.assertTrue(all("INSERT INTO posts" in sql for sql, _ in upserts))
         self.assertTrue(
             all("SET fetched_at = ?" in sql for sql, _ in heartbeats)
+        )
+        self.assertEqual(
+            client.batch_labels,
+            [
+                (
+                    "post.upsert",
+                    "post.heartbeat",
+                    "stats",
+                    "stats",
+                    "stats",
+                    "stats",
+                ),
+                (
+                    "post.upsert",
+                    "post.heartbeat",
+                    "stats",
+                    "stats",
+                    "stats",
+                    "stats",
+                ),
+            ],
         )
 
     def test_subject_is_inserted_but_not_backfilled_on_conflict(self) -> None:

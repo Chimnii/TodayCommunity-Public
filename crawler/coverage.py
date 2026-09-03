@@ -4,13 +4,22 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from crawler.d1 import D1Client
+from crawler.d1 import D1Client, d1_usage_label
 from crawler.timestamps import canonicalize_utc_text, utc_now
 
 
 NUMERIC_POST_ID_PATTERN = re.compile(r"^[0-9]+$")
 MAX_D1_BOUND_PARAMETERS = 100
 ABSENCE_IDS_PER_QUERY = MAX_D1_BOUND_PARAMETERS - 1
+
+
+def _coverage_query(
+    client: D1Client,
+    sql: str,
+    params: Optional[Iterable[object]] = None,
+) -> List[dict]:
+    with d1_usage_label(client, "coverage"):
+        return client.query(sql, params)
 
 
 def validate_numeric_post_id(value: object) -> int:
@@ -286,7 +295,8 @@ def load_coverage_intervals(
     *,
     normalized: bool = True,
 ) -> List[CoverageInterval]:
-    rows = client.query(
+    rows = _coverage_query(
+        client,
         """
         SELECT
           source_key,
@@ -316,7 +326,8 @@ class CoverageRepository:
 
     def contains(self, source_key: str, post_id: object) -> bool:
         numeric_post_id = validate_numeric_post_id(post_id)
-        rows = self.client.query(
+        rows = _coverage_query(
+            self.client,
             """
             SELECT 1 AS present
             FROM coverage_intervals
@@ -357,7 +368,8 @@ class CoverageRepository:
         return merged
 
     def _insert(self, interval: CoverageInterval) -> None:
-        self.client.query(
+        _coverage_query(
+            self.client,
             """
             INSERT INTO coverage_intervals (
               source_key,
@@ -388,7 +400,8 @@ class CoverageRepository:
         )
 
     def _delete(self, interval: CoverageInterval) -> None:
-        self.client.query(
+        _coverage_query(
+            self.client,
             """
             DELETE FROM coverage_intervals
             WHERE source_key = ?
@@ -404,7 +417,8 @@ class CoverageAbsenceRepository:
         self.client = client
 
     def load(self, source_key: str) -> List[CoverageAbsence]:
-        rows = self.client.query(
+        rows = _coverage_query(
+            self.client,
             """
             SELECT
               source_key,
@@ -441,7 +455,8 @@ class CoverageAbsenceRepository:
         for offset in range(0, len(normalized_post_ids), ABSENCE_IDS_PER_QUERY):
             chunk = normalized_post_ids[offset : offset + ABSENCE_IDS_PER_QUERY]
             placeholders = ", ".join("?" for _ in chunk)
-            rows = self.client.query(
+            rows = _coverage_query(
+                self.client,
                 f"""
                 SELECT
                   source_key,
@@ -464,7 +479,8 @@ class CoverageAbsenceRepository:
         return sorted(matched, key=lambda item: item.post_id)
 
     def record(self, absence: CoverageAbsence) -> CoverageAbsence:
-        self.client.query(
+        _coverage_query(
+            self.client,
             """
             INSERT INTO coverage_absences (
               source_key,
@@ -504,7 +520,8 @@ class CoverageAbsenceRepository:
         if not normalized_source_key:
             raise ValueError("Coverage absence deletion requires a source key.")
         numeric_post_id = validate_numeric_post_id(post_id)
-        self.client.query(
+        _coverage_query(
+            self.client,
             """
             DELETE FROM coverage_absences
             WHERE source_key = ? AND post_id = ?

@@ -17,7 +17,12 @@ from crawler.coverage import (
     merge_scanned_interval,
     normalize_effective_coverage,
 )
-from crawler.d1 import D1Client
+from crawler.d1 import (
+    D1Client,
+    d1_usage_label,
+    d1_usage_snapshot,
+    d1_usage_summary,
+)
 from crawler.jobs.scan_new_posts import (
     CrawlBlockedError,
     CrawlSourceError,
@@ -228,6 +233,7 @@ class CrawlCycle:
         self.config = config
         self.runtime = runtime
         self.client = client
+        self._d1_usage_start = d1_usage_snapshot(client) if client else None
         self.fetcher = fetcher
         self.mode = mode
         self.cycle_started_at = ensure_aware(
@@ -1506,17 +1512,18 @@ class CrawlCycle:
         if saved_until and saved_until > self.cycle_started_at:
             return
 
-        rows = self.client.query(
-            """
-            SELECT started_at, finished_at
-            FROM crawl_runs
-            WHERE source_key = ?
-              AND status = 'blocked'
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            [self.target.key],
-        )
+        with d1_usage_label(self.client, "run.log"):
+            rows = self.client.query(
+                """
+                SELECT started_at, finished_at
+                FROM crawl_runs
+                WHERE source_key = ?
+                  AND status = 'blocked'
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                [self.target.key],
+            )
         if not rows:
             return
 
@@ -1592,7 +1599,7 @@ class CrawlCycle:
         summaries: Sequence[PhaseSummary],
         error: str = "",
     ) -> Dict[str, object]:
-        return {
+        result: Dict[str, object] = {
             "target": self.target.key,
             "mode": self.mode,
             "status": status,
@@ -1606,6 +1613,11 @@ class CrawlCycle:
             "error": error,
             "phases": [asdict(item) for item in summaries],
         }
+        if self.client:
+            usage = d1_usage_summary(self.client, self._d1_usage_start)
+            if usage is not None:
+                result["d1_usage"] = usage
+        return result
 
 
 def interval_from_posts(
