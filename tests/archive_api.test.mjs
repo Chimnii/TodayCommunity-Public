@@ -9,6 +9,20 @@ const archiveModule = await import(
 );
 const { onRequestGet } = archiveModule;
 
+const EMPTY_LATEST_TOPIC = {
+  payload_json: JSON.stringify({
+    version: 1,
+    window_hours: 24,
+    window_start: "2026-08-21T00:00:00Z",
+    window_end: "2026-08-22T00:00:00Z",
+    generated_at: "2026-08-22T00:00:00Z",
+    summary: "최근 24시간에는 반복해서 다뤄진 주요 토픽이 아직 없습니다.",
+    eligible_post_count: 0,
+    analyzed_post_count: 0,
+    topics: [],
+  }),
+};
+
 function compactSql(sql) {
   return sql.replace(/\s+/g, " ").trim();
 }
@@ -76,6 +90,9 @@ class MockStatement {
       );
       return { results: topic ? [topic] : [] };
     }
+    if (this.sql.includes("FROM community_topic_latest")) {
+      return { results: this.database.topicLatest ? [this.database.topicLatest] : [] };
+    }
     if (this.sql.includes("SELECT window_start, window_end, window_hours")) {
       return { results: this.database.topicSnapshot ? [this.database.topicSnapshot] : [] };
     }
@@ -114,6 +131,7 @@ class MockDatabase {
     runs = [],
     archives,
     sources,
+    topicLatest = EMPTY_LATEST_TOPIC,
     topicSnapshot = null,
     topicItems = [],
     topics = [],
@@ -191,6 +209,7 @@ class MockDatabase {
     this.filteredPosts = filteredPosts;
     this.posts = posts;
     this.runs = runs;
+    this.topicLatest = topicLatest;
     this.topicSnapshot = topicSnapshot;
     this.topicItems = topicItems;
     this.topics = topics;
@@ -310,8 +329,8 @@ test("defaults to the first 30 globally counted posts and preserves recent runs"
   assert.equal(body.runs.length, 10);
 
   assert.equal(database.batchRequests.length, 1);
-  assert.equal(database.batchRequests[0].length, 6);
-  assert.equal(database.calls.filter((call) => call.method === "batch").length, 6);
+  assert.equal(database.batchRequests[0].length, 5);
+  assert.equal(database.calls.filter((call) => call.method === "batch").length, 5);
   assert.equal(database.calls.filter((call) => call.method === "first").length, 0);
   assert.equal(database.calls.filter((call) => call.method === "all").length, 1);
   assert.ok(database.calls.every(({ sql }) => !/COUNT\(|MAX\(|DISTINCT/i.test(sql)));
@@ -414,7 +433,7 @@ test("applies escaped title and numeric filters before paginating with a stable 
   assert.equal(body.pagination.previous_cursor, null);
   assert.equal(typeof body.pagination.next_cursor, "string");
   assert.equal(database.batchRequests.length, 1);
-  assert.equal(database.batchRequests[0].length, 6);
+  assert.equal(database.batchRequests[0].length, 5);
 
   const selectedSubject = "AI 소식' OR 1=1 --";
   const expectedFilterBindings = [target, 4, 15, selectedSubject, "%100\\%\\_\\\\%"];
@@ -516,6 +535,7 @@ test("returns the latest topic snapshot and filters every matching archived post
     filteredPosts: 4,
     posts: makeRows(4),
     topics: [{ topic_id: topicId, archive_key: target, label: "GPT-5.6 공개" }],
+    topicLatest: null,
     topicSnapshot: {
       window_start: "2026-08-21T12:00:00Z",
       window_end: "2026-08-22T00:00:00Z",
@@ -569,6 +589,71 @@ test("returns the latest topic snapshot and filters every matching archived post
   assert.equal(body.summary.filtered_posts, null);
   assert.equal(body.pagination.mode, "sequential");
   assert.equal(body.pagination.total_pages, null);
+  assert.equal(database.batchRequests.length, 2);
+  assert.equal(database.batchRequests[1].length, 2);
+  assert.ok(
+    database.calls.some(({ sql }) => sql.includes("FROM community_topic_snapshot_items"))
+  );
+});
+
+test("prefers the canonical latest topic row without reading legacy history", async () => {
+  const topicId = 17;
+  const database = new MockDatabase({
+    topicLatest: {
+      payload_json: JSON.stringify({
+        version: 1,
+        window_hours: 24,
+        window_start: "2026-08-21T00:00:00Z",
+        window_end: "2026-08-22T00:00:00Z",
+        generated_at: "2026-08-22T00:01:00Z",
+        summary: "저장 수치로 만든 기존 형식의 요약",
+        eligible_post_count: 12,
+        analyzed_post_count: 11,
+        topics: [
+          {
+            topic_id: topicId,
+            label: "GPT-5.6 공개",
+            post_count: 4,
+            previous_post_count: 1,
+            hotness_score: 61.5,
+            trend_state: "rising",
+            representative_posts: [
+              {
+                external_post_id: "1001",
+                title: "첫 번째 대표 글",
+                post_url: "https://example.com/post/1001",
+                created_at: "2026-08-21T23:30:00Z",
+              },
+              {
+                external_post_id: "1000",
+                title: "두 번째 대표 글",
+                post_url: "https://example.com/post/1000",
+                created_at: "2026-08-21T23:00:00Z",
+              },
+            ],
+          },
+        ],
+      }),
+    },
+  });
+
+  const { response, body } = await requestArchive(database);
+
+  assert.equal(response.status, 200);
+  assert.equal(body.topic_trends.window_hours, 24);
+  assert.equal(body.topic_trends.topics[0].label, "GPT-5.6 공개");
+  assert.equal(body.topic_trends.topics[0].post_count, 4);
+  assert.deepEqual(
+    body.topic_trends.topics[0].representative_posts.map((post) => post.title),
+    ["첫 번째 대표 글", "두 번째 대표 글"]
+  );
+  assert.equal(database.batchRequests.length, 1);
+  assert.ok(
+    database.calls.some(({ sql }) => sql.includes("FROM community_topic_latest"))
+  );
+  assert.ok(
+    database.calls.every(({ sql }) => !sql.includes("FROM community_topic_snapshot_items"))
+  );
 });
 
 test("rejects malformed and cross-archive topic filters", async () => {
@@ -1003,7 +1088,7 @@ test("clamps an out-of-range unfiltered page using the stats total", async () =>
   const { body } = await requestArchive(database, "?page=999&page_size=30");
 
   assert.equal(database.batchRequests.length, 1);
-  assert.equal(database.batchRequests[0].length, 6);
+  assert.equal(database.batchRequests[0].length, 5);
   assert.equal(body.summary.filtered_posts, 90);
   assert.deepEqual(body.pagination, {
     mode: "numbered",

@@ -504,6 +504,107 @@ function publicTopicTrends(snapshot, itemRows) {
   };
 }
 
+function publicLatestTopicTrends(row) {
+  if (!row) {
+    return null;
+  }
+  let payload;
+  try {
+    payload = JSON.parse(String(row.payload_json ?? ""));
+  } catch {
+    throw new Error("Latest topic snapshot payload is invalid JSON.");
+  }
+  if (
+    !payload ||
+    typeof payload !== "object" ||
+    Array.isArray(payload) ||
+    payload.version !== 1 ||
+    !Array.isArray(payload.topics)
+  ) {
+    throw new Error("Latest topic snapshot payload has an unsupported shape.");
+  }
+  return publicTopicTrends(
+    {
+      window_hours: payload.window_hours,
+      window_start: payload.window_start,
+      window_end: payload.window_end,
+      generated_at: payload.generated_at,
+      summary_text: payload.summary,
+      eligible_post_count: payload.eligible_post_count,
+      analyzed_post_count: payload.analyzed_post_count,
+    },
+    payload.topics.map((topic) => ({
+      ...topic,
+      representative_posts_json: topic?.representative_posts,
+    }))
+  );
+}
+
+async function loadLegacyTopicTrends(db, archiveKey) {
+  const [snapshotResult, itemsResult] = await db.batch([
+    db
+      .prepare(
+        `
+        SELECT window_start, window_end, window_hours, generated_at,
+               summary_text, eligible_post_count, analyzed_post_count
+        FROM community_topic_snapshots
+        WHERE archive_key = ?
+        ORDER BY generated_at DESC, id DESC
+        LIMIT 1
+        `
+      )
+      .bind(archiveKey),
+    db
+      .prepare(
+        `
+        SELECT item.topic_id, topic.label, item.topic_rank, item.post_count,
+               item.previous_post_count, item.hotness_score, item.trend_state,
+               COALESCE(
+                 (
+                   SELECT json_group_array(
+                     json_object(
+                       'external_post_id', representative.external_post_id,
+                       'title', representative.title,
+                       'post_url', representative.post_url,
+                       'created_at', representative.created_at
+                     )
+                   )
+                   FROM (
+                     SELECT post.external_post_id, post.title, post.post_url,
+                            post.created_at
+                     FROM community_topic_snapshot_representatives AS link
+                     INNER JOIN posts AS post ON post.id = link.post_id
+                     WHERE link.snapshot_id = item.snapshot_id
+                       AND link.topic_id = item.topic_id
+                       AND post.archive_key = topic.archive_key
+                       AND post.status = 'active'
+                     ORDER BY link.representative_rank ASC
+                     LIMIT 2
+                   ) AS representative
+                 ),
+                 '[]'
+               ) AS representative_posts_json
+        FROM community_topic_snapshot_items AS item
+        INNER JOIN community_topics AS topic ON topic.id = item.topic_id
+        WHERE item.snapshot_id = (
+          SELECT id
+          FROM community_topic_snapshots
+          WHERE archive_key = ?
+          ORDER BY generated_at DESC, id DESC
+          LIMIT 1
+        )
+        ORDER BY item.topic_rank ASC
+        LIMIT ${MAX_TOPIC_ITEMS}
+        `
+      )
+      .bind(archiveKey),
+  ]);
+  return publicTopicTrends(
+    firstResult(snapshotResult),
+    itemsResult?.results ?? []
+  );
+}
+
 function publicArchive(row) {
   if (!row) {
     return null;
@@ -763,8 +864,7 @@ export async function onRequestGet(context) {
     const offset = (page - 1) * pageSize;
     const batchStatements = [sourceStatement, runsStatement];
     let selectedTopicIndex = -1;
-    let topicSnapshotIndex = -1;
-    let topicItemsIndex = -1;
+    let topicLatestIndex = -1;
     if (communityArchive) {
       selectedTopicIndex = batchStatements.length;
       batchStatements.push(
@@ -779,64 +879,15 @@ export async function onRequestGet(context) {
           )
           .bind(topicId, target)
       );
-      topicSnapshotIndex = batchStatements.length;
+      topicLatestIndex = batchStatements.length;
       batchStatements.push(
         db
           .prepare(
             `
-            SELECT window_start, window_end, window_hours, generated_at,
-                   summary_text, eligible_post_count, analyzed_post_count
-            FROM community_topic_snapshots
+            SELECT payload_json
+            FROM community_topic_latest
             WHERE archive_key = ?
-            ORDER BY generated_at DESC, id DESC
             LIMIT 1
-            `
-          )
-          .bind(target)
-      );
-      topicItemsIndex = batchStatements.length;
-      batchStatements.push(
-        db
-          .prepare(
-            `
-            SELECT item.topic_id, topic.label, item.topic_rank, item.post_count,
-                   item.previous_post_count, item.hotness_score, item.trend_state,
-                   COALESCE(
-                     (
-                       SELECT json_group_array(
-                         json_object(
-                           'external_post_id', representative.external_post_id,
-                           'title', representative.title,
-                           'post_url', representative.post_url,
-                           'created_at', representative.created_at
-                         )
-                       )
-                       FROM (
-                         SELECT post.external_post_id, post.title, post.post_url,
-                                post.created_at
-                         FROM community_topic_snapshot_representatives AS link
-                         INNER JOIN posts AS post ON post.id = link.post_id
-                         WHERE link.snapshot_id = item.snapshot_id
-                           AND link.topic_id = item.topic_id
-                           AND post.archive_key = topic.archive_key
-                           AND post.status = 'active'
-                         ORDER BY link.representative_rank ASC
-                         LIMIT 2
-                       ) AS representative
-                     ),
-                     '[]'
-                   ) AS representative_posts_json
-            FROM community_topic_snapshot_items AS item
-            INNER JOIN community_topics AS topic ON topic.id = item.topic_id
-            WHERE item.snapshot_id = (
-              SELECT id
-              FROM community_topic_snapshots
-              WHERE archive_key = ?
-              ORDER BY generated_at DESC, id DESC
-              LIMIT 1
-            )
-            ORDER BY item.topic_rank ASC
-            LIMIT ${MAX_TOPIC_ITEMS}
             `
           )
           .bind(target)
@@ -878,11 +929,8 @@ export async function onRequestGet(context) {
     const selectedTopicResult = selectedTopicIndex >= 0
       ? batchResults[selectedTopicIndex]
       : null;
-    const topicSnapshotResult = topicSnapshotIndex >= 0
-      ? batchResults[topicSnapshotIndex]
-      : null;
-    const topicItemsResult = topicItemsIndex >= 0
-      ? batchResults[topicItemsIndex]
+    const topicLatestResult = topicLatestIndex >= 0
+      ? batchResults[topicLatestIndex]
       : null;
 
     const archives = [
@@ -895,6 +943,12 @@ export async function onRequestGet(context) {
     const selectedTopic = firstResult(selectedTopicResult);
     if (topicId > 0 && !selectedTopic) {
       return jsonResponse({ error: "Unknown topic filter." }, 400);
+    }
+    let topicTrends = communityArchive
+      ? publicLatestTopicTrends(firstResult(topicLatestResult))
+      : null;
+    if (communityArchive && !topicTrends) {
+      topicTrends = await loadLegacyTopicTrends(db, target);
     }
     const runs = (runResult.results ?? []).map(
       ({ had_error: hadError, error_message: _discardedError, ...run }) => ({
@@ -943,12 +997,7 @@ export async function onRequestGet(context) {
             label: String(selectedTopic.label ?? ""),
           }
         : null,
-      topic_trends: communityArchive
-        ? publicTopicTrends(
-            firstResult(topicSnapshotResult),
-            topicItemsResult?.results ?? []
-          )
-        : null,
+      topic_trends: topicTrends,
       summary: {
         total_posts: totalPosts,
         filtered_posts: filteredMode ? null : totalPosts,
