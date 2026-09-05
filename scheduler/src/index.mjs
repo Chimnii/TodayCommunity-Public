@@ -14,7 +14,7 @@ export const STALE_QUEUED_RUN_MS = 45 * 60 * 1000;
 export const RUN_LIST_PAGE_SIZE = 10;
 
 export const SCHEDULES = Object.freeze({
-  "7,37 * * * *": Object.freeze({
+  "7,22,37,52 * * * *": Object.freeze({
     kind: "hot",
     workflow: "scan-dcinside.yml",
     destinations: Object.freeze([PUBLIC_DESTINATION, FMKOREA_DESTINATION]),

@@ -66,22 +66,17 @@ class CrawlWorkflowContractTests(unittest.TestCase):
             self.assertRegex(workflow, r"(?m)^\s*group: scan-dcinside\s*$")
             self.assertRegex(workflow, r"(?m)^\s*cancel-in-progress: false\s*$")
 
-    def test_daily_headroom_is_checked_before_schema_and_persisting_work(self) -> None:
-        for workflow, profile in ((self.hot, "community-hot"),
-                                  (self.backfill, "community-backfill"),
-                                  (self.fmkorea, "fmkorea-hot")):
+    def test_normal_collection_disables_new_budget_stops(self) -> None:
+        for workflow in (self.hot, self.backfill, self.fmkorea, self.game_news):
             if workflow is None:
                 continue
-            self.assertLess(workflow.index("-m crawler.jobs.check_d1_budget"),
-                            workflow.index("-m crawler.jobs.check_schema"))
-            self.assertIn(f"--profile {profile}", workflow)
-            self.assertIn('TC_D1_DAILY_GATE_ENABLED: "1"', workflow)
-            self.assertIn("secrets.TC_CF_D1_ANALYTICS_TOKEN", workflow)
+            self.assertNotIn("-m crawler.jobs.check_d1_budget", workflow)
+            self.assertNotIn("secrets.TC_CF_D1_ANALYTICS_TOKEN", workflow)
+            self.assertIn('  TC_D1_RUN_BUDGET_ENABLED: "0"', workflow)
+            self.assertIn('  TC_D1_DAILY_GATE_ENABLED: "0"', workflow)
+            self.assertNotIn('TC_D1_RUN_BUDGET_ENABLED: "1"', workflow)
+            self.assertNotIn('TC_D1_DAILY_GATE_ENABLED: "1"', workflow)
         if self.game_news is not None:
-            self.assertLess(self.game_news.index("-m crawler.jobs.check_d1_budget"),
-                            self.game_news.index("-m game_news.schema_check"))
-            self.assertIn("--profile game-news --profile topic", self.game_news)
-            self.assertIn("steps.d1_headroom.outcome == 'success'", self.game_news)
             self.assertIn("steps.d1_schema.outcome == 'success'", self.game_news)
             self.assertIn("steps.curation.outputs.d1_stop != 'true'", self.game_news)
 
@@ -711,9 +706,7 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertIn("always()", topic_step)
         self.assertIn("steps.run_root.outcome == 'success'", topic_step)
         self.assertIn("steps.curation.outputs.d1_stop != 'true'", topic_step)
-        self.assertIn("-m crawler.jobs.check_d1_budget --profile topic", topic_step)
-        self.assertLess(topic_step.index("-m crawler.jobs.check_d1_budget"),
-                        topic_step.index("-m community_topics.runner"))
+        self.assertNotIn("-m crawler.jobs.check_d1_budget", topic_step)
         self.assertIn("$env:OPENAI_API_KEY = $null", topic_step)
         self.assertIn("$env:CODEX_API_KEY = $null", topic_step)
         self.assertIn("$env:CODEX_HOME = $env:TC_GAME_NEWS_CODEX_HOME", topic_step)
@@ -733,8 +726,7 @@ class CrawlWorkflowContractTests(unittest.TestCase):
             "TC_CF_DATABASE_ID",
             "TC_CF_API_TOKEN",
         ):
-            expected = 4 if secret_name == "TC_CF_ACCOUNT_ID" else 3
-            self.assertEqual(workflow.count(f"secrets.{secret_name}"), expected)
+            self.assertEqual(workflow.count(f"secrets.{secret_name}"), 3)
         self.assertIn("Apply 30-day dedicated runtime retention", workflow)
         self.assertIn("[DateTime]::UtcNow.AddDays(-30)", workflow)
         self.assertIn('.todaycommunity-game-news-owned', workflow)

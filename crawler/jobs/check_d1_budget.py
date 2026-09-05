@@ -17,11 +17,21 @@ from crawler.d1 import (
 
 def check_daily_budget(profiles: Sequence[str]) -> dict:
     budgets = [run_budget_from_env(profile) for profile in profiles]
+    if all(budget is None for budget in budgets):
+        return {
+            "status": "allowed",
+            "enabled": False,
+            "profiles": list(profiles),
+            "scope": "account_utc_day_admission",
+            "stop_reason": None,
+            "hard_quota_guarantee": False,
+        }
     # Schema/source bootstrap is a separate process and has no client run meter.
     next_reads = sum(budget.rows_read for budget in budgets) + 2048
     next_writes = sum(budget.rows_written for budget in budgets) + 128
     result = {
         "status": "blocked",
+        "enabled": True,
         "profiles": list(profiles),
         "scope": "account_utc_day_admission",
         "hard_quota_guarantee": False,

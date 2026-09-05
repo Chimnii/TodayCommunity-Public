@@ -51,7 +51,8 @@ class D1RunBudget:
             raise ValueError("D1 control reserve must fit inside the run read budget")
 
 
-# These are independent run ceilings, not an account-wide daily quota ledger.
+# Optional experiment profiles, disabled in normal collection. Re-enabling
+# collection limits requires a separate policy decision, not an optimization.
 _RUN_BUDGET_DEFAULTS = {
     "community-hot": (20_000, 600),
     "fmkorea-hot": (20_000, 400),
@@ -63,8 +64,11 @@ _RUN_BUDGET_DEFAULTS = {
 _CONTROL_LABELS = frozenset({"source.state", "run.log", "coverage", "topic.snapshot"})
 
 
-def run_budget_from_env(profile: str) -> D1RunBudget:
-    """Use explicit, positive overrides; a typo cannot silently disable a guard."""
+def run_budget_from_env(profile: str) -> Optional[D1RunBudget]:
+    """Keep collection criteria unchanged unless budgets are explicitly enabled."""
+
+    if os.environ.get("TC_D1_RUN_BUDGET_ENABLED", "0") != "1":
+        return None
 
     default_reads, default_writes = _RUN_BUDGET_DEFAULTS[profile]
     prefix = "TC_D1_" + profile.upper().replace("-", "_")
@@ -178,6 +182,9 @@ class D1Client:
 
     @contextmanager
     def source_budget(self, rows_written: int) -> Iterator[None]:
+        if self._budget is None:
+            yield
+            return
         if self._source_budget_start is not None:
             raise ValueError("D1 source budget scopes cannot nest")
         self._source_budget_start = self.usage_snapshot()

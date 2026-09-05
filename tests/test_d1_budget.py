@@ -32,9 +32,77 @@ def response(reads=0, writes=0, *, missing_meta=False):
             "meta": {} if missing_meta else {"rows_read": reads, "rows_written": writes}}]}
 
 
+class D1DefaultCollectionTests(unittest.TestCase):
+    def setUp(self):
+        self.env = patch.dict(os.environ, {}, clear=True)
+        self.env.start()
+        self.addCleanup(self.env.stop)
+
+    def test_run_profiles_are_opt_in_even_with_old_limit_settings(self):
+        for enabled in (None, "0"):
+            if enabled is not None:
+                os.environ["TC_D1_RUN_BUDGET_ENABLED"] = enabled
+            with patch.dict(os.environ, {
+                "TC_D1_DAILY_GATE_ENABLED": "1",
+                "TC_D1_COMMUNITY_HOT_MAX_ROWS_WRITTEN": "1",
+            }):
+                for profile in ("community-hot", "fmkorea-hot", "community-backfill",
+                                "fmkorea-backfill", "game-news", "topic"):
+                    self.assertIsNone(run_budget_from_env(profile))
+                with patch("crawler.jobs.check_d1_budget._read_account_daily_usage") as read:
+                    result = check_daily_budget(["game-news", "topic"])
+                self.assertEqual(result["status"], "allowed")
+                self.assertFalse(result["enabled"])
+                read.assert_not_called()
+
+    def test_normal_sweeps_keep_order_and_continue_past_old_source_and_run_limits(self):
+        targets = tuple(get_target(key) for key in (
+            "dcinside-singularity", "dcinside-ai-utilize", "dcinside-zeus-pride"))
+        for mode, minutes in (("hot", 30), ("backfill", 360)):
+            for slot in range(3):
+                client = D1Client("account", "db", "token")
+                calls = []
+
+                def runner(target, mode, run_client):
+                    calls.append(target.key)
+                    # Both operations exceed the former source/run ceilings.
+                    for _ in range(2):
+                        run_client.check_budget(next_rows_written=900, next_rows_read=90_000)
+                        run_client.execute("UPDATE posts SET upvotes=1", label="post.upsert")
+                    return {"status": "completed"}
+
+                at = datetime(2026, 9, 5, tzinfo=timezone.utc) + timedelta(minutes=slot * minutes)
+                with patch.object(client, "_request", return_value=response(reads=90_000, writes=900)), \
+                     patch("crawler.d1._read_account_daily_usage") as read, \
+                     patch.dict(os.environ, {"TC_D1_DAILY_GATE_ENABLED": "1"}):
+                    result = run_all_targets(mode=mode, client=client, targets=targets,
+                                             scheduled_at=at, runner=runner)
+                self.assertEqual(result["status"], "completed")
+                self.assertEqual(calls, [target.key for target in targets])
+                self.assertIsNone(result["source_rotation_slot"])
+                self.assertIsNone(result["source_rotation_period_seconds"])
+                self.assertFalse(result["d1_budget"]["enabled"])
+                self.assertEqual(result["d1_usage"]["rows_written"], 5400)
+                self.assertEqual(result["d1_usage"]["rows_read"], 540_000)
+                read.assert_not_called()
+
+    def test_actual_quota_still_stops_further_sources_without_a_local_budget(self):
+        client = D1Client("account", "db", "token")
+        with patch.object(client, "_request", side_effect=RuntimeError(
+            "Your account has exceeded D1's free tier daily row write limit"
+        )) as send:
+            result = run_all_targets(mode="hot", client=client,
+                targets=(get_target("dcinside-singularity"), get_target("dcinside-ai-utilize")),
+                runner=lambda target, mode, run_client: run_client.query("SELECT 1"))
+        self.assertEqual(send.call_count, 1)
+        self.assertEqual(result["results"][1]["stop_reason"], "daily_quota")
+        self.assertFalse(result["results"][1]["source_requested"])
+
+
 class D1RunBudgetTests(unittest.TestCase):
     def setUp(self):
-        self.env = patch.dict(os.environ, {"TC_D1_DAILY_GATE_ENABLED": "0"})
+        self.env = patch.dict(os.environ, {"TC_D1_RUN_BUDGET_ENABLED": "1",
+                                          "TC_D1_DAILY_GATE_ENABLED": "0"})
         self.env.start()
         self.addCleanup(self.env.stop)
 
@@ -191,7 +259,8 @@ class D1RunBudgetTests(unittest.TestCase):
 
 class D1DailyGateTests(unittest.TestCase):
     def setUp(self):
-        self.env = patch.dict(os.environ, {"TC_D1_DAILY_GATE_ENABLED": "1",
+        self.env = patch.dict(os.environ, {"TC_D1_RUN_BUDGET_ENABLED": "1",
+            "TC_D1_DAILY_GATE_ENABLED": "1",
             "TC_CF_ACCOUNT_ID": "account", "TC_CF_D1_ANALYTICS_TOKEN": "secret-token"})
         self.env.start()
         self.addCleanup(self.env.stop)
@@ -242,6 +311,12 @@ class D1DailyGateTests(unittest.TestCase):
 
 
 class PipelineBudgetTests(unittest.TestCase):
+    def setUp(self):
+        self.env = patch.dict(os.environ, {"TC_D1_RUN_BUDGET_ENABLED": "1",
+                                          "TC_D1_DAILY_GATE_ENABLED": "0"})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+
     @unittest.skipUnless((Path(__file__).resolve().parents[1] / "game_news").is_dir(),
                          "Game-news pipeline is private and omitted from the public mirror")
     def test_game_models_do_not_run_when_minimum_next_persistence_cannot_fit(self):

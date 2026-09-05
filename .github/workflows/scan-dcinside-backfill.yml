@@ -11,6 +11,12 @@ concurrency:
   group: scan-dcinside
   cancel-in-progress: false
 
+# Collection criteria stay unchanged while D1 operations are optimized.
+# Override inherited runner settings; limits require a separate policy decision.
+env:
+  TC_D1_RUN_BUDGET_ENABLED: "0"
+  TC_D1_DAILY_GATE_ENABLED: "0"
+
 jobs:
   backfill:
     name: DC Backfill crawl attempt
@@ -29,12 +35,6 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Check account D1 daily headroom
-        env:
-          TC_CF_ACCOUNT_ID: ${{ secrets.TC_CF_ACCOUNT_ID }}
-          TC_CF_D1_ANALYTICS_TOKEN: ${{ secrets.TC_CF_D1_ANALYTICS_TOKEN }}
-        run: python -m crawler.jobs.check_d1_budget --profile community-backfill
-
       - name: Verify D1 schema
         env:
           TC_CF_ACCOUNT_ID: ${{ secrets.TC_CF_ACCOUNT_ID }}
@@ -44,8 +44,6 @@ jobs:
 
       - name: Run scheduled DC Backfill crawl
         env:
-          TC_D1_DAILY_GATE_ENABLED: "1"
-          TC_CF_D1_ANALYTICS_TOKEN: ${{ secrets.TC_CF_D1_ANALYTICS_TOKEN }}
           TC_CF_ACCOUNT_ID: ${{ secrets.TC_CF_ACCOUNT_ID }}
           TC_CF_DATABASE_ID: ${{ secrets.TC_CF_DATABASE_ID }}
           TC_CF_API_TOKEN: ${{ secrets.TC_CF_API_TOKEN }}

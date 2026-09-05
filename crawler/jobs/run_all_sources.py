@@ -236,18 +236,20 @@ def run_all_targets(
     target_list = tuple(
         iter_github_scheduled_targets() if targets is None else targets
     )
-    rotation_period = 1800 if mode == CYCLE_MODE_HOT else 6 * 3600
-    rotation_slot = int(now.timestamp()) // rotation_period
-    # A fixed first source can repeatedly consume a shared run budget. Rotate
-    # persistent sweeps once per scheduled UTC slot without extra D1 writes.
-    if client is not None and target_list:
-        offset = rotation_slot % len(target_list)
-        target_list = target_list[offset:] + target_list[:offset]
     fmkorea_only = bool(target_list) and all(
         target.collector_kind.startswith("fmkorea-") for target in target_list
     )
     profile = f"{'fmkorea' if fmkorea_only else 'community'}-{mode}"
     configure_d1_run_budget(client, profile)
+    rotation_period = None
+    rotation_slot = None
+    # Preserve configured source order in normal collection. Rotation only
+    # belongs to the optional shared-budget experiment.
+    if target_list and (d1_budget_status(client) or {}).get("enabled"):
+        rotation_period = 1800 if mode == CYCLE_MODE_HOT else 6 * 3600
+        rotation_slot = int(now.timestamp()) // rotation_period
+        offset = rotation_slot % len(target_list)
+        target_list = target_list[offset:] + target_list[:offset]
     source_write_limit = (250 if fmkorea_only else 450) if mode == CYCLE_MODE_HOT else 600
     blocked_origins: Dict[str, Dict[str, str]] = {}
     results: List[Dict[str, object]] = []
@@ -351,7 +353,7 @@ def run_all_targets(
         "status": "failed" if failure_count else "completed",
         "target_count": len(results),
         "planned_source_order": [target.key for target in target_list],
-        "source_rotation_slot": rotation_slot if client is not None else None,
+        "source_rotation_slot": rotation_slot,
         "source_rotation_period_seconds": rotation_period,
         "failure_count": failure_count,
         "results": results,
