@@ -450,8 +450,6 @@ def upsert_posts(
                OR posts.created_at_raw IS NOT excluded.created_at_raw
                OR posts.created_at_basis IS NOT excluded.created_at_basis
                OR posts.created_at_precision IS NOT excluded.created_at_precision
-               OR posts.upvotes IS NOT excluded.upvotes
-               OR posts.comments IS NOT excluded.comments
                OR posts.qualifies_by IS NOT excluded.qualifies_by
                OR posts.status IS NOT 'active'
             """
@@ -552,24 +550,67 @@ def upsert_posts(
             previous_subject_counts=subject_counts,
         )
 
-        # Unchanged rescans update only the non-indexed observation times. New,
-        # changed, or restored rows still take the full UPSERT path. Both
-        # statements share one D1 request and persistence boundary per chunk.
+        # Structural changes and restoration keep the full conflict path.
+        # Metric-only changes must not name identity, time-sort, or status
+        # columns in SET: D1 charges for the associated index maintenance.
+        metric_statements = _metric_update_statements(
+            target.archive_key, chunk, canonical_keys, checked_at
+        )
         _execute_statements(
             client,
             [
                 (upsert_sql, params),
+                *metric_statements,
                 (heartbeat_sql, heartbeat_params),
                 *stats_statements,
             ],
             labels=(
                 "post.upsert",
+                *("post.metrics" for _ in metric_statements),
                 "post.heartbeat",
                 *("stats" for _ in stats_statements),
             ),
         )
         if on_batch_persisted is not None:
             on_batch_persisted(len(chunk))
+
+
+def _metric_update_statements(archive_key, posts, canonical_keys, checked_at):
+    latest_posts = dict(zip(canonical_keys, posts))
+    values = ", ".join("(?, ?, ?)" for _ in latest_posts)
+    incoming_params = [
+        value
+        for key, post in latest_posts.items()
+        for value in (key, post["upvotes"], post["comments"])
+    ]
+    statements = []
+    # Both first; after it runs, the two single-column paths cannot rewrite
+    # those rows. All predicates are evaluated inside the same atomic batch.
+    for columns, predicate in (
+        (("upvotes", "comments"), "posts.upvotes IS NOT incoming.upvotes AND posts.comments IS NOT incoming.comments"),
+        (("upvotes",), "posts.upvotes IS NOT incoming.upvotes AND posts.comments IS incoming.comments"),
+        (("comments",), "posts.comments IS NOT incoming.comments AND posts.upvotes IS incoming.upvotes"),
+    ):
+        assignments = ", ".join(
+            f"{column} = (SELECT {column} FROM incoming WHERE incoming.key = posts.canonical_post_key)"
+            for column in columns
+        )
+        statements.append((
+            f"""
+            WITH incoming(key, upvotes, comments) AS (VALUES {values})
+            UPDATE posts
+            SET {assignments}, fetched_at = ?, last_seen_at = ?
+            WHERE archive_key = ?
+              AND canonical_post_key IN (SELECT key FROM incoming)
+              AND EXISTS (
+                SELECT 1 FROM incoming
+                WHERE incoming.key = posts.canonical_post_key
+                  AND ({predicate})
+              )
+            """,
+            [*incoming_params, checked_at, checked_at, archive_key],
+        ))
+    return statements
 
 
 def post_upsert_query_count(post_count: int) -> int:

@@ -692,9 +692,10 @@ class BatchedPostUpsertTests(unittest.TestCase):
 
         self.assertEqual(post_upsert_query_count(len(posts)), 2)
         self.assertEqual(len(client.batches), 2)
-        self.assertEqual([len(batch) for batch in client.batches], [6, 6])
+        self.assertEqual([len(batch) for batch in client.batches], [9, 9])
         upserts = [batch[0] for batch in client.batches]
-        heartbeats = [batch[1] for batch in client.batches]
+        heartbeats = [batch[4] for batch in client.batches]
+        self.assertTrue(all(len(params) <= 100 for batch in client.batches for _, params in batch))
         self.assertEqual([len(params) for _, params in upserts], [97, 17])
         self.assertEqual([len(params) for _, params in heartbeats], [11, 6])
         self.assertTrue(all("INSERT INTO posts" in sql for sql, _ in upserts))
@@ -706,6 +707,9 @@ class BatchedPostUpsertTests(unittest.TestCase):
             [
                 (
                     "post.upsert",
+                    "post.metrics",
+                    "post.metrics",
+                    "post.metrics",
                     "post.heartbeat",
                     "stats",
                     "stats",
@@ -714,6 +718,9 @@ class BatchedPostUpsertTests(unittest.TestCase):
                 ),
                 (
                     "post.upsert",
+                    "post.metrics",
+                    "post.metrics",
+                    "post.metrics",
                     "post.heartbeat",
                     "stats",
                     "stats",
@@ -722,6 +729,40 @@ class BatchedPostUpsertTests(unittest.TestCase):
                 ),
             ],
         )
+
+    def test_metric_changes_do_not_touch_unrelated_index_columns(self) -> None:
+        for changes, expected in (
+            ({"upvotes": 8}, ["any", "upvotes"]),
+            ({"comments": 12}, ["any", "comments"]),
+            ({"upvotes": 8, "comments": 12}, ["any", "comments", "upvotes"]),
+        ):
+            with self.subTest(changes=changes):
+                client = SqliteClient()
+                target = get_target("dcinside-singularity")
+                upsert_source(client, target, "2026-07-16T00:00:00Z")
+                upsert_posts(client, target, [sample_post(1)], "2026-07-16T00:00:00Z")
+                client.connection.executescript("""
+                    CREATE TABLE audit_updates(kind TEXT);
+                    CREATE TRIGGER audit_any AFTER UPDATE ON posts
+                    BEGIN INSERT INTO audit_updates VALUES ('any'); END;
+                    CREATE TRIGGER audit_identity AFTER UPDATE OF archive_key,
+                      canonical_post_key, created_at, status ON posts
+                    BEGIN INSERT INTO audit_updates VALUES ('identity'); END;
+                    CREATE TRIGGER audit_votes AFTER UPDATE OF upvotes ON posts
+                    BEGIN INSERT INTO audit_updates VALUES ('upvotes'); END;
+                    CREATE TRIGGER audit_comments AFTER UPDATE OF comments ON posts
+                    BEGIN INSERT INTO audit_updates VALUES ('comments'); END;
+                """)
+                upsert_posts(client, target, [{**sample_post(1), **changes}], "2026-07-16T01:00:00Z")
+                self.assertEqual(
+                    [row["kind"] for row in client.query("SELECT kind FROM audit_updates ORDER BY kind")],
+                    expected,
+                )
+                row = client.query("SELECT * FROM posts")[0]
+                for column, value in changes.items():
+                    self.assertEqual(row[column], value)
+                self.assertEqual(row["last_seen_at"], "2026-07-16T01:00:00Z")
+                self.assertEqual(client.query("SELECT active_post_count FROM archive_stats WHERE archive_key = ?", [target.archive_key])[0]["active_post_count"], 1)
 
     def test_subject_is_inserted_but_not_backfilled_on_conflict(self) -> None:
         client = RecordingClient()

@@ -133,7 +133,14 @@ test("offers link-specific archive checkboxes only inside the all-tab filter for
   assert.match(app, /params\.append\("exclude_archive", archiveKey\)/);
   assert.match(app, /state\.excludedArchiveKeys = new Set\(\)/);
   assert.match(app, /queueArchiveFilterPreferenceSave\(\)/);
-  assert.doesNotMatch(app, /localStorage|sessionStorage/);
+  // The shared public-cache expiry may persist; link-specific filter choices
+  // must continue using their authenticated server endpoint.
+  const storageKeys = Array.from(
+    app.matchAll(/localStorage\.(?:getItem|setItem)\("([^"]+)"/g),
+    (match) => match[1]
+  );
+  assert.deepEqual(storageKeys, ["tc-archive-refresh-until", "tc-archive-refresh-until"]);
+  assert.doesNotMatch(app, /sessionStorage/);
   assert.match(css, /\.archive-filter\s*{[^}]*grid-column:\s*1 \/ -1/s);
   assert.match(css, /\.archive-filter\[hidden\]\s*{[^}]*display:\s*none/s);
   assert.match(
@@ -451,13 +458,13 @@ test("uses numbered jumps without filters and accessible previous-next controls 
   assert.match(app, /createCursorPageButton\([\s\S]*"다음"[\s\S]*pagination\.next_cursor/);
   assert.match(app, /previous\.disabled = !pagination\.has_previous/);
   assert.match(app, /next\.disabled = !pagination\.has_next/);
-  assert.match(app, /pageList\.setAttribute\("aria-label", "필터 결과 페이지 이동"\)/);
+  assert.match(app, /pageList\.setAttribute\("aria-label", "글 목록 구간 이동"\)/);
   assert.match(app, /current\.setAttribute\("aria-current", "page"\)/);
   assert.match(app, /function goToCursor\(cursor, page\)/);
   assert.match(app, /state\.cursor = String\(cursor \|\| ""\)/);
   assert.match(app, /params\.set\("cursor", state\.cursor\)/);
   assert.match(app, /state\.cursor = String\(params\.get\("cursor"\)/);
-  assert.match(app, /cursor: hasActivePostFilters\(\) && state\.cursor \? state\.cursor : null/);
+  assert.match(app, /cursor: state\.cursor \|\| null/);
   assert.match(app, /form\.setAttribute\("aria-label", "페이지 직접 이동"\)/);
   assert.match(app, /input\.type = "number"/);
   assert.match(app, /input\.min = "1"/);

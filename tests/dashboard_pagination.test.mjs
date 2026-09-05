@@ -50,6 +50,145 @@ test("loads the dashboard's pagination helpers without running initialize", () =
   assert.equal(typeof normalizePagination, "function");
 });
 
+function archiveRequestHarness({ storage, fetchImpl, now = () => 1000 } = {}) {
+  const calls = [];
+  const events = [];
+  const successfulResponse = {
+    ok: true,
+    json: async () => ({ target: "dcinside-singularity", posts: [], pagination: { page: 1 } }),
+  };
+  const runtime = vm.createContext({
+    document: { querySelector() {
+      return {
+        setCustomValidity(value) { events.push({ type: "validity", value }); },
+        reportValidity() { events.push({ type: "report-validity" }); },
+      };
+    } },
+    window: {},
+    localStorage: storage,
+    TextEncoder,
+    AbortController,
+    Date: class extends Date { static now() { return now(); } },
+    events,
+    fetch(url, options) {
+      calls.push(options);
+      return fetchImpl ? fetchImpl(url, options) : Promise.resolve(successfulResponse);
+    },
+  });
+  vm.runInContext(`${appWithoutInitialization}\n
+    renderLoadingState = () => events.push({type: 'loading'});
+    render = () => events.push({type: 'render', source: state.dataSource});
+    setFiltersExpanded = () => {};
+    buildApiUrl = () => '/api/archive';
+    withArchiveCatalog = value => value;
+    syncStateToUrl = () => {};
+    globalThis.archiveReview = {state, loadArchive, markArchiveChanged, archiveCacheBypassActive};
+  `, runtime);
+  return { ...runtime.archiveReview, calls, events, successfulResponse };
+}
+
+test("an invalid initial search renders an input error and recovers after correction", async () => {
+  const app = archiveRequestHarness();
+  app.state.search = "가".repeat(17);
+  await app.loadArchive();
+  assert.equal(app.calls.length, 0);
+  assert.equal(app.state.activeRequest, null);
+  assert.equal(app.state.dataSource, "unavailable");
+  assert.equal(app.state.archive.input_error, true);
+  assert.match(app.state.archive.error, /16자 이내로 줄여 주세요/);
+  assert.ok(app.events.some((event) => event.type === "render"));
+
+  app.state.search = "가".repeat(16);
+  await app.loadArchive();
+  assert.equal(app.calls.length, 1);
+  assert.equal(app.state.dataSource, "live");
+  assert.equal(app.state.activeRequest, null);
+  assert.equal(app.events.filter((event) => event.type === "validity").at(-1).value, "");
+});
+
+test("an invalid edit aborts the pending list and renders instead of leaving loading active", async () => {
+  let finishFetch;
+  const app = archiveRequestHarness({ fetchImpl: () => new Promise((resolve) => { finishFetch = resolve; }) });
+  const pending = app.loadArchive();
+  app.state.search = "가".repeat(17);
+  await app.loadArchive();
+  assert.equal(app.calls[0].signal.aborted, true);
+  assert.equal(app.state.activeRequest, null);
+  const rendered = app.events.filter((event) => event.type === "render").length;
+  assert.equal(rendered, 1);
+  assert.equal(app.state.archive.input_error, true);
+
+  finishFetch(app.successfulResponse);
+  await pending;
+  assert.equal(app.events.filter((event) => event.type === "render").length, rendered);
+  assert.equal(app.state.dataSource, "unavailable");
+});
+
+test("visibility refresh expiry survives reloads and is shared with already open tabs", async () => {
+  const stored = new Map();
+  const storage = {
+    getItem: (key) => stored.get(key) ?? null,
+    setItem: (key, value) => stored.set(key, value),
+  };
+  let now = 1000;
+  const options = { storage, now: () => now };
+  const first = archiveRequestHarness(options);
+  const alreadyOpenTab = archiveRequestHarness(options);
+  first.markArchiveChanged();
+  assert.deepEqual([...stored], [["tc-archive-refresh-until", "136000"]]);
+  const reloaded = archiveRequestHarness(options);
+  for (const app of [first, alreadyOpenTab, reloaded]) {
+    await app.loadArchive();
+    assert.equal(app.calls[0].cache, "no-store");
+    assert.equal(app.calls[0].headers["x-tc-refresh"], "1");
+  }
+
+  now = 136001;
+  await reloaded.loadArchive();
+  assert.equal(reloaded.calls.at(-1).cache, "default");
+  assert.equal(reloaded.calls.at(-1).headers["x-tc-refresh"], undefined);
+});
+
+test("an aborted HTTP error cannot replace a newer successful archive response", async () => {
+  let requestCount = 0;
+  let finishBody;
+  let notifyBodyStarted;
+  const bodyStarted = new Promise((resolve) => { notifyBodyStarted = resolve; });
+  const app = archiveRequestHarness({
+    fetchImpl: async () => {
+      requestCount += 1;
+      if (requestCount > 1) return app.successfulResponse;
+      return {
+        ok: false,
+        status: 400,
+        json() {
+          notifyBodyStarted();
+          return new Promise((resolve) => { finishBody = resolve; });
+        },
+      };
+    },
+  });
+  const oldRequest = app.loadArchive();
+  await bodyStarted;
+  app.state.search = "new query";
+  await app.loadArchive();
+  assert.equal(app.state.dataSource, "live");
+  const successfulArchive = app.state.archive;
+  finishBody({ error: "old input failure" });
+  await oldRequest;
+  assert.equal(app.state.dataSource, "live");
+  assert.equal(app.state.archive, successfulArchive);
+});
+
+test("blocked browser storage preserves current-tab visibility refresh", async () => {
+  const unavailable = () => { throw new Error("storage unavailable"); };
+  const app = archiveRequestHarness({ storage: { getItem: unavailable, setItem: unavailable } });
+  app.markArchiveChanged();
+  await app.loadArchive();
+  assert.equal(app.calls[0].cache, "no-store");
+  assert.equal(app.calls[0].headers["x-tc-refresh"], "1");
+});
+
 test("normalizePagination keeps cursor navigation without inventing a total", () => {
   assert.deepEqual(
     { ...normalizePagination({

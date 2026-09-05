@@ -6,7 +6,17 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List, Optional
 
 from crawler.config import get_env, get_required_env, is_truthy
-from crawler.d1 import D1Client, d1_usage_snapshot, d1_usage_summary
+from crawler.d1 import (
+    D1Client,
+    D1BudgetExceeded,
+    D1QuotaExceeded,
+    configure_d1_run_budget,
+    d1_budget_checkpoint,
+    d1_budget_status,
+    d1_source_budget,
+    d1_usage_snapshot,
+    d1_usage_summary,
+)
 from crawler.jobs.run_cycle import (
     CYCLE_MODE_BACKFILL,
     CYCLE_MODE_HOT,
@@ -210,6 +220,7 @@ def run_all_targets(
     mode: str,
     client: Optional[D1Client] = None,
     targets: Optional[Iterable[TargetBoard]] = None,
+    scheduled_at: Optional[datetime] = None,
     runner: Callable[
         [TargetBoard, str, Optional[D1Client]], Dict[str, object]
     ] = run_target,
@@ -218,14 +229,41 @@ def run_all_targets(
         raise ValueError(f"unsupported sweep mode: {mode!r}")
 
     d1_usage_start = d1_usage_snapshot(client) if client else None
-    started_at = canonical_utc(datetime.now(timezone.utc))
+    now = scheduled_at or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        raise ValueError("scheduled_at must have an explicit timezone")
+    started_at = canonical_utc(now)
     target_list = tuple(
         iter_github_scheduled_targets() if targets is None else targets
     )
+    rotation_period = 1800 if mode == CYCLE_MODE_HOT else 6 * 3600
+    rotation_slot = int(now.timestamp()) // rotation_period
+    # A fixed first source can repeatedly consume a shared run budget. Rotate
+    # persistent sweeps once per scheduled UTC slot without extra D1 writes.
+    if client is not None and target_list:
+        offset = rotation_slot % len(target_list)
+        target_list = target_list[offset:] + target_list[:offset]
+    fmkorea_only = bool(target_list) and all(
+        target.collector_kind.startswith("fmkorea-") for target in target_list
+    )
+    profile = f"{'fmkorea' if fmkorea_only else 'community'}-{mode}"
+    configure_d1_run_budget(client, profile)
+    source_write_limit = (250 if fmkorea_only else 450) if mode == CYCLE_MODE_HOT else 600
     blocked_origins: Dict[str, Dict[str, str]] = {}
     results: List[Dict[str, object]] = []
 
     for target in target_list:
+        try:
+            d1_budget_checkpoint(client)
+        except (D1BudgetExceeded, D1QuotaExceeded) as exc:
+            results.append({
+                "target": target.key,
+                "archive": target.archive_key,
+                "status": "failed",
+                "stop_reason": getattr(exc, "reason", "daily_quota"),
+                "source_requested": False,
+            })
+            continue
         origin_block = blocked_origins.get(target.origin_key)
         if origin_block:
             blocked_by = origin_block["target"]
@@ -254,7 +292,15 @@ def run_all_targets(
             continue
 
         try:
-            result = dict(runner(target, mode, client))
+            with d1_source_budget(client, source_write_limit):
+                result = dict(runner(target, mode, client))
+                # A cycle can return its own failed result rather than raising.
+                # Inspect the latch before allowing the next source to run.
+                try:
+                    d1_budget_checkpoint(client)
+                except (D1BudgetExceeded, D1QuotaExceeded) as exc:
+                    result["status"] = "failed"
+                    result["stop_reason"] = getattr(exc, "reason", "daily_quota")
         except Exception as exc:  # keep later independent origins observable
             result = {
                 "target": target.key,
@@ -262,6 +308,8 @@ def run_all_targets(
                 "status": "failed",
                 "error": f"{type(exc).__name__}: {exc}",
             }
+            if isinstance(exc, (D1BudgetExceeded, D1QuotaExceeded)):
+                result["stop_reason"] = getattr(exc, "reason", "daily_quota")
         result.setdefault("target", target.key)
         result.setdefault("archive", target.archive_key)
         results.append(result)
@@ -302,6 +350,9 @@ def run_all_targets(
         "finished_at": canonical_utc(datetime.now(timezone.utc)),
         "status": "failed" if failure_count else "completed",
         "target_count": len(results),
+        "planned_source_order": [target.key for target in target_list],
+        "source_rotation_slot": rotation_slot if client is not None else None,
+        "source_rotation_period_seconds": rotation_period,
         "failure_count": failure_count,
         "results": results,
     }
@@ -309,6 +360,9 @@ def run_all_targets(
         usage = d1_usage_summary(client, d1_usage_start)
         if usage is not None:
             sweep_result["d1_usage"] = usage
+        budget = d1_budget_status(client)
+        if budget is not None:
+            sweep_result["d1_budget"] = budget
     return sweep_result
 
 

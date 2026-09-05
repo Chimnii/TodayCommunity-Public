@@ -12,11 +12,14 @@ const DEFAULT_PAGE = 1;
 const DEFAULT_PAGE_SIZE = 30;
 const MAX_PAGE_SIZE = 100;
 const MAX_SEARCH_LENGTH = 100;
+const MAX_LIKE_PATTERN_BYTES = 50;
 const MAX_SUBJECT_LENGTH = 100;
 const MAX_SUBJECT_OPTIONS = 100;
 const MAX_ARCHIVE_FILTER_KEYS = 50;
 const MAX_TOPIC_ITEMS = 6;
 const MAX_CURSOR_LENGTH = 8192;
+const MAX_NUMBERED_ROWS = 4000;
+const MAX_SCAN_ROWS = 512;
 const TARGET_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const TOPIC_TREND_STATES = new Set(["new", "rising", "active"]);
 
@@ -66,7 +69,10 @@ function normalizeMinimum(rawValue) {
 }
 
 function normalizeSearch(rawValue) {
-  return Array.from((rawValue ?? "").trim()).slice(0, MAX_SEARCH_LENGTH).join("");
+  const value = (rawValue ?? "").trim();
+  return Array.from(value).length <= MAX_SEARCH_LENGTH &&
+    new TextEncoder().encode(`%${escapeLike(value)}%`).length <= MAX_LIKE_PATTERN_BYTES
+    ? value : null;
 }
 
 function normalizeSubject(rawValue) {
@@ -254,6 +260,7 @@ function buildCacheKey(
 ) {
   const cacheUrl = new URL(url.pathname, url.origin);
   const normalized = {
+    format: "bounded-v2",
     target,
     page: String(requestedPage),
     page_size: String(pageSize),
@@ -315,6 +322,7 @@ function summarizeStats(rows) {
 
 function cursorFilterSignature({
   target,
+  pageSize,
   query,
   minUpvotes,
   minComments,
@@ -325,6 +333,7 @@ function cursorFilterSignature({
 }) {
   return JSON.stringify({
     target,
+    pageSize,
     query,
     minUpvotes,
     minComments,
@@ -371,7 +380,8 @@ function decodeCursor(rawValue, expectedSignature, sort) {
       !Number.isSafeInteger(payload.page) ||
       payload.page < 1 ||
       !Array.isArray(payload.key) ||
-      payload.key.length !== expectedKeyLength
+      payload.key.length !== expectedKeyLength ||
+      (payload.inclusive !== undefined && typeof payload.inclusive !== "boolean")
     ) {
       return false;
     }
@@ -392,6 +402,7 @@ function decodeCursor(rawValue, expectedSignature, sort) {
       direction: payload.direction,
       page: payload.page,
       key: sort === "created_at" ? [createdAt, id] : [metric, createdAt, id],
+      inclusive: payload.inclusive === true,
     };
   } catch {
     return false;
@@ -402,12 +413,12 @@ function buildCursorBoundary(sort, cursor) {
   if (!cursor) {
     return { sql: "", bindings: [] };
   }
-  const operator = cursor.direction === "previous" ? ">" : "<";
+  const operator = (cursor.direction === "previous" ? ">" : "<") + (cursor.inclusive ? "=" : "");
   if (sort === "created_at") {
     const [createdAt, id] = cursor.key;
     return {
-      sql: `(posts.created_at ${operator} ? OR (posts.created_at = ? AND posts.id ${operator} ?))`,
-      bindings: [createdAt, createdAt, id],
+      sql: `(posts.created_at, posts.id) ${operator} (?, ?)`,
+      bindings: [createdAt, id],
     };
   }
 
@@ -415,16 +426,9 @@ function buildCursorBoundary(sort, cursor) {
   const column = SORT_COLUMNS[sort];
   return {
     sql: `(
-      posts.${column} ${operator} ?
-      OR (
-        posts.${column} = ?
-        AND (
-          posts.created_at ${operator} ?
-          OR (posts.created_at = ? AND posts.id ${operator} ?)
-        )
-      )
-    )`,
-    bindings: [metric, metric, createdAt, createdAt, id],
+      posts.${column}, posts.created_at, posts.id
+    ) ${operator} (?, ?, ?)`,
+    bindings: [metric, createdAt, id],
   };
 }
 
@@ -436,7 +440,7 @@ function cursorKeyForRow(row, sort) {
     : [Number(row[SORT_COLUMNS[sort]]), createdAt, id];
 }
 
-function makeCursor(direction, page, row, sort, signature) {
+function makeCursor(direction, page, row, sort, signature, inclusive = false) {
   return encodeCursor({
     version: 1,
     direction,
@@ -444,6 +448,7 @@ function makeCursor(direction, page, row, sort, signature) {
     sort,
     signature,
     key: cursorKeyForRow(row, sort),
+    ...(inclusive ? { inclusive: true } : {}),
   });
 }
 
@@ -626,7 +631,34 @@ function firstResult(result) {
   return result?.results?.[0] ?? null;
 }
 
+function meteredDatabase(binding, usage) {
+  const record = (result) => {
+    usage.statements += 1;
+    const meta = result?.meta;
+    if (!Number.isFinite(meta?.rows_read) || !Number.isFinite(meta?.rows_written)) {
+      usage.incomplete_meta += 1;
+    } else {
+      usage.rows_read += meta.rows_read;
+      usage.rows_written += meta.rows_written;
+    }
+    return result;
+  };
+  const wrap = (statement) => ({
+    statement,
+    bind(...values) { return wrap(statement.bind(...values)); },
+    async all() { return record(await statement.all()); },
+  });
+  return {
+    prepare(sql) { return wrap(binding.prepare(sql)); },
+    async batch(statements) {
+      return (await binding.batch(statements.map((item) => item.statement))).map(record);
+    },
+  };
+}
+
 export async function onRequestGet(context) {
+  const usage = { endpoint: "archive", cache: "unresolved", statements: 0,
+    rows_read: 0, rows_written: 0, incomplete_meta: 0, outcome: "ok" };
   try {
     const url = new URL(context.request.url);
     const target = (url.searchParams.get("target") || DEFAULT_TARGET).trim();
@@ -646,6 +678,9 @@ export async function onRequestGet(context) {
       maxPage
     );
     const query = normalizeSearch(url.searchParams.get("q"));
+    if (query === null) {
+      return jsonResponse({ error: "검색어가 너무 깁니다. 한글 기준 16자 이내로 줄여 주세요.", code: "search_too_long" }, 400);
+    }
     const minUpvotes = normalizeMinimum(url.searchParams.get("min_upvotes"));
     const minComments = normalizeMinimum(url.searchParams.get("min_comments"));
     const subject = normalizeSubject(url.searchParams.get("subject"));
@@ -687,6 +722,7 @@ export async function onRequestGet(context) {
     });
     const signature = cursorFilterSignature({
       target,
+      pageSize,
       query,
       minUpvotes,
       minComments,
@@ -696,23 +732,21 @@ export async function onRequestGet(context) {
       excludedArchives,
     });
     const rawCursor = String(url.searchParams.get("cursor") || "").trim();
-    if (!filteredMode && rawCursor) {
-      return jsonResponse({ error: "Cursor pagination requires an active filter." }, 400);
-    }
-    const cursor = filteredMode ? decodeCursor(rawCursor, signature, sort) : null;
-    if (cursor === false) {
+    const cursor = decodeCursor(rawCursor, signature, sort);
+    if (cursor === false || (cursor && cursor.page > maxPage)) {
       return jsonResponse({ error: "Archive cursor is invalid or expired." }, 400);
     }
 
-    const hasOwnerSession = /(?:^|;\s*)__Host-tc_(?:authenticated|admin)=/u.test(
-      context.request.headers.get("cookie") || ""
-    );
-    const cacheable = !hasOwnerSession;
+    // This endpoint contains only public data. Personal feedback and auth stay
+    // in their separate no-store endpoints; cookies do not vary this response.
+    const bypassCache = context.request.headers.get("x-tc-refresh") === "1" ||
+      /(?:no-cache|no-store)/i.test(context.request.headers.get("cache-control") || "");
+    const cacheable = !bypassCache;
     const edgeCache = cacheable ? globalThis.caches?.default : null;
     const cacheKey = buildCacheKey(url, {
       target,
       pageSize,
-      requestedPage: filteredMode ? cursor?.page ?? 1 : requestedPage,
+      requestedPage: cursor?.page ?? (filteredMode ? 1 : requestedPage),
       query,
       minUpvotes,
       minComments,
@@ -720,16 +754,21 @@ export async function onRequestGet(context) {
       topicId,
       sort,
       excludedArchives,
-      cursor: filteredMode ? rawCursor : "",
+      cursor: rawCursor,
     });
+    usage.cache = bypassCache ? "bypass" : "miss";
     if (edgeCache) {
       const cached = await edgeCache.match(cacheKey);
       if (cached) {
-        return cached;
+        usage.cache = "hit";
+        const response = new Response(cached.body, cached);
+        response.headers.set("x-tc-cache", "hit");
+        return response;
       }
     }
 
-    const statsResult = await context.env.DB
+    const db = meteredDatabase(context.env.DB, usage);
+    const statsResult = await db
       .prepare(
         `
         SELECT archive.archive_key, archive.display_name, archive.description,
@@ -761,12 +800,22 @@ export async function onRequestGet(context) {
     );
     const statsSummary = summarizeStats(relevantStatsRows);
     const totalPosts = statsSummary.totalPosts;
-    const totalPages = filteredMode ? null : Math.ceil(totalPosts / pageSize);
-    const page = filteredMode
-      ? cursor?.page ?? 1
-      : Math.min(requestedPage, Math.max(totalPages, 1));
-
-    const db = context.env.DB;
+    const exactTotalPages = Math.ceil(totalPosts / pageSize);
+    const sequentialMode = filteredMode || allArchives || Boolean(cursor) || totalPosts > MAX_NUMBERED_ROWS;
+    const totalPages = sequentialMode ? null : exactTotalPages;
+    const page = cursor?.page ?? (filteredMode ? 1
+      : Math.min(requestedPage, Math.max(exactTotalPages, 1)));
+    if (sequentialMode && !filteredMode && !cursor && page > 1 && page !== exactTotalPages) {
+      return jsonResponse({ error: "이 페이지는 처음이나 마지막 페이지에서 이전·다음으로 이동해 주세요.", code: "deep_page_requires_cursor" }, 400);
+    }
+    // Numeric jumps on small archives seek from the nearest end; large archives
+    // and sparse filters use bounded candidate windows and tuple cursors.
+    const offset = (page - 1) * pageSize;
+    const reverseOffset = Math.max(0, totalPosts - offset - pageSize);
+    const reversePage = !cursor && !filteredMode && page > 1 && reverseOffset < offset;
+    const direction = cursor?.direction ?? (reversePage ? "previous" : "next");
+    const visibleLimit = reversePage ? Math.min(pageSize, Math.max(0, totalPosts - offset)) : pageSize;
+    const candidateLimit = filteredMode ? MAX_SCAN_ROWS : visibleLimit + 1;
     const communityArchive = archive.content_kind === "community";
     if (!communityArchive && topicId > 0) {
       return jsonResponse({ error: "Topic filters are unavailable for this archive." }, 400);
@@ -861,7 +910,6 @@ export async function onRequestGet(context) {
             `
           )
           .bind(target);
-    const offset = (page - 1) * pageSize;
     const batchStatements = [sourceStatement, runsStatement];
     let selectedTopicIndex = -1;
     let topicLatestIndex = -1;
@@ -898,29 +946,43 @@ export async function onRequestGet(context) {
     const postFilterSql = cursorBoundary.sql
       ? `${filter.sql}\n            AND ${cursorBoundary.sql}`
       : filter.sql;
-    const postBindings = [
-      ...filter.bindings,
-      ...cursorBoundary.bindings,
-      pageSize + (filteredMode ? 1 : 0),
-      ...(filteredMode ? [] : [offset]),
-    ];
-    batchStatements.push(
-      db
-        .prepare(
-          `
-          SELECT archive_key, source_key, external_post_id, subject, title, post_url,
-                 created_at, created_at_raw, created_at_basis,
-                 created_at_precision, upvotes, comments, qualifies_by,
-                 fetched_at, first_seen_at, last_seen_at, status,
-                 id AS cursor_id
-          FROM posts
-          WHERE ${postFilterSql}
-          ORDER BY ${buildOrderClause(sort, cursor?.direction)}
-          LIMIT ?${filteredMode ? "" : " OFFSET ?"}
-          `
+    const columns = `archive_key, source_key, external_post_id, subject, title, post_url,
+      created_at, created_at_raw, created_at_basis, created_at_precision,
+      upvotes, comments, qualifies_by, fetched_at, first_seen_at, last_seen_at,
+      status, id AS cursor_id`;
+    if (sequentialMode) {
+      const candidateBindings = [];
+      // Seek each public archive independently before merging. Private and
+      // excluded rows must never become an exposed continuation boundary.
+      const candidateArchives = allArchives ? relevantStatsRows.map((row) => row.archive_key) : [target];
+      const candidateQueries = candidateArchives.map((archiveKey) => {
+        candidateBindings.push(archiveKey, ...cursorBoundary.bindings, archiveKey);
+        return `SELECT * FROM (SELECT * FROM posts
+          WHERE posts.status = 'active' AND posts.archive_key = ?
+          ${cursorBoundary.sql ? `AND ${cursorBoundary.sql}` : ""}
+          AND EXISTS (SELECT 1 FROM archives WHERE archive_key = ? AND is_public = 1)
+          ORDER BY ${buildOrderClause(sort, direction)} LIMIT ${candidateLimit})`;
+      });
+      const candidateSql = candidateQueries.length
+        ? candidateQueries.join(" UNION ALL ")
+        : "SELECT * FROM posts WHERE 0";
+      batchStatements.push(db.prepare(`
+        WITH candidates AS MATERIALIZED (
+          SELECT * FROM (${candidateSql})
+          ORDER BY ${buildOrderClause(sort, direction)} LIMIT ${candidateLimit}
         )
-        .bind(...postBindings)
-    );
+        SELECT ${columns}, CASE WHEN ${filter.sql} THEN 1 ELSE 0 END AS matches_filter
+        FROM candidates AS posts
+        ORDER BY ${buildOrderClause(sort, direction)}
+      `).bind(...candidateBindings, ...filter.bindings));
+    } else {
+      batchStatements.push(db.prepare(`
+        SELECT ${columns} FROM posts WHERE ${postFilterSql}
+        AND EXISTS (SELECT 1 FROM archives WHERE archive_key = posts.archive_key AND is_public = 1)
+        ORDER BY ${buildOrderClause(sort, direction)} LIMIT ? OFFSET ?
+      `).bind(...filter.bindings, ...cursorBoundary.bindings,
+        visibleLimit, cursor ? 0 : reversePage ? reverseOffset : offset));
+    }
 
     const batchResults = await db.batch(batchStatements);
     const sourceResult = batchResults[0];
@@ -959,27 +1021,30 @@ export async function onRequestGet(context) {
       })
     );
     const postRows = requestedPostResult.results ?? [];
-    const hasExtraRow = postRows.length > pageSize;
-    const visibleRows = postRows.slice(0, pageSize);
-    if (cursor?.direction === "previous") {
-      visibleRows.reverse();
-    }
-    const hasPrevious = page > 1;
-    const hasNext = filteredMode
-      ? cursor?.direction === "previous"
-        ? visibleRows.length > 0
-        : hasExtraRow
-      : page < totalPages;
-    const previousCursor = filteredMode && hasPrevious && visibleRows[0]
-      ? makeCursor("previous", page - 1, visibleRows[0], sort, signature)
-      : null;
-    const nextCursor = filteredMode && hasNext && visibleRows.at(-1)
-      ? makeCursor("next", page + 1, visibleRows.at(-1), sort, signature)
-      : null;
-    const posts = visibleRows.map(({ cursor_id: _cursorId, ...post }) => (
+    const matchingRows = sequentialMode
+      ? postRows.filter((row) => Number(row.matches_filter ?? 1) === 1) : postRows;
+    const hasExtraRow = matchingRows.length > visibleLimit;
+    const queryRows = matchingRows.slice(0, visibleLimit);
+    const scannedThrough = hasExtraRow ? queryRows.at(-1) : postRows.at(-1);
+    const canContinue = hasExtraRow || postRows.length === candidateLimit;
+    const visibleRows = direction === "previous" ? [...queryRows].reverse() : queryRows;
+    const hasPrevious = sequentialMode
+      ? direction === "previous" ? page > 1 && canContinue : page > 1 : page > 1;
+    const hasNext = sequentialMode
+      ? direction === "previous" ? !reversePage : canContinue : page < exactTotalPages;
+    const exhaustedBoundary = cursor ? {
+      cursor_id: cursor.key.at(-1), created_at: cursor.key.at(-2),
+      ...(sort === "created_at" ? {} : { [sort]: cursor.key[0] }),
+    } : null;
+    const previousBoundary = (direction === "previous" ? scannedThrough : postRows[0]) ?? exhaustedBoundary;
+    const nextBoundary = (direction === "previous" ? postRows[0] : scannedThrough) ?? exhaustedBoundary;
+    const previousCursor = sequentialMode && hasPrevious && previousBoundary
+      ? makeCursor("previous", page - 1, previousBoundary, sort, signature, postRows.length === 0) : null;
+    const nextCursor = sequentialMode && hasNext && nextBoundary
+      ? makeCursor("next", page + 1, nextBoundary, sort, signature, postRows.length === 0) : null;
+    const posts = visibleRows.map(({ cursor_id: _cursorId, matches_filter: _match, ...post }) => (
       post.archive_key === "game-news"
-        ? { ...post, feedback_key: String(post.external_post_id || "") }
-        : post
+        ? { ...post, feedback_key: String(post.external_post_id || "") } : post
     ));
     const visibleFrom = posts.length > 0 ? offset + 1 : 0;
     const visibleTo = posts.length > 0 ? offset + posts.length : 0;
@@ -1007,7 +1072,8 @@ export async function onRequestGet(context) {
         recent_runs: runs.length,
       },
       pagination: {
-        mode: filteredMode ? "sequential" : "numbered",
+        mode: sequentialMode ? "sequential" : "numbered",
+        ...(sequentialMode ? { bounded_scan: true, last_page: filteredMode ? null : exactTotalPages } : {}),
         page,
         page_size: pageSize,
         total_pages: totalPages,
@@ -1021,6 +1087,7 @@ export async function onRequestGet(context) {
       runs,
       posts,
     }, 200, cacheable);
+    response.headers.set("x-tc-cache", usage.cache);
     if (edgeCache) {
       const cacheWrite = edgeCache.put(cacheKey, response.clone());
       if (typeof context.waitUntil === "function") {
@@ -1031,7 +1098,10 @@ export async function onRequestGet(context) {
     }
     return response;
   } catch (error) {
-    console.error("Archive API failed", error);
+    usage.outcome = "failed";
+    console.error("Archive API failed", { name: error?.name || "Error" });
     return jsonResponse({ error: "Failed to load archive data from D1." }, 500);
+  } finally {
+    console.log(JSON.stringify({ d1_api_usage: usage }));
   }
 }

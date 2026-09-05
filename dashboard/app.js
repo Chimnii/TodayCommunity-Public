@@ -265,9 +265,40 @@ async function initialize() {
   loadArchive();
 }
 
+let archiveCacheBypassUntil = 0;
+
+function archiveCacheBypassActive() {
+  try {
+    archiveCacheBypassUntil = Math.max(archiveCacheBypassUntil,
+      Number(localStorage.getItem("tc-archive-refresh-until")) || 0);
+  } catch { /* Storage may be unavailable; keep the current-tab expiry. */ }
+  return Date.now() < archiveCacheBypassUntil;
+}
+
+function markArchiveChanged() {
+  archiveCacheBypassUntil = Date.now() + 135_000;
+  try {
+    localStorage.setItem("tc-archive-refresh-until", String(archiveCacheBypassUntil));
+  } catch { /* Current-tab navigation still bypasses stale responses. */ }
+}
+
 async function loadArchive() {
   if (state.activeRequest) {
     state.activeRequest.abort();
+  }
+
+  const queryError = archiveSearchError(state.search);
+  elements.searchInput.setCustomValidity(queryError);
+  if (queryError) {
+    state.activeRequest = null;
+    if (!state.archive) {
+      state.archive = { posts: [], error: queryError, input_error: true };
+      state.dataSource = "unavailable";
+    }
+    render();
+    setFiltersExpanded(true);
+    elements.searchInput.reportValidity();
+    return;
   }
 
   const controller = new AbortController();
@@ -275,14 +306,18 @@ async function loadArchive() {
   renderLoadingState();
 
   try {
+    const bypassCache = archiveCacheBypassActive();
     const response = await fetch(buildApiUrl(), {
-      cache: "no-store",
-      headers: { accept: "application/json" },
+      cache: bypassCache ? "no-store" : "default",
+      headers: { accept: "application/json", ...(bypassCache ? { "x-tc-refresh": "1" } : {}) },
       signal: controller.signal,
     });
 
     if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+      const failure = await response.json().catch(() => ({}));
+      throw Object.assign(new Error(failure.error || `HTTP ${response.status}`), {
+        inputError: response.status === 400,
+      });
     }
 
     const payload = await response.json();
@@ -307,12 +342,12 @@ async function loadArchive() {
 
     render();
   } catch (error) {
-    if (error.name === "AbortError") {
+    if (error.name === "AbortError" || controller.signal.aborted) {
       return;
     }
 
     const fallback = window.__TODAY_COMMUNITY_ARCHIVE__;
-    if (fallback && (!fallback.target || fallback.target === state.target)) {
+    if (!error.inputError && fallback && (!fallback.target || fallback.target === state.target)) {
       state.archive = withArchiveCatalog(fallback);
       state.dataSource = "fallback";
     } else {
@@ -325,7 +360,8 @@ async function loadArchive() {
         summary: { total_posts: 0, filtered_posts: 0, recent_runs: 0 },
         runs: [],
         posts: [],
-        error: "라이브 데이터와 로컬 스냅샷을 모두 읽지 못했습니다.",
+        error: error.inputError ? error.message : "라이브 데이터와 로컬 스냅샷을 모두 읽지 못했습니다.",
+        input_error: Boolean(error.inputError),
       };
       state.dataSource = "unavailable";
     }
@@ -356,7 +392,7 @@ function buildApiUrl() {
   if (state.topicId > 0) {
     params.set("topic", String(state.topicId));
   }
-  if (hasActivePostFilters() && state.cursor) {
+  if (state.cursor) {
     params.set("cursor", state.cursor);
   }
   if (canUseArchiveFilter()) {
@@ -1055,6 +1091,10 @@ function normalizePagination(rawPagination, filteredPosts, visibleCount) {
     next_cursor: mode === "sequential"
       ? String(rawPagination?.next_cursor || "")
       : "",
+    ...(rawPagination?.bounded_scan ? {
+      bounded_scan: true,
+      last_page: normalizeNonNegativeNumber(rawPagination.last_page, 0),
+    } : {}),
   };
 }
 
@@ -1321,13 +1361,23 @@ function renderPosts(posts) {
 
   if (state.dataSource === "unavailable") {
     reserveBoardRows(3);
-    renderBoardState("목록을 불러오지 못했습니다.", "다시 시도", loadArchive);
+    renderBoardState(state.archive?.error || "목록을 불러오지 못했습니다.",
+      state.archive?.input_error ? "필터 초기화" : "다시 시도",
+      state.archive?.input_error ? resetFilters : loadArchive);
     return;
   }
 
   if (posts.length === 0) {
     reserveBoardRows(3);
-    renderBoardState("현재 조건에 맞는 글이 없습니다.", "필터 초기화", resetFilters);
+    const pagination = state.archive?.pagination;
+    if (pagination?.bounded_scan && pagination.has_next && pagination.next_cursor) {
+      renderBoardState("이 구간에는 조건에 맞는 글이 없습니다.", "다음 구간",
+        () => goToCursor(pagination.next_cursor, pagination.page + 1));
+    } else {
+      renderBoardState(pagination?.bounded_scan && pagination.has_previous
+        ? "이 구간에는 조건에 맞는 글이 없습니다." : "현재 조건에 맞는 글이 없습니다.",
+      "필터 초기화", resetFilters);
+    }
     return;
   }
 
@@ -1743,6 +1793,7 @@ async function hidePost(post, toolbar, sourceButton) {
       await restoreHiddenPost(postKey);
     });
     void refreshHiddenCount();
+    markArchiveChanged();
     void loadArchive();
   } catch (error) {
     showFeedbackToast(`글을 숨기지 못했습니다: ${error.message}`);
@@ -1762,6 +1813,7 @@ async function restoreHiddenPost(postKey) {
     idempotency_key: createRequestKey("restore"),
   });
   showFeedbackToast("숨긴 글을 목록에 복구했습니다.");
+  markArchiveChanged();
   await loadArchive();
   void refreshHiddenCount();
 }
@@ -2044,6 +2096,18 @@ function renderResultStatus(view) {
     ? String(state.archive?.selected_topic?.label || "").trim()
     : "";
 
+  if (view.pagination.bounded_scan) {
+    elements.resultCount.textContent = hasActivePostFilters()
+      ? `조건에 맞는 글 · 전체 저장 글 ${total}개`
+      : `저장된 글 ${total}개`;
+    elements.rangeSummary.textContent = view.posts.length
+      ? `이 구간에서 ${numberFormatter.format(view.posts.length)}개 표시`
+      : view.pagination.has_next || view.pagination.has_previous
+        ? "이 구간에는 조건에 맞는 글이 없습니다. 이전·다음 구간을 확인해 주세요."
+        : "조건에 맞는 글이 없습니다.";
+    return;
+  }
+
   if (!view.hasExactFilteredTotal) {
     elements.resultCount.textContent = selectedLabel
       ? `‘${selectedLabel}’ 관련 글 · 전체 저장 글 ${total}개`
@@ -2120,7 +2184,7 @@ function renderSequentialPagination(pagination) {
   const pageList = document.createElement("div");
   pageList.className = "pagination-pages pagination-sequential";
   pageList.setAttribute("role", "group");
-  pageList.setAttribute("aria-label", "필터 결과 페이지 이동");
+  pageList.setAttribute("aria-label", "글 목록 구간 이동");
 
   const previous = createCursorPageButton(
     "이전",
@@ -2129,7 +2193,7 @@ function renderSequentialPagination(pagination) {
     "pagination-previous"
   );
   previous.disabled = !pagination.has_previous;
-  previous.setAttribute("aria-label", "이전 필터 결과 페이지로 이동");
+  previous.setAttribute("aria-label", "이전 구간으로 이동");
 
   const current = document.createElement("span");
   current.className = "pagination-current";
@@ -2143,9 +2207,15 @@ function renderSequentialPagination(pagination) {
     "pagination-next"
   );
   next.disabled = !pagination.has_next;
-  next.setAttribute("aria-label", "다음 필터 결과 페이지로 이동");
+  next.setAttribute("aria-label", "다음 구간으로 이동");
 
+  if (pagination.last_page > 1) {
+    pageList.append(createPageButton("처음", 1, "pagination-first"));
+  }
   pageList.append(previous, current, next);
+  if (pagination.last_page > 1) {
+    pageList.append(createPageButton("마지막", pagination.last_page, "pagination-last"));
+  }
   elements.pagination.append(pageList);
 }
 
@@ -2363,6 +2433,9 @@ function compareExternalId(left, right) {
 }
 
 function bindEvents() {
+  elements.searchInput.addEventListener("input", () => {
+    elements.searchInput.setCustomValidity(archiveSearchError(elements.searchInput.value));
+  });
   elements.filterForm.addEventListener("input", handleFilterControlUpdate);
   elements.filterForm.addEventListener("change", handleFilterControlUpdate);
   elements.filterForm.addEventListener("reset", () => {
@@ -2730,8 +2803,14 @@ function renderHiddenItems(items) {
   }
 }
 
+function archiveSearchError(value) {
+  const escaped = String(value || "").trim().replace(/[\\%_]/g, "\\$&");
+  return new TextEncoder().encode(`%${escaped}%`).length > 50
+    ? "검색어가 너무 깁니다. 한글 기준 16자 이내로 줄여 주세요." : "";
+}
+
 function readStateFromControls() {
-  state.search = String(elements.searchInput.value || "").trim().slice(0, 100);
+  state.search = String(elements.searchInput.value || "").trim();
   state.subject = normalizeSubject(elements.subjectSelect.value);
   state.minUpvotes = normalizeNonNegativeNumber(elements.upvotesInput.value, 0);
   state.minComments = normalizeNonNegativeNumber(elements.commentsInput.value, 0);
@@ -2763,7 +2842,7 @@ function hydrateStateFromUrl() {
   const target = normalizeTarget(params.get("target"));
 
   state.target = target || DEFAULT_TARGET;
-  state.search = String(params.get("q") || "").trim().slice(0, 100);
+  state.search = String(params.get("q") || "").trim();
   state.subject = normalizeSubject(params.get("subject"));
   state.topicId = normalizePositiveNumber(params.get("topic"), 0);
   state.minUpvotes =
@@ -2776,9 +2855,6 @@ function hydrateStateFromUrl() {
   state.pageSize = VALID_PAGE_SIZES.has(pageSize) ? pageSize : DEFAULT_STATE.pageSize;
   state.cursor = String(params.get("cursor") || "").trim().slice(0, 8192);
   normalizeContentState();
-  if (!hasActivePostFilters()) {
-    state.cursor = "";
-  }
 }
 
 function syncStateToUrl({ replace = true } = {}) {
@@ -2794,7 +2870,7 @@ function syncStateToUrl({ replace = true } = {}) {
     sort: state.sortBy === DEFAULT_STATE.sortBy ? null : state.sortBy,
     page: state.page === 1 ? null : state.page,
     page_size: state.pageSize === DEFAULT_STATE.pageSize ? null : state.pageSize,
-    cursor: hasActivePostFilters() && state.cursor ? state.cursor : null,
+    cursor: state.cursor || null,
   };
 
   for (const [key, value] of Object.entries(values)) {

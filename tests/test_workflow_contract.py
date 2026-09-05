@@ -66,6 +66,25 @@ class CrawlWorkflowContractTests(unittest.TestCase):
             self.assertRegex(workflow, r"(?m)^\s*group: scan-dcinside\s*$")
             self.assertRegex(workflow, r"(?m)^\s*cancel-in-progress: false\s*$")
 
+    def test_daily_headroom_is_checked_before_schema_and_persisting_work(self) -> None:
+        for workflow, profile in ((self.hot, "community-hot"),
+                                  (self.backfill, "community-backfill"),
+                                  (self.fmkorea, "fmkorea-hot")):
+            if workflow is None:
+                continue
+            self.assertLess(workflow.index("-m crawler.jobs.check_d1_budget"),
+                            workflow.index("-m crawler.jobs.check_schema"))
+            self.assertIn(f"--profile {profile}", workflow)
+            self.assertIn('TC_D1_DAILY_GATE_ENABLED: "1"', workflow)
+            self.assertIn("secrets.TC_CF_D1_ANALYTICS_TOKEN", workflow)
+        if self.game_news is not None:
+            self.assertLess(self.game_news.index("-m crawler.jobs.check_d1_budget"),
+                            self.game_news.index("-m game_news.schema_check"))
+            self.assertIn("--profile game-news --profile topic", self.game_news)
+            self.assertIn("steps.d1_headroom.outcome == 'success'", self.game_news)
+            self.assertIn("steps.d1_schema.outcome == 'success'", self.game_news)
+            self.assertIn("steps.curation.outputs.d1_stop != 'true'", self.game_news)
+
     def test_workflows_pin_actions_and_do_not_persist_checkout_credentials(self) -> None:
         workflows = [self.hot, self.backfill]
         if self.fmkorea is not None:
@@ -710,7 +729,8 @@ class CrawlWorkflowContractTests(unittest.TestCase):
             "TC_CF_DATABASE_ID",
             "TC_CF_API_TOKEN",
         ):
-            self.assertEqual(workflow.count(f"secrets.{secret_name}"), 3)
+            expected = 4 if secret_name == "TC_CF_ACCOUNT_ID" else 3
+            self.assertEqual(workflow.count(f"secrets.{secret_name}"), expected)
         self.assertIn("Apply 30-day dedicated runtime retention", workflow)
         self.assertIn("[DateTime]::UtcNow.AddDays(-30)", workflow)
         self.assertIn('.todaycommunity-game-news-owned', workflow)

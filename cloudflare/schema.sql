@@ -106,12 +106,6 @@ CREATE INDEX IF NOT EXISTS idx_sources_archive
 CREATE INDEX IF NOT EXISTS idx_posts_source_created_at
   ON posts (source_key, created_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_posts_source_upvotes
-  ON posts (source_key, upvotes DESC);
-
-CREATE INDEX IF NOT EXISTS idx_posts_source_comments
-  ON posts (source_key, comments DESC);
-
 -- Page-sized archive reads need both the visibility predicate and the complete
 -- keyset order in the index. Archive-prefixed variants serve one archive;
 -- prefix-free variants serve the public all-archive feed without a sort scan.
