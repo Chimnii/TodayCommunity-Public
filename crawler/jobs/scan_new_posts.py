@@ -240,6 +240,10 @@ def upsert_source(client: D1Client, target: TargetBoard, run_started_at: str) ->
               display_order = excluded.display_order,
               is_public = excluded.is_public,
               updated_at = excluded.updated_at
+            WHERE archives.display_name IS NOT excluded.display_name
+               OR archives.description IS NOT excluded.description
+               OR archives.display_order IS NOT excluded.display_order
+               OR archives.is_public IS NOT excluded.is_public
             """,
             [
                 archive.key,
@@ -265,6 +269,12 @@ def upsert_source(client: D1Client, target: TargetBoard, run_started_at: str) ->
               min_upvotes = excluded.min_upvotes,
               min_comments = excluded.min_comments,
               updated_at = excluded.updated_at
+            WHERE sources.archive_key IS NOT excluded.archive_key
+               OR sources.site_name IS NOT excluded.site_name
+               OR sources.board_name IS NOT excluded.board_name
+               OR sources.board_url IS NOT excluded.board_url
+               OR sources.min_upvotes IS NOT excluded.min_upvotes
+               OR sources.min_comments IS NOT excluded.min_comments
             """,
             [
                 target.key,
@@ -362,7 +372,12 @@ def upsert_posts(
 ) -> None:
     checked_at = canonicalize_utc_text(checked_at)
     for offset in range(0, len(posts), POSTS_PER_UPSERT):
-        chunk = posts[offset : offset + POSTS_PER_UPSERT]
+        observed_chunk = posts[offset : offset + POSTS_PER_UPSERT]
+        distinct = {}
+        for post in observed_chunk:
+            key = str(post["external_post_id"]).strip()
+            distinct[key] = {**post, "subject": distinct.get(key, post)["subject"]}
+        chunk = list(distinct.values())
         value_clause = ",\n              ".join(
             """(
                 ?, (SELECT archive_key FROM target_archive), ?, ?, ?, ?, ?,
@@ -409,14 +424,30 @@ def upsert_posts(
         # additive migration keep the empty default instead of being backfilled
         # by routine metric refreshes.
         upsert_sql = f"""
-            WITH target_archive(archive_key) AS (VALUES (?))
+            WITH target_archive(archive_key) AS (VALUES (?)),
+            incoming(source_key, archive_key, canonical_post_key, external_post_id,
+              post_url, subject, title, created_at, created_at_raw,
+              created_at_basis, created_at_precision, upvotes, comments,
+              fetched_at, first_seen_at, last_seen_at, qualifies_by) AS (
+              VALUES {value_clause}
+            )
             INSERT INTO posts (
               source_key, archive_key, canonical_post_key, external_post_id,
               post_url, subject, title, created_at, created_at_raw,
               created_at_basis, created_at_precision, upvotes, comments,
               fetched_at, first_seen_at, last_seen_at, qualifies_by
-            ) VALUES
-              {value_clause}
+            ) SELECT * FROM incoming
+            WHERE NOT EXISTS (
+              SELECT 1 FROM posts AS current
+              WHERE ((current.archive_key = incoming.archive_key
+                      AND current.canonical_post_key = incoming.canonical_post_key)
+                 OR (current.source_key = incoming.source_key
+                      AND current.external_post_id = incoming.external_post_id))
+                AND current.canonical_post_key IS NOT NULL
+                AND TRIM(current.canonical_post_key) <> ''
+                AND current.created_at IS incoming.created_at
+                AND current.status = 'active'
+            )
             ON CONFLICT DO UPDATE SET
               archive_key = CASE
                 WHEN posts.canonical_post_key IS NULL
@@ -444,13 +475,7 @@ def upsert_posts(
               status = 'active'
             WHERE posts.canonical_post_key IS NULL
                OR TRIM(posts.canonical_post_key) = ''
-               OR posts.post_url IS NOT excluded.post_url
-               OR posts.title IS NOT excluded.title
                OR posts.created_at IS NOT excluded.created_at
-               OR posts.created_at_raw IS NOT excluded.created_at_raw
-               OR posts.created_at_basis IS NOT excluded.created_at_basis
-               OR posts.created_at_precision IS NOT excluded.created_at_precision
-               OR posts.qualifies_by IS NOT excluded.qualifies_by
                OR posts.status IS NOT 'active'
             """
         heartbeat_placeholders = ", ".join("?" for _ in canonical_keys)
@@ -474,81 +499,10 @@ def upsert_posts(
             checked_at,
         ]
 
-        external_ids = [str(post["external_post_id"]).strip() for post in chunk]
-        identity_placeholders = ", ".join("?" for _ in chunk)
-        with d1_usage_label(client, "post.lookup"):
-            existing_rows = client.query(
-                f"""
-                SELECT id, source_key, archive_key, canonical_post_key,
-                       external_post_id, subject, status
-                FROM posts
-                WHERE (
-                  archive_key = ?
-                  AND canonical_post_key IN ({identity_placeholders})
-                ) OR (
-                  source_key = ?
-                  AND external_post_id IN ({identity_placeholders})
-                )
-                """,
-                [
-                    target.archive_key,
-                    *canonical_keys,
-                    target.key,
-                    *external_ids,
-                ],
-            )
-        existing_by_canonical = {
-            str(row.get("canonical_post_key") or ""): row
-            for row in existing_rows
-            if str(row.get("canonical_post_key") or "")
-        }
-        existing_by_source_id = {
-            (
-                str(row.get("source_key") or ""),
-                str(row.get("external_post_id") or ""),
-            ): row
-            for row in existing_rows
-        }
-        transitions_by_identity = {}
-        for post, canonical_key, external_id in zip(
-            chunk, canonical_keys, external_ids
-        ):
-            existing = existing_by_canonical.get(canonical_key)
-            if existing is None:
-                existing = existing_by_source_id.get((target.key, external_id))
-            identity = (
-                int(existing.get("id") or 0)
-                if existing is not None and existing.get("id") is not None
-                else canonical_key
-            )
-            old_subject = normalized_subject(
-                existing.get("subject") if existing is not None else ""
-            )
-            transitions_by_identity[identity] = PostStatsTransition(
-                old_status=(existing.get("status") if existing is not None else None),
-                old_subject=old_subject,
-                new_status="active",
-                # Community subjects are deliberately insert-only.
-                new_subject=(
-                    old_subject
-                    if existing is not None
-                    else normalized_subject(post.get("subject"))
-                ),
-            )
-        transitions = list(transitions_by_identity.values())
-        _, subject_deltas = stats_deltas(transitions)
-        subject_counts = load_subject_counts(
-            client,
-            target.archive_key,
-            subject_deltas,
-        )
-        stats_statements = stats_mutation_statements(
-            target.archive_key,
-            transitions,
-            checked_at,
-            latest_seen_at=checked_at,
-            previous_subject_counts=subject_counts,
-        )
+        # Derive count transitions from the current database state inside the
+        # atomic batch, before mutating posts. A stale Python pre-read can double
+        # count an overlapping insert or miss a concurrent visibility change.
+        stats_statements = _observation_stats_statements(target, chunk, canonical_keys, checked_at)
 
         # Structural changes and restoration keep the full conflict path.
         # Metric-only changes must not name identity, time-sort, or status
@@ -559,20 +513,76 @@ def upsert_posts(
         _execute_statements(
             client,
             [
+                *stats_statements,
                 (upsert_sql, params),
                 *metric_statements,
+                _content_update_statement(target.archive_key, chunk, canonical_keys, checked_at),
                 (heartbeat_sql, heartbeat_params),
-                *stats_statements,
             ],
             labels=(
+                *("stats" for _ in stats_statements),
                 "post.upsert",
                 *("post.metrics" for _ in metric_statements),
+                "post.content",
                 "post.heartbeat",
-                *("stats" for _ in stats_statements),
             ),
         )
         if on_batch_persisted is not None:
-            on_batch_persisted(len(chunk))
+            on_batch_persisted(len(observed_chunk))
+
+
+def _observation_stats_statements(target, posts, canonical_keys, checked_at):
+    values = ", ".join("(?, ?, ?)" for _ in posts)
+    params = [value for key, post in zip(canonical_keys, posts)
+              for value in (key, str(post["external_post_id"]).strip(), normalized_subject(post["subject"]))]
+    changes = f"""
+        WITH incoming(key, external_id, subject) AS (VALUES {values}),
+        additions AS (
+          SELECT trim(CASE WHEN current.id IS NOT NULL THEN coalesce(current.subject, '')
+                           WHEN legacy.id IS NOT NULL THEN coalesce(legacy.subject, '')
+                           ELSE incoming.subject END) AS subject
+          FROM incoming
+          LEFT JOIN posts AS current
+            ON current.archive_key = ? AND current.canonical_post_key = incoming.key
+          LEFT JOIN posts AS legacy
+            ON current.id IS NULL AND legacy.source_key = ?
+              AND legacy.external_post_id = incoming.external_id
+          WHERE coalesce(current.status, legacy.status, '') <> 'active'
+        )
+    """
+    params.extend((target.archive_key, target.key))
+    return [
+        ("""INSERT OR IGNORE INTO archive_stats (
+            archive_key, active_post_count, latest_seen_at,
+            subject_options_json, stats_version, updated_at
+          ) VALUES (?, 0, '', '[]', 0, ?)""", [target.archive_key, checked_at]),
+        (changes + """
+          UPDATE archive_stats
+          SET active_post_count = active_post_count + (SELECT count(*) FROM additions),
+              latest_seen_at = max(latest_seen_at, ?),
+              stats_version = stats_version + 1, updated_at = ?
+          WHERE archive_key = ?
+        """, [*params, checked_at, checked_at, target.archive_key]),
+        (changes + """
+          INSERT INTO archive_subject_stats (archive_key, subject, active_post_count, updated_at)
+          SELECT ?, subject, count(*), ? FROM additions
+          WHERE subject <> '' GROUP BY subject
+          ON CONFLICT(archive_key, subject) DO UPDATE SET
+            active_post_count = archive_subject_stats.active_post_count + excluded.active_post_count,
+            updated_at = excluded.updated_at
+        """, [*params, target.archive_key, checked_at]),
+        ("""
+          UPDATE archive_stats
+          SET subject_options_json = coalesce((
+            SELECT json_group_array(subject) FROM (
+              SELECT subject FROM archive_subject_stats
+              WHERE archive_key = ? AND active_post_count > 0 AND length(subject) <= 100
+              ORDER BY subject COLLATE NOCASE ASC, subject ASC LIMIT 100
+            )
+          ), '[]')
+          WHERE archive_key = ? AND changes() > 0
+        """, [target.archive_key, target.archive_key]),
+    ]
 
 
 def _metric_update_statements(archive_key, posts, canonical_keys, checked_at):
@@ -592,7 +602,7 @@ def _metric_update_statements(archive_key, posts, canonical_keys, checked_at):
         (("comments",), "posts.comments IS NOT incoming.comments AND posts.upvotes IS incoming.upvotes"),
     ):
         assignments = ", ".join(
-            f"{column} = (SELECT {column} FROM incoming WHERE incoming.key = posts.canonical_post_key)"
+            f"{column} = incoming.{column}"
             for column in columns
         )
         statements.append((
@@ -600,17 +610,35 @@ def _metric_update_statements(archive_key, posts, canonical_keys, checked_at):
             WITH incoming(key, upvotes, comments) AS (VALUES {values})
             UPDATE posts
             SET {assignments}, fetched_at = ?, last_seen_at = ?
-            WHERE archive_key = ?
-              AND canonical_post_key IN (SELECT key FROM incoming)
-              AND EXISTS (
-                SELECT 1 FROM incoming
-                WHERE incoming.key = posts.canonical_post_key
-                  AND ({predicate})
-              )
+            FROM incoming
+            WHERE posts.archive_key = ?
+              AND posts.canonical_post_key = incoming.key
+              AND ({predicate})
             """,
             [*incoming_params, checked_at, checked_at, archive_key],
         ))
     return statements
+
+
+def _content_update_statement(archive_key, posts, canonical_keys, checked_at):
+    # Preserve the latest source evidence without rewriting time/metric indexes.
+    # Subject and first-source ownership remain insert-only.
+    columns = ("post_url", "title", "created_at_raw", "created_at_basis",
+               "created_at_precision", "qualifies_by")
+    latest_posts = dict(zip(canonical_keys, posts))
+    values = ", ".join("(" + ", ".join("?" for _ in range(len(columns) + 1)) + ")"
+                       for _ in latest_posts)
+    params = [value for key, post in latest_posts.items()
+              for value in (key, *(post[column] for column in columns))]
+    assignments = ", ".join(f"{column} = incoming.{column}" for column in columns)
+    changed = " OR ".join(f"posts.{column} IS NOT incoming.{column}" for column in columns)
+    return (f"""
+        WITH incoming(key, {', '.join(columns)}) AS (VALUES {values})
+        UPDATE posts SET {assignments}, fetched_at = ?, last_seen_at = ?
+        FROM incoming
+        WHERE posts.archive_key = ? AND posts.canonical_post_key = incoming.key
+          AND ({changed})
+        """, [*params, checked_at, checked_at, archive_key])
 
 
 def post_upsert_query_count(post_count: int) -> int:

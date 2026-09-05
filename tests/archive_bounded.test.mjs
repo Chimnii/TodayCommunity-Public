@@ -260,3 +260,89 @@ test("public owner responses share cache; refresh bypasses cached data without l
     assert.ok(logs[0].d1_api_usage.incomplete_meta > 0);
   } finally { globalThis.caches = originalCaches; console.log = originalLog; data.sqlite.close(); }
 });
+
+
+test("quick pages 1-5 match exact order and continue to page 6 with a reversible cursor", async () => {
+  const data = fixture(6000);
+  try {
+    for (const target of ["dcinside-singularity", "all"]) {
+      for (const sort of ["created_at", "upvotes", "comments"]) {
+        const expected = data.sqlite.prepare(`SELECT external_post_id FROM posts ORDER BY ${sort} DESC, ${sort === "created_at" ? "" : "created_at DESC,"} id DESC`).all().map(row => row.external_post_id);
+        for (const pageSize of [30, 100]) {
+          let fifth;
+          for (let page = 1; page <= 5; page += 1) {
+            const params = new URLSearchParams({ target, sort, page: String(page), page_size: String(pageSize) });
+            const body = (await request(data, params)).body;
+            assert.equal(body.pagination.page, page);
+            assert.equal(body.pagination.quick_page_count, 5);
+            assert.deepEqual(body.posts.map(row => row.external_post_id), expected.slice((page - 1) * pageSize, page * pageSize));
+            if (page === 5) fifth = body;
+          }
+          const sixth = (await request(data, new URLSearchParams({ target, sort, page_size: String(pageSize), cursor: fifth.pagination.next_cursor }))).body;
+          assert.equal(sixth.pagination.page, 6);
+          assert.deepEqual(sixth.posts.map(row => row.external_post_id), expected.slice(pageSize * 5, pageSize * 6));
+          const back = (await request(data, new URLSearchParams({ target, sort, page_size: String(pageSize), cursor: sixth.pagination.previous_cursor }))).body;
+          assert.deepEqual(back.posts, fifth.posts);
+          const response = await onRequestGet({ request: new Request(`https://example.com/api/archive?target=${target}&page=6&page_size=${pageSize}`), env: { DB: data.db } });
+          assert.equal(response.status, 400);
+        }
+      }
+    }
+    for (const query of data.queries.filter(item => item.sql.includes("WITH candidates"))) assert.ok(query.rows <= 501);
+  } finally { data.sqlite.close(); }
+});
+
+test("metadata is reused across pages and sorts, expires without extending response freshness, and bypasses after a mutation", async () => {
+  const data = fixture(6000);
+  const stored = new Map();
+  const original = globalThis.caches;
+  globalThis.caches = { default: {
+    async match(request) { return stored.get(request.url)?.clone(); },
+    async put(request, response) { stored.set(request.url, response.clone()); },
+  } };
+  try {
+    const first = (await request(data, new URLSearchParams({ page: "1" }))).body;
+    const before = data.queries.length;
+    const second = (await request(data, new URLSearchParams({ page: "2", sort: "upvotes" }))).body;
+    assert.deepEqual(second.sources, first.sources);
+    assert.deepEqual(second.runs, first.runs);
+    assert.deepEqual(second.topic_trends, first.topic_trends);
+    assert.equal(data.queries.length - before, 2, "only current stats/visibility and posts need D1");
+    const unknownTopic = await onRequestGet({
+      request: new Request("https://example.com/api/archive?topic=999999"), env: { DB: data.db },
+    });
+    assert.equal(unknownTopic.status, 400, "cached metadata cannot bypass selected topic validation");
+    assert.equal((await unknownTopic.json()).error, "Unknown topic filter.");
+    const metadataKey = [...stored.keys()].find(key => new URL(key).pathname === "/api/archive-metadata");
+    const metadata = await stored.get(metadataKey).clone().json();
+    stored.set(metadataKey, new Response(JSON.stringify({ ...metadata, expires_at: Date.now() + 9000 })));
+    const third = await request(data, new URLSearchParams({ page: "3" }));
+    assert.match(third.response.headers.get("cache-control"), /s-maxage=[0-9]$/);
+    stored.set(metadataKey, new Response(JSON.stringify({ ...metadata, expires_at: Date.now() - 1 })));
+    const beforeExpired = data.queries.length;
+    await request(data, new URLSearchParams({ page: "4" }));
+    assert.ok(data.queries.length - beforeExpired > 2);
+    const beforeBypass = data.queries.length;
+    const bypass = await request(data, new URLSearchParams({ page: "5" }), { "x-tc-refresh": "1" });
+    assert.equal(bypass.response.headers.get("cache-control"), "no-store");
+    assert.ok(data.queries.length - beforeBypass > 2);
+    data.sqlite.exec("UPDATE archives SET is_public=0 WHERE archive_key='dcinside-agent-stack'");
+    const beforeVisibility = data.queries.length;
+    await request(data, new URLSearchParams({ page: "2", sort: "comments" }));
+    assert.ok(data.queries.length - beforeVisibility > 2, "changed public catalog invalidates metadata");
+  } finally { globalThis.caches = original; data.sqlite.close(); }
+});
+
+test("optional cache failures still return the bounded DB result", async () => {
+  const data = fixture();
+  const original = globalThis.caches;
+  globalThis.caches = { default: {
+    match() { throw new Error("synthetic cache failure"); },
+    put() { throw new Error("synthetic cache failure"); },
+  } };
+  try {
+    const { body } = await request(data, new URLSearchParams({ page: "5" }));
+    assert.equal(body.posts.length, 30);
+    assert.equal(body.pagination.page, 5);
+  } finally { globalThis.caches = original; data.sqlite.close(); }
+});

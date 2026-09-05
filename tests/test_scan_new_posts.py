@@ -434,6 +434,7 @@ class SourceBootstrapTests(unittest.TestCase):
             """,
             ["123", "preserved-state-timestamp", target.key],
         )
+        archive_timestamp = client.query("SELECT updated_at FROM archives WHERE archive_key = ?", [target.archive_key])[0]["updated_at"]
         upsert_source(client, target, second_checked_at)
 
         self.assertEqual(
@@ -456,9 +457,9 @@ class SourceBootstrapTests(unittest.TestCase):
             [
                 {
                     "archive_key": "dcinside-agent-stack",
-                    "archive_updated_at": "2026-07-25T01:00:00Z",
+                    "archive_updated_at": archive_timestamp,
                     "source_key": "dcinside-ai-utilize",
-                    "source_updated_at": "2026-07-25T01:00:00Z",
+                    "source_updated_at": "2026-07-25T00:00:00Z",
                     "backfill_anchor_post_id": "123",
                     "state_updated_at": "preserved-state-timestamp",
                 }
@@ -692,9 +693,9 @@ class BatchedPostUpsertTests(unittest.TestCase):
 
         self.assertEqual(post_upsert_query_count(len(posts)), 2)
         self.assertEqual(len(client.batches), 2)
-        self.assertEqual([len(batch) for batch in client.batches], [9, 9])
-        upserts = [batch[0] for batch in client.batches]
-        heartbeats = [batch[4] for batch in client.batches]
+        self.assertEqual([len(batch) for batch in client.batches], [10, 10])
+        upserts = [next(item for item in batch if "INSERT INTO posts" in item[0]) for batch in client.batches]
+        heartbeats = [batch[-1] for batch in client.batches]
         self.assertTrue(all(len(params) <= 100 for batch in client.batches for _, params in batch))
         self.assertEqual([len(params) for _, params in upserts], [97, 17])
         self.assertEqual([len(params) for _, params in heartbeats], [11, 6])
@@ -702,33 +703,10 @@ class BatchedPostUpsertTests(unittest.TestCase):
         self.assertTrue(
             all("SET fetched_at = ?" in sql for sql, _ in heartbeats)
         )
-        self.assertEqual(
-            client.batch_labels,
-            [
-                (
-                    "post.upsert",
-                    "post.metrics",
-                    "post.metrics",
-                    "post.metrics",
-                    "post.heartbeat",
-                    "stats",
-                    "stats",
-                    "stats",
-                    "stats",
-                ),
-                (
-                    "post.upsert",
-                    "post.metrics",
-                    "post.metrics",
-                    "post.metrics",
-                    "post.heartbeat",
-                    "stats",
-                    "stats",
-                    "stats",
-                    "stats",
-                ),
-            ],
-        )
+        self.assertEqual(client.batch_labels, [
+            ("stats", "stats", "stats", "stats", "post.upsert",
+             "post.metrics", "post.metrics", "post.metrics", "post.content", "post.heartbeat")
+        ] * 2)
 
     def test_metric_changes_do_not_touch_unrelated_index_columns(self) -> None:
         for changes, expected in (

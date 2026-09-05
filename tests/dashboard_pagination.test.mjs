@@ -52,6 +52,7 @@ test("loads the dashboard's pagination helpers without running initialize", () =
 
 function archiveRequestHarness({ storage, fetchImpl, now = () => 1000 } = {}) {
   const calls = [];
+  const urls = [];
   const events = [];
   const successfulResponse = {
     ok: true,
@@ -67,11 +68,13 @@ function archiveRequestHarness({ storage, fetchImpl, now = () => 1000 } = {}) {
     window: {},
     localStorage: storage,
     TextEncoder,
+    URLSearchParams,
     AbortController,
     Date: class extends Date { static now() { return now(); } },
     events,
     fetch(url, options) {
       calls.push(options);
+      urls.push(url);
       return fetchImpl ? fetchImpl(url, options) : Promise.resolve(successfulResponse);
     },
   });
@@ -79,12 +82,11 @@ function archiveRequestHarness({ storage, fetchImpl, now = () => 1000 } = {}) {
     renderLoadingState = () => events.push({type: 'loading'});
     render = () => events.push({type: 'render', source: state.dataSource});
     setFiltersExpanded = () => {};
-    buildApiUrl = () => '/api/archive';
     withArchiveCatalog = value => value;
     syncStateToUrl = () => {};
     globalThis.archiveReview = {state, loadArchive, markArchiveChanged, archiveCacheBypassActive};
   `, runtime);
-  return { ...runtime.archiveReview, calls, events, successfulResponse };
+  return { ...runtime.archiveReview, calls, urls, events, successfulResponse };
 }
 
 test("an invalid initial search renders an input error and recovers after correction", async () => {
@@ -196,6 +198,7 @@ test("normalizePagination keeps cursor navigation without inventing a total", ()
       page: 3,
       page_size: 20,
       total_pages: null,
+      quick_page_count: null,
       visible_from: 41,
       visible_to: 60,
       has_previous: true,
@@ -208,6 +211,7 @@ test("normalizePagination keeps cursor navigation without inventing a total", ()
       page: 3,
       page_size: 20,
       total_pages: null,
+      quick_page_count: null,
       visible_from: 41,
       visible_to: 60,
       has_previous: true,
@@ -359,4 +363,78 @@ test("parsePageJump rejects empty, non-integer, non-numeric, and out-of-range va
   ]) {
     assert.equal(parsePageJump(value, 20), null, `Expected ${String(value)} to be rejected`);
   }
+});
+
+
+function filteredPageResponse(url, lastPage = 8) {
+  const params = new URL(url, "https://example.com").searchParams;
+  const page = Number((params.get("cursor") || "cursor-1").split("-")[1]);
+  return { ok: true, json: async () => ({
+    target: "dcinside-singularity", posts: [{ title: params.get("q") }],
+    pagination: { mode: "sequential", page, page_size: 30, has_previous: page > 1,
+      has_next: page < lastPage, previous_cursor: page > 1 ? `cursor-${page - 1}` : null,
+      next_cursor: page < lastPage ? `cursor-${page + 1}` : null },
+  }) };
+}
+
+test("filtered quick jumps walk at most five windows and reuse only matching fresh boundaries", async () => {
+  let now = 1000;
+  const app = archiveRequestHarness({ now: () => now, fetchImpl: url => filteredPageResponse(url) });
+  app.state.search = "post";
+  app.state.page = 5;
+  await app.loadArchive();
+  assert.equal(app.calls.length, 5);
+  assert.equal(app.state.page, 5);
+  assert.equal(app.state.cursor, "cursor-5");
+  app.state.page = 3;
+  app.state.cursor = "";
+  await app.loadArchive();
+  assert.equal(app.calls.length, 6);
+  assert.equal(new URL(app.urls.at(-1), "https://example.com").searchParams.get("cursor"), "cursor-3");
+  app.state.sortBy = "comments";
+  app.state.cursor = "";
+  await app.loadArchive();
+  assert.equal(app.calls.length, 9, "sort changes discard earlier boundaries");
+  now += 16_000;
+  app.state.cursor = "";
+  await app.loadArchive();
+  assert.equal(app.calls.length, 12, "expired boundaries are rebuilt");
+});
+
+test("filtered quick jumps stop at an earlier real end and update the URL state", async () => {
+  const app = archiveRequestHarness({ fetchImpl: url => filteredPageResponse(url, 2) });
+  app.state.search = "post";
+  app.state.page = 5;
+  await app.loadArchive();
+  assert.equal(app.calls.length, 2);
+  assert.equal(app.state.page, 2);
+  assert.equal(app.state.cursor, "cursor-2");
+  assert.equal(app.state.archive.pagination.has_next, false);
+});
+
+test("changing filters aborts an in-flight quick jump without showing its late result", async () => {
+  let finishSecond;
+  let enteredSecond;
+  const second = new Promise(resolve => { enteredSecond = resolve; });
+  const app = archiveRequestHarness({ fetchImpl: url => {
+    const params = new URL(url, "https://example.com").searchParams;
+    if (params.get("q") === "old" && params.get("cursor") === "cursor-2") {
+      enteredSecond();
+      return new Promise(resolve => { finishSecond = () => resolve(filteredPageResponse(url)); });
+    }
+    return filteredPageResponse(url);
+  } });
+  app.state.search = "old";
+  app.state.page = 5;
+  const pending = app.loadArchive();
+  await second;
+  app.state.search = "new";
+  app.state.page = 1;
+  app.state.cursor = "";
+  await app.loadArchive();
+  finishSecond();
+  await pending;
+  assert.equal(app.calls.length, 3);
+  assert.equal(app.state.page, 1);
+  assert.equal(app.state.archive.posts[0].title, "new");
 });

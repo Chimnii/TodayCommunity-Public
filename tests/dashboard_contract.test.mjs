@@ -450,7 +450,7 @@ test("moves page-change focus to visible content and follows the motion contract
   assert.doesNotMatch(css, /transition\s*:[^;]*,\s*color\s+/s);
 });
 
-test("uses numbered jumps without filters and accessible previous-next controls with filters", () => {
+test("uses quick numbered pages and accessible previous-next controls", () => {
   assert.match(app, /PAGE_WINDOW_RADIUS\s*=\s*3/);
   assert.match(app, /createPageJumpForm\(pagination\.page, pagination\.total_pages\)/);
   assert.match(app, /pagination\.mode === "sequential"[\s\S]*renderSequentialPagination/);
@@ -462,7 +462,8 @@ test("uses numbered jumps without filters and accessible previous-next controls 
   assert.match(app, /current\.setAttribute\("aria-current", "page"\)/);
   assert.match(app, /function goToCursor\(cursor, page\)/);
   assert.match(app, /state\.cursor = String\(cursor \|\| ""\)/);
-  assert.match(app, /params\.set\("cursor", state\.cursor\)/);
+  assert.match(app, /function buildApiUrl\(\{ page = state\.page, cursor = state\.cursor \}/);
+  assert.match(app, /params\.set\("cursor", cursor\)/);
   assert.match(app, /state\.cursor = String\(params\.get\("cursor"\)/);
   assert.match(app, /cursor: state\.cursor \|\| null/);
   assert.match(app, /form\.setAttribute\("aria-label", "페이지 직접 이동"\)/);

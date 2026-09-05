@@ -1177,6 +1177,7 @@ body[data-content-kind="mixed"] .cell-source {
 
 .pagination-sequential {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-1);
 }
@@ -1580,6 +1581,11 @@ body[data-content-kind="mixed"] .cell-source {
   .pagination-jump {
     flex: 0 0 auto;
     margin-top: var(--space-1);
+  }
+
+  .pagination-sequential .pagination-current {
+    flex-basis: 100%;
+    order: -1;
   }
 }
 

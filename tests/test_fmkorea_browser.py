@@ -6,6 +6,7 @@ import socket
 import tempfile
 import time
 import unittest
+import uuid
 from pathlib import Path
 from unittest.mock import patch
 
@@ -359,7 +360,8 @@ class ChromeLifecycleTests(unittest.TestCase):
         session._playwright = Playwright()
         session._process = Process()
 
-        session.close()
+        with patch("crawler.fmkorea_browser.wait_for_cdp_listener_to_stop", return_value=True):
+            session.close()
 
         self.assertEqual(events[0], ("send", "Browser.close"))
         self.assertIn(("browser_close", None), events)
@@ -401,6 +403,11 @@ class ChromeLifecycleTests(unittest.TestCase):
         )
 
     def test_host_lock_rejects_a_second_session_until_release(self) -> None:
+        # Exercise a real OS mutex without contending with the production runner.
+        isolated_mutex = patch("crawler.fmkorea_browser.HOST_SESSION_MUTEX_NAME",
+                               "Local\\TodayCommunity-test-" + uuid.uuid4().hex)
+        isolated_mutex.start()
+        self.addCleanup(isolated_mutex.stop)
         first = HostSessionLock()
         second = HostSessionLock()
         first.acquire()

@@ -318,6 +318,7 @@ test("defaults to the first 30 globally counted posts and preserves recent runs"
     page: 1,
     page_size: 30,
     total_pages: 3,
+    quick_page_count: 3,
     visible_from: 1,
     visible_to: 30,
     has_previous: false,
@@ -329,8 +330,8 @@ test("defaults to the first 30 globally counted posts and preserves recent runs"
   assert.equal(body.runs.length, 10);
 
   assert.equal(database.batchRequests.length, 1);
-  assert.equal(database.batchRequests[0].length, 5);
-  assert.equal(database.calls.filter((call) => call.method === "batch").length, 5);
+  assert.equal(database.batchRequests[0].length, 4);
+  assert.equal(database.calls.filter((call) => call.method === "batch").length, 4);
   assert.equal(database.calls.filter((call) => call.method === "first").length, 0);
   assert.equal(database.calls.filter((call) => call.method === "all").length, 1);
   assert.ok(database.calls.every(({ sql }) => !/COUNT\(|MAX\(|DISTINCT/i.test(sql)));
@@ -433,7 +434,7 @@ test("applies escaped title and numeric filters before paginating with a stable 
   assert.equal(body.pagination.previous_cursor, null);
   assert.equal(typeof body.pagination.next_cursor, "string");
   assert.equal(database.batchRequests.length, 1);
-  assert.equal(database.batchRequests[0].length, 5);
+  assert.equal(database.batchRequests[0].length, 4);
 
   const selectedSubject = "AI 소식' OR 1=1 --";
   const expectedFilterBindings = [target, 4, 15, selectedSubject, "%100\\%\\_\\\\%"];
@@ -998,7 +999,8 @@ test("normalizes cache keys and reuses a short-lived edge response", async () =>
     assert.equal(second.response.status, 200);
     assert.deepEqual(second.body, first.body);
     assert.equal(database.calls.length, callsAfterFirst);
-    assert.equal(stored.size, 1);
+    assert.equal(stored.size, 2);
+    assert.equal([...stored.keys()].filter(key => new URL(key).pathname === "/api/archive").length, 1);
   } finally {
     if (originalCaches === undefined) {
       delete globalThis.caches;
@@ -1069,7 +1071,7 @@ test("shares public edge caching for owner sessions", async () => {
     );
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("cache-control"), "public, max-age=15, s-maxage=120");
-    assert.equal(cacheCalls, 2);
+    assert.equal(cacheCalls, 4);
     assert.ok(database.calls.length > 0);
   } finally {
     if (originalCaches === undefined) delete globalThis.caches;
@@ -1087,13 +1089,14 @@ test("clamps an out-of-range unfiltered page using the stats total", async () =>
   const { body } = await requestArchive(database, "?page=999&page_size=30");
 
   assert.equal(database.batchRequests.length, 1);
-  assert.equal(database.batchRequests[0].length, 5);
+  assert.equal(database.batchRequests[0].length, 4);
   assert.equal(body.summary.filtered_posts, 90);
   assert.deepEqual(body.pagination, {
     mode: "numbered",
     page: 3,
     page_size: 30,
     total_pages: 3,
+    quick_page_count: 3,
     visible_from: 61,
     visible_to: 65,
     has_previous: true,

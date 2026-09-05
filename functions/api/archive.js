@@ -18,7 +18,7 @@ const MAX_SUBJECT_OPTIONS = 100;
 const MAX_ARCHIVE_FILTER_KEYS = 50;
 const MAX_TOPIC_ITEMS = 6;
 const MAX_CURSOR_LENGTH = 8192;
-const MAX_NUMBERED_ROWS = 4000;
+const QUICK_PAGE_COUNT = 5;
 const MAX_SCAN_ROWS = 512;
 const TARGET_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const TOPIC_TREND_STATES = new Set(["new", "rising", "active"]);
@@ -42,6 +42,15 @@ function jsonResponse(body, status = 200, cacheable = true) {
       "x-content-type-options": "nosniff",
     },
   });
+}
+
+async function storePublicCache(cache, key, response, context) {
+  const write = (async () => {
+    try { await cache.put(key, response); }
+    catch { /* An optional cache write must not fail a successful DB response. */ }
+  })();
+  if (typeof context.waitUntil === "function") context.waitUntil(write);
+  else await write;
 }
 
 function normalizePositiveInteger(rawValue, fallback, max = Number.MAX_SAFE_INTEGER) {
@@ -260,7 +269,7 @@ function buildCacheKey(
 ) {
   const cacheUrl = new URL(url.pathname, url.origin);
   const normalized = {
-    format: "bounded-v2",
+    format: "quick-pages-v3",
     target,
     page: String(requestedPage),
     page_size: String(pageSize),
@@ -758,7 +767,9 @@ export async function onRequestGet(context) {
     });
     usage.cache = bypassCache ? "bypass" : "miss";
     if (edgeCache) {
-      const cached = await edgeCache.match(cacheKey);
+      let cached = null;
+      try { cached = await edgeCache.match(cacheKey); }
+      catch { /* A cache outage falls back to D1. */ }
       if (cached) {
         usage.cache = "hit";
         const response = new Response(cached.body, cached);
@@ -801,12 +812,12 @@ export async function onRequestGet(context) {
     const statsSummary = summarizeStats(relevantStatsRows);
     const totalPosts = statsSummary.totalPosts;
     const exactTotalPages = Math.ceil(totalPosts / pageSize);
-    const sequentialMode = filteredMode || allArchives || Boolean(cursor) || totalPosts > MAX_NUMBERED_ROWS;
+    const sequentialMode = filteredMode || allArchives || Boolean(cursor) || exactTotalPages > QUICK_PAGE_COUNT;
     const totalPages = sequentialMode ? null : exactTotalPages;
     const page = cursor?.page ?? (filteredMode ? 1
       : Math.min(requestedPage, Math.max(exactTotalPages, 1)));
-    if (sequentialMode && !filteredMode && !cursor && page > 1 && page !== exactTotalPages) {
-      return jsonResponse({ error: "이 페이지는 처음이나 마지막 페이지에서 이전·다음으로 이동해 주세요.", code: "deep_page_requires_cursor" }, 400);
+    if (sequentialMode && !filteredMode && !cursor && page > QUICK_PAGE_COUNT && page !== exactTotalPages) {
+      return jsonResponse({ error: "1~5페이지는 바로 이동할 수 있습니다. 그 이후는 이전·다음으로 이동해 주세요.", code: "deep_page_requires_cursor" }, 400);
     }
     // Numeric jumps on small archives seek from the nearest end; large archives
     // and sparse filters use bounded candidate windows and tuple cursors.
@@ -815,11 +826,33 @@ export async function onRequestGet(context) {
     const reversePage = !cursor && !filteredMode && page > 1 && reverseOffset < offset;
     const direction = cursor?.direction ?? (reversePage ? "previous" : "next");
     const visibleLimit = reversePage ? Math.min(pageSize, Math.max(0, totalPosts - offset)) : pageSize;
-    const candidateLimit = filteredMode ? MAX_SCAN_ROWS : visibleLimit + 1;
+    const shallowSkip = sequentialMode && !filteredMode && !cursor && !reversePage ? offset : 0;
+    const candidateLimit = filteredMode ? MAX_SCAN_ROWS : shallowSkip + visibleLimit + 1;
     const communityArchive = archive.content_kind === "community";
     if (!communityArchive && topicId > 0) {
       return jsonResponse({ error: "Topic filters are unavailable for this archive." }, 400);
     }
+
+    // Share page-independent public metadata across sorts/pages. The catalog
+    // comes from the fresh stats lookup, so a changed public archive set cannot
+    // reuse metadata from an earlier visibility configuration.
+    const metadataUrl = new URL("/api/archive-metadata", url.origin);
+    metadataUrl.searchParams.set("format", "public-v1");
+    metadataUrl.searchParams.set("target", target);
+    metadataUrl.searchParams.set("catalog", JSON.stringify(publicStatsRows.map(row =>
+      [row.archive_key, row.content_kind]).sort((a, b) => a[0].localeCompare(b[0]))));
+    const metadataKey = new Request(metadataUrl.toString());
+    let cachedMetadata = null;
+    if (edgeCache) {
+      try {
+        const entry = await edgeCache.match(metadataKey);
+        const value = entry ? await entry.json() : null;
+        if (value && Array.isArray(value.sources) && Array.isArray(value.runs)
+            && Number.isFinite(value.expires_at) && value.expires_at > Date.now()
+            && value.expires_at <= Date.now() + 120_000) cachedMetadata = value;
+      } catch { /* Metadata cache misses/failures fall back to the bounded DB queries. */ }
+    }
+    usage.metadata_cache = cachedMetadata ? "hit" : bypassCache ? "bypass" : "miss";
 
     const sourceStatement = allArchives
       ? db.prepare(
@@ -910,10 +943,10 @@ export async function onRequestGet(context) {
             `
           )
           .bind(target);
-    const batchStatements = [sourceStatement, runsStatement];
+    const batchStatements = cachedMetadata ? [] : [sourceStatement, runsStatement];
     let selectedTopicIndex = -1;
     let topicLatestIndex = -1;
-    if (communityArchive) {
+    if (communityArchive && topicId > 0) {
       selectedTopicIndex = batchStatements.length;
       batchStatements.push(
         db
@@ -927,6 +960,8 @@ export async function onRequestGet(context) {
           )
           .bind(topicId, target)
       );
+    }
+    if (communityArchive && !cachedMetadata) {
       topicLatestIndex = batchStatements.length;
       batchStatements.push(
         db
@@ -1001,18 +1036,18 @@ export async function onRequestGet(context) {
         .filter((candidate) => candidate?.archive_key !== ALL_TARGET),
       ALL_ARCHIVE,
     ];
-    const sources = sourceResult.results ?? [];
+    const sources = cachedMetadata?.sources ?? sourceResult.results ?? [];
     const selectedTopic = firstResult(selectedTopicResult);
     if (topicId > 0 && !selectedTopic) {
       return jsonResponse({ error: "Unknown topic filter." }, 400);
     }
-    let topicTrends = communityArchive
+    let topicTrends = cachedMetadata ? cachedMetadata.topic_trends : communityArchive
       ? publicLatestTopicTrends(firstResult(topicLatestResult))
       : null;
-    if (communityArchive && !topicTrends) {
+    if (!cachedMetadata && communityArchive && !topicTrends) {
       topicTrends = await loadLegacyTopicTrends(db, target);
     }
-    const runs = (runResult.results ?? []).map(
+    const runs = cachedMetadata?.runs ?? (runResult.results ?? []).map(
       ({ had_error: hadError, error_message: _discardedError, ...run }) => ({
         ...run,
         error_message: Number(hadError)
@@ -1020,7 +1055,11 @@ export async function onRequestGet(context) {
           : null,
       })
     );
-    const postRows = requestedPostResult.results ?? [];
+    if (!cachedMetadata && edgeCache) {
+      const metadata = { sources, runs, topic_trends: topicTrends, expires_at: Date.now() + 120_000 };
+      await storePublicCache(edgeCache, metadataKey, jsonResponse(metadata), context);
+    }
+    const postRows = (requestedPostResult.results ?? []).slice(shallowSkip);
     const matchingRows = sequentialMode
       ? postRows.filter((row) => Number(row.matches_filter ?? 1) === 1) : postRows;
     const hasExtraRow = matchingRows.length > visibleLimit;
@@ -1077,6 +1116,7 @@ export async function onRequestGet(context) {
         page,
         page_size: pageSize,
         total_pages: totalPages,
+        quick_page_count: filteredMode ? null : Math.min(QUICK_PAGE_COUNT, exactTotalPages),
         visible_from: visibleFrom,
         visible_to: visibleTo,
         has_previous: hasPrevious,
@@ -1088,13 +1128,13 @@ export async function onRequestGet(context) {
       posts,
     }, 200, cacheable);
     response.headers.set("x-tc-cache", usage.cache);
+    if (cachedMetadata) {
+      // Layering response caches must not extend metadata freshness to 240s.
+      const remaining = Math.max(0, Math.floor((cachedMetadata.expires_at - Date.now()) / 1000));
+      response.headers.set("cache-control", `public, max-age=${Math.min(15, remaining)}, s-maxage=${remaining}`);
+    }
     if (edgeCache) {
-      const cacheWrite = edgeCache.put(cacheKey, response.clone());
-      if (typeof context.waitUntil === "function") {
-        context.waitUntil(cacheWrite);
-      } else {
-        await cacheWrite;
-      }
+      await storePublicCache(edgeCache, cacheKey, response.clone(), context);
     }
     return response;
   } catch (error) {

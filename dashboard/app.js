@@ -266,6 +266,62 @@ async function initialize() {
 }
 
 let archiveCacheBypassUntil = 0;
+const QUICK_PAGE_COUNT = 5;
+let quickPageCursors = { key: "", expiresAt: 0, cursors: new Map([[1, ""]]), endPage: null };
+
+function filteredArchiveRequest() {
+  return Boolean(state.search || state.subject || state.topicId > 0 || state.minUpvotes > 0 || state.minComments > 0);
+}
+
+function prepareQuickPageCursors(bypassCache) {
+  const key = JSON.stringify([state.target, state.pageSize, state.search, state.subject,
+    state.topicId, state.minUpvotes, state.minComments, state.sortBy, [...state.excludedArchiveKeys].sort()]);
+  if (bypassCache || quickPageCursors.key !== key || Date.now() >= quickPageCursors.expiresAt) {
+    quickPageCursors = { key, expiresAt: Date.now() + 15_000, cursors: new Map([[1, ""]]), endPage: null };
+  }
+}
+
+async function fetchArchivePage(controller, bypassCache) {
+  prepareQuickPageCursors(bypassCache);
+  const desiredPage = state.page;
+  const filtered = filteredArchiveRequest();
+  let page = state.page;
+  let cursor = state.cursor;
+  const walking = filtered && !cursor && page <= QUICK_PAGE_COUNT;
+  if (walking) {
+    page = Math.max(...[...quickPageCursors.cursors.keys()].filter(value => value <= desiredPage));
+    cursor = quickPageCursors.cursors.get(page);
+  }
+  // At most five bounded requests for an unvisited filtered quick page.
+  // Only cursor boundaries are reused; content is fetched under normal TTLs.
+  for (let step = 0; step < QUICK_PAGE_COUNT; step += 1) {
+    const response = await fetch(buildApiUrl({ page, cursor }), {
+      cache: bypassCache ? "no-store" : "default",
+      headers: { accept: "application/json", ...(bypassCache ? { "x-tc-refresh": "1" } : {}) },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const failure = await response.json().catch(() => ({}));
+      throw Object.assign(new Error(failure.error || `HTTP ${response.status}`), {
+        inputError: response.status === 400,
+      });
+    }
+    const payload = await response.json();
+    if (controller.signal.aborted) return null;
+    const actualPage = normalizePositiveNumber(payload.pagination?.page, page);
+    const nextCursor = String(payload.pagination?.next_cursor || "");
+    const hasNext = Boolean(payload.pagination?.has_next && nextCursor);
+    if (filtered) {
+      if (actualPage <= QUICK_PAGE_COUNT) quickPageCursors.cursors.set(actualPage, cursor);
+      if (hasNext && actualPage < QUICK_PAGE_COUNT) quickPageCursors.cursors.set(actualPage + 1, nextCursor);
+      if (!hasNext) quickPageCursors.endPage = actualPage;
+    }
+    if (!walking || actualPage >= desiredPage || !hasNext) return { payload, cursor };
+    page = actualPage + 1;
+    cursor = nextCursor;
+  }
+  throw new Error("Failed to reach the requested quick page.");
+}
 
 function archiveCacheBypassActive() {
   try {
@@ -307,22 +363,12 @@ async function loadArchive() {
 
   try {
     const bypassCache = archiveCacheBypassActive();
-    const response = await fetch(buildApiUrl(), {
-      cache: bypassCache ? "no-store" : "default",
-      headers: { accept: "application/json", ...(bypassCache ? { "x-tc-refresh": "1" } : {}) },
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      const failure = await response.json().catch(() => ({}));
-      throw Object.assign(new Error(failure.error || `HTTP ${response.status}`), {
-        inputError: response.status === 400,
-      });
-    }
-
-    const payload = await response.json();
-    if (controller.signal.aborted) {
-      return;
+    const loaded = await fetchArchivePage(controller, bypassCache);
+    if (!loaded || controller.signal.aborted) return;
+    const { payload, cursor } = loaded;
+    if (state.cursor !== cursor) {
+      state.cursor = cursor;
+      syncStateToUrl();
     }
 
     state.archive = withArchiveCatalog(payload);
@@ -373,10 +419,10 @@ async function loadArchive() {
   }
 }
 
-function buildApiUrl() {
+function buildApiUrl({ page = state.page, cursor = state.cursor } = {}) {
   const params = new URLSearchParams({
     target: state.target,
-    page: String(state.page),
+    page: String(page),
     page_size: String(state.pageSize),
     min_upvotes: String(state.minUpvotes),
     min_comments: String(state.minComments),
@@ -392,8 +438,8 @@ function buildApiUrl() {
   if (state.topicId > 0) {
     params.set("topic", String(state.topicId));
   }
-  if (state.cursor) {
-    params.set("cursor", state.cursor);
+  if (cursor) {
+    params.set("cursor", cursor);
   }
   if (canUseArchiveFilter()) {
     for (const archiveKey of state.excludedArchiveKeys) {
@@ -1076,6 +1122,8 @@ function normalizePagination(rawPagination, filteredPosts, visibleCount) {
     page,
     page_size: pageSize,
     total_pages: totalPages,
+    quick_page_count: rawPagination?.quick_page_count == null ? null
+      : Math.min(QUICK_PAGE_COUNT, normalizeNonNegativeNumber(rawPagination.quick_page_count, 0)),
     visible_from: normalizeNonNegativeNumber(rawPagination?.visible_from, fallbackFrom),
     visible_to: normalizeNonNegativeNumber(
       rawPagination?.visible_to,
@@ -2212,7 +2260,17 @@ function renderSequentialPagination(pagination) {
   if (pagination.last_page > 1) {
     pageList.append(createPageButton("처음", 1, "pagination-first"));
   }
-  pageList.append(previous, current, next);
+  pageList.append(previous);
+  const quickCount = pagination.quick_page_count ?? Math.min(QUICK_PAGE_COUNT,
+    quickPageCursors.endPage ?? (pagination.has_next ? QUICK_PAGE_COUNT : pagination.page));
+  for (let page = 1; page <= quickCount; page += 1) {
+    const button = createPageButton(String(page), page, "pagination-page");
+    button.setAttribute("aria-label", `${page}페이지${page === pagination.page ? ", 현재 페이지" : "로 이동"}`);
+    if (page === pagination.page) button.setAttribute("aria-current", "page");
+    pageList.append(button);
+  }
+  if (pagination.page > quickCount) pageList.append(current);
+  pageList.append(next);
   if (pagination.last_page > 1) {
     pageList.append(createPageButton("마지막", pagination.last_page, "pagination-last"));
   }
