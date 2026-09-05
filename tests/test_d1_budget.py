@@ -374,6 +374,35 @@ class PipelineBudgetTests(unittest.TestCase):
                 publish_d1_stop_output(D1QuotaExceeded("quota"))
             self.assertEqual(output.read_text(encoding="utf-8"), "d1_stop=true\n")
 
+    def test_game_local_budget_stop_keeps_independent_topic_gate_available(self):
+        with tempfile.TemporaryDirectory() as root:
+            for reason in ("rows_read", "rows_written", "source_rows_written"):
+                output = Path(root) / reason
+                exc = D1BudgetExceeded(reason)
+                exc.d1_budget = {"stop_reason": reason, "quota_exhausted": False}
+                exc.d1_usage = {"incomplete_meta_count": 0, "failed_request_count": 0}
+                with patch.dict(os.environ, {"GITHUB_OUTPUT": str(output)}):
+                    publish_d1_stop_output(exc)
+                self.assertEqual(output.read_text(encoding="utf-8"), "d1_stop=false\n")
+
+    def test_account_or_unknown_usage_stop_still_blocks_topic_after_local_error(self):
+        cases = [
+            ({"stop_reason": "account_rows_written"}, {}),
+            ({"stop_reason": "account_analytics_unavailable"}, {}),
+            ({"stop_reason": "usage_unknown"}, {}),
+            ({"stop_reason": "rows_written", "quota_exhausted": True}, {}),
+            ({"stop_reason": "rows_written"}, {"incomplete_meta_count": 1}),
+            ({"stop_reason": "rows_written"}, {"failed_request_count": 1}),
+        ]
+        with tempfile.TemporaryDirectory() as root:
+            for index, (budget, usage) in enumerate(cases):
+                output = Path(root) / str(index)
+                exc = D1BudgetExceeded("rows_written")
+                exc.d1_budget, exc.d1_usage = budget, usage
+                with patch.dict(os.environ, {"GITHUB_OUTPUT": str(output)}):
+                    publish_d1_stop_output(exc)
+                self.assertEqual(output.read_text(encoding="utf-8"), "d1_stop=true\n")
+
 
 if __name__ == "__main__":
     unittest.main()

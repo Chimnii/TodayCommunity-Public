@@ -710,6 +710,10 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         )[1].split("- name: Remove non-persisting run root", maxsplit=1)[0]
         self.assertIn("always()", topic_step)
         self.assertIn("steps.run_root.outcome == 'success'", topic_step)
+        self.assertIn("steps.curation.outputs.d1_stop != 'true'", topic_step)
+        self.assertIn("-m crawler.jobs.check_d1_budget --profile topic", topic_step)
+        self.assertLess(topic_step.index("-m crawler.jobs.check_d1_budget"),
+                        topic_step.index("-m community_topics.runner"))
         self.assertIn("$env:OPENAI_API_KEY = $null", topic_step)
         self.assertIn("$env:CODEX_API_KEY = $null", topic_step)
         self.assertIn("$env:CODEX_HOME = $env:TC_GAME_NEWS_CODEX_HOME", topic_step)

@@ -735,15 +735,24 @@ def account_daily_stop_reason(usage: dict, next_reads: int, next_writes: int) ->
 
 
 def publish_d1_stop_output(exc: Exception) -> None:
-    """Let a later independent workflow step avoid retrying the same D1 stop."""
+    """Block independent work only for an account stop or unknown D1 usage."""
     budget = getattr(exc, "d1_budget", {})
-    stopped = isinstance(exc, (D1BudgetExceeded, D1QuotaExceeded)) or (
-        isinstance(budget, dict) and (budget.get("stop_reason") or budget.get("quota_exhausted"))
+    usage = getattr(exc, "d1_usage", {})
+    local_reasons = {"rows_read", "rows_written", "source_rows_written"}
+    reason = exc.reason if isinstance(exc, D1BudgetExceeded) else None
+    budget_reason = budget.get("stop_reason") if isinstance(budget, dict) else None
+    stopped = (
+        isinstance(exc, D1QuotaExceeded)
+        or (reason is not None and reason not in local_reasons)
+        or (budget_reason is not None and budget_reason not in local_reasons)
+        or (isinstance(budget, dict) and bool(budget.get("quota_exhausted")))
+        or (isinstance(usage, dict) and bool(
+            usage.get("incomplete_meta_count") or usage.get("failed_request_count")))
     )
     output_path = os.environ.get("GITHUB_OUTPUT")
-    if stopped and output_path:
+    if output_path:
         with open(output_path, "a", encoding="utf-8") as output:
-            output.write("d1_stop=true\n")
+            output.write(f"d1_stop={'true' if stopped else 'false'}\n")
 
 
 def _read_account_daily_usage(account_id: str, token: str, utc_day: str) -> dict:
