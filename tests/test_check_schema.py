@@ -119,6 +119,29 @@ class SqliteClient:
 
 
 class SchemaPreflightTests(unittest.TestCase):
+    def test_catalog_is_read_once_and_index_drift_is_seen_on_next_inspection(self) -> None:
+        client = SqliteClient()
+        queries = []
+        original_query = client.query
+
+        def query(sql, params=None):
+            queries.append(sql)
+            return original_query(sql, params)
+
+        client.query = query
+        self.assertTrue(validate_schema(client)["valid"])
+        self.assertEqual(sum("FROM sqlite_schema" in sql for sql in queries), 1)
+        client.connection.execute("DROP INDEX idx_posts_active_created")
+        client.connection.execute(
+            "CREATE INDEX idx_posts_active_created ON posts (created_at DESC, id DESC) "
+            "WHERE status = 'deleted'"
+        )
+        queries.clear()
+        with self.assertRaises(SchemaValidationError) as caught:
+            validate_schema(client)
+        self.assertTrue(any("WHERE status = 'active'" in e for e in caught.exception.report["errors"]))
+        self.assertEqual(sum("FROM sqlite_schema" in sql for sql in queries), 1)
+
     def test_zeus_archive_seed_and_migration_are_idempotent(self) -> None:
         client = SqliteClient()
         expected = {

@@ -289,6 +289,12 @@ def inspect_schema(client: D1Client, *, deep_data_audit: bool = False) -> dict:
     }
     errors: List[str] = []
     details = {}
+    # sqlite_schema has no name index: individual lookups each scan the catalog.
+    # Read current definitions once per inspection; retain all live PRAGMA checks.
+    index_definitions = {
+        str(row["name"]): str(row.get("sql") or "")
+        for row in client.query("SELECT name, sql FROM sqlite_schema WHERE type = 'index'")
+    }
 
     for table_name in REQUIRED_TABLES:
         if table_name not in present:
@@ -319,6 +325,7 @@ def inspect_schema(client: D1Client, *, deep_data_audit: bool = False) -> dict:
             client,
             index_rows,
             required_index_columns,
+            index_definitions,
         )
 
         details[table_name] = {
@@ -679,6 +686,7 @@ def _required_index_details(
     client: D1Client,
     index_rows: Sequence[dict],
     required: Dict[str, Tuple[str, ...]],
+    definitions: Dict[str, str],
 ) -> Dict[str, dict]:
     by_name = {
         str(row.get("name") or ""): row
@@ -693,15 +701,7 @@ def _required_index_details(
         index_column_rows = client.query(
             f"PRAGMA index_xinfo({_quote_identifier(index_name)})"
         )
-        definition_rows = client.query(
-            "SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = ?",
-            [index_name],
-        )
-        definition_sql = (
-            str(definition_rows[0].get("sql") or "")
-            if definition_rows
-            else ""
-        )
+        definition_sql = definitions.get(index_name, "")
         key_rows = [
             row
             for row in index_column_rows
