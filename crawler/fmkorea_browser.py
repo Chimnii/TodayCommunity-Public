@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -24,7 +25,8 @@ from crawler.jobs.scan_new_posts import (
 
 
 FMKOREA_ALLOWED_HOSTS = frozenset({"fmkorea.com", "www.fmkorea.com"})
-DEFAULT_CDP_PORT = 39225
+DEFAULT_CDP_PORT = 0
+DEVTOOLS_ACTIVE_PORT_NAME = "DevToolsActivePort"
 PROFILE_MARKER_NAME = ".todaycommunity-fmkorea-profile"
 PROFILE_MARKER_CONTENT = "TodayCommunity FMKorea dedicated Chrome profile\n"
 HOST_SESSION_MUTEX_NAME = r"Global\TodayCommunity.FMKorea.Chrome"
@@ -200,8 +202,8 @@ class FmkoreaBrowserConfig:
             cdp_port = int(configured_port or DEFAULT_CDP_PORT)
         except ValueError as exc:
             raise ValueError("TC_FMKOREA_CDP_PORT must be an integer") from exc
-        if not 1024 <= cdp_port <= 65535:
-            raise ValueError("TC_FMKOREA_CDP_PORT must be between 1024 and 65535")
+        if cdp_port != 0 and not 1024 <= cdp_port <= 65535:
+            raise ValueError("TC_FMKOREA_CDP_PORT must be 0 (automatic) or between 1024 and 65535")
 
         try:
             startup_timeout = float(configured_timeout or 15.0)
@@ -320,11 +322,70 @@ def assert_cdp_port_available(port: int) -> None:
         probe.bind(("127.0.0.1", port))
     except OSError as exc:
         raise FmkoreaBrowserStartupError(
-            f"FMKorea Chrome CDP port {port} is already in use. "
-            "Another local browser crawl may still be running."
+            f"FMKorea Chrome cannot bind CDP port {port} "
+            f"(errno={exc.errno}, winerror={getattr(exc, 'winerror', None)}). "
+            f"TCP snapshot: {describe_tcp_port(port)}"
         ) from exc
     finally:
         probe.close()
+
+
+def describe_tcp_port(port: int) -> str:
+    """Capture only matching endpoints, state and PID; never kill by port."""
+    if os.name != "nt":
+        return "unavailable on this platform"
+    try:
+        result = subprocess.run(
+            ["netstat.exe", "-ano", "-p", "tcp"], capture_output=True,
+            text=True, timeout=3.0, check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        matches = []
+        for line in result.stdout.splitlines():
+            fields = line.split()
+            if len(fields) == 5 and fields[0] == "TCP" and fields[1].endswith(f":{port}"):
+                matches.append(f"local={fields[1]} state={fields[3]} pid={fields[4]}")
+        return "; ".join(matches[:12]) or "no matching TCP entry (bind failure is not proof of a live listener)"
+    except (OSError, subprocess.SubprocessError):
+        return "unavailable"
+
+
+def read_devtools_active_port(profile_dir: Path) -> Optional[tuple[int, str]]:
+    try:
+        with (profile_dir / DEVTOOLS_ACTIVE_PORT_NAME).open(encoding="utf-8") as handle:
+            lines = handle.read(4096).splitlines()
+        if len(lines) != 2 or not lines[0].isdigit():
+            return None
+        port = int(lines[0])
+        if not 1024 <= port <= 65535 or not re.fullmatch(
+            r"/devtools/browser/[0-9a-fA-F-]{36}", lines[1]
+        ):
+            return None
+        return port, lines[1]
+    except (OSError, UnicodeError, ValueError):
+        return None
+
+
+def wait_for_auto_cdp_endpoint(
+    profile_dir: Path, process: subprocess.Popen, timeout_seconds: float, *,
+    monotonic: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> tuple[int, str]:
+    deadline = monotonic() + timeout_seconds
+    while monotonic() < deadline:
+        if process.poll() is not None:
+            raise FmkoreaBrowserStartupError(
+                "Owned Chrome exited before CDP startup; the dedicated profile may already be in use."
+            )
+        discovered = read_devtools_active_port(profile_dir)
+        if discovered is not None:
+            port, browser_path = discovered
+            if is_cdp_endpoint_ready(
+                f"http://127.0.0.1:{port}", expected_browser_path=browser_path
+            ) and process.poll() is None:
+                return port, f"ws://127.0.0.1:{port}{browser_path}"
+        sleep(0.1)
+    raise FmkoreaBrowserStartupError("Chrome did not publish a fresh, matching DevToolsActivePort endpoint.")
 
 
 def is_loopback_port_listening(port: int) -> bool:
@@ -367,6 +428,7 @@ def is_cdp_endpoint_ready(
     endpoint: str,
     *,
     open_url: Optional[Callable[..., object]] = None,
+    expected_browser_path: Optional[str] = None,
 ) -> bool:
     transport = open_url or LOCAL_CDP_OPENER.open
     try:
@@ -384,6 +446,7 @@ def is_cdp_endpoint_ready(
         and websocket_parts.hostname in {"127.0.0.1", "localhost"}
         and websocket_parts.port == endpoint_parts.port
         and websocket_parts.path.startswith("/devtools/browser/")
+        and (expected_browser_path is None or websocket_parts.path == expected_browser_path)
     )
 
 
@@ -437,6 +500,8 @@ class FmkoreaChromeSession:
         self._host_lock_factory = host_lock_factory
         self._last_navigation_completed_at: Optional[float] = None
         self.cleanup_warnings: list[str] = []
+        self.cdp_ports_used: list[int] = []
+        self._active_cdp_port: Optional[int] = None
         self._host_lock: Optional[HostSessionLock] = None
         self._process: Optional[subprocess.Popen] = None
         self._playwright_manager = None
@@ -492,7 +557,12 @@ class FmkoreaChromeSession:
         self._host_lock.acquire()
         try:
             profile_dir = prepare_dedicated_profile(self.config.profile_dir)
-            assert_cdp_port_available(self.config.cdp_port)
+            if self.config.cdp_port:
+                assert_cdp_port_available(self.config.cdp_port)
+            else:
+                # Only after acquiring the host lock and validating our profile.
+                # Never attach to a previous Chrome using its stale endpoint file.
+                (profile_dir / DEVTOOLS_ACTIVE_PORT_NAME).unlink(missing_ok=True)
         except Exception:
             self.close()
             raise
@@ -523,12 +593,20 @@ class FmkoreaChromeSession:
                 creationflags=creationflags,
                 start_new_session=os.name != "nt",
             )
-            wait_for_cdp_endpoint(
-                self.config.cdp_endpoint,
-                startup_budget,
-                monotonic=self._monotonic,
-                sleep=self._sleep,
-            )
+            readiness_budget = startup_budget - (self._monotonic() - startup_started_at)
+            if self.config.cdp_port:
+                self._active_cdp_port = self.config.cdp_port
+                endpoint = self.config.cdp_endpoint
+                wait_for_cdp_endpoint(
+                    endpoint, readiness_budget,
+                    monotonic=self._monotonic, sleep=self._sleep,
+                )
+            else:
+                self._active_cdp_port, endpoint = wait_for_auto_cdp_endpoint(
+                    profile_dir, self._process, readiness_budget,
+                    monotonic=self._monotonic, sleep=self._sleep,
+                )
+            self.cdp_ports_used.append(self._active_cdp_port)
             remaining_startup_budget = startup_budget - (
                 self._monotonic() - startup_started_at
             )
@@ -537,7 +615,7 @@ class FmkoreaChromeSession:
                     "Chrome started but no timeout budget remained for CDP attach."
                 )
             self._browser = self._playwright.chromium.connect_over_cdp(
-                self.config.cdp_endpoint,
+                endpoint,
                 timeout=int(remaining_startup_budget * 1000),
             )
             contexts = self._browser.contexts
@@ -568,6 +646,8 @@ class FmkoreaChromeSession:
         playwright_manager = self._playwright_manager
         process = self._process
         host_lock = self._host_lock
+        active_cdp_port = self._active_cdp_port
+        self._active_cdp_port = None
         self._page = None
         self._context = None
         self._browser = None
@@ -609,14 +689,14 @@ class FmkoreaChromeSession:
                 )
         if process is not None:
             self._stop_owned_process_tree(process)
-            if not wait_for_cdp_listener_to_stop(
-                self.config.cdp_port,
+            if active_cdp_port is not None and not wait_for_cdp_listener_to_stop(
+                active_cdp_port,
                 monotonic=self._monotonic,
                 sleep=self._sleep,
             ):
                 self.cleanup_warnings.append(
                     "Chrome CDP listener remained active after cleanup "
-                    f"(port={self.config.cdp_port})."
+                    f"(port={active_cdp_port})."
                 )
         if host_lock is not None:
             try:

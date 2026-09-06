@@ -8,7 +8,7 @@ import time
 import unittest
 import uuid
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from crawler.fmkorea_browser import (
     CHROME_EXECUTABLE_CANDIDATES,
@@ -25,6 +25,8 @@ from crawler.fmkorea_browser import (
     prepare_dedicated_profile,
     validate_fmkorea_url,
     wait_for_cdp_listener_to_stop,
+    read_devtools_active_port,
+    wait_for_auto_cdp_endpoint,
 )
 from crawler.jobs.scan_new_posts import (
     CrawlBlockedError,
@@ -144,7 +146,7 @@ class FmkoreaBrowserConfigTests(unittest.TestCase):
                 config = FmkoreaBrowserConfig.from_env(headless=True)
 
         self.assertEqual(config.min_navigation_interval_seconds, 10.0)
-        self.assertEqual(config.cdp_port, 39225)
+        self.assertEqual(config.cdp_port, 0)
         self.assertIn(Path("/usr/bin/google-chrome"), CHROME_EXECUTABLE_CANDIDATES)
 
     def test_env_config_uses_explicit_dedicated_paths_and_bounds(self) -> None:
@@ -248,7 +250,7 @@ class DedicatedProfileTests(unittest.TestCase):
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
         try:
-            with self.assertRaisesRegex(FmkoreaBrowserStartupError, "already in use"):
+            with self.assertRaisesRegex(FmkoreaBrowserStartupError, "cannot bind.*errno="):
                 assert_cdp_port_available(port)
         finally:
             listener.close()
@@ -321,6 +323,72 @@ class CdpReadinessTests(unittest.TestCase):
                         open_url=lambda *args, **kwargs: response,
                     )
                 )
+
+
+class AutoCdpTests(unittest.TestCase):
+    browser_path = "/devtools/browser/12345678-1234-1234-1234-123456789abc"
+
+    def test_port_file_rejects_partial_invalid_and_remote_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            profile = Path(directory)
+            self.assertIsNone(read_devtools_active_port(profile))
+            for value in ["", "40000", "0\n" + self.browser_path,
+                          "65536\n" + self.browser_path, "40000\nws://example.com/x"]:
+                (profile / "DevToolsActivePort").write_text(value, encoding="utf-8")
+                self.assertIsNone(read_devtools_active_port(profile))
+            (profile / "DevToolsActivePort").write_text("40000\n" + self.browser_path, encoding="utf-8")
+            self.assertEqual(read_devtools_active_port(profile), (40000, self.browser_path))
+
+    def test_wait_requires_matching_browser_identity(self):
+        clock = FakeClock()
+        process = Mock()
+        process.poll.return_value = None
+        with patch("crawler.fmkorea_browser.read_devtools_active_port", return_value=(40000, self.browser_path)), patch(
+            "crawler.fmkorea_browser.is_cdp_endpoint_ready", side_effect=[False, True]
+        ) as ready:
+            result = wait_for_auto_cdp_endpoint(Path("unused"), process, 1,
+                monotonic=clock.monotonic, sleep=clock.sleep)
+        self.assertEqual(result, (40000, "ws://127.0.0.1:40000" + self.browser_path))
+        self.assertEqual(len(clock.sleeps), 1)
+        ready.assert_called_with("http://127.0.0.1:40000", expected_browser_path=self.browser_path)
+
+    def test_exited_process_never_attaches_to_another_browser(self):
+        process = Mock()
+        process.poll.return_value = 0
+        with patch("crawler.fmkorea_browser.is_cdp_endpoint_ready") as ready:
+            with self.assertRaisesRegex(FmkoreaBrowserStartupError, "Owned Chrome exited"):
+                wait_for_auto_cdp_endpoint(Path("unused"), process, 1)
+        ready.assert_not_called()
+
+    def test_missing_file_has_bounded_startup(self):
+        clock = FakeClock()
+        process = Mock()
+        process.poll.return_value = None
+        with patch("crawler.fmkorea_browser.read_devtools_active_port", return_value=None):
+            with self.assertRaisesRegex(FmkoreaBrowserStartupError, "fresh, matching"):
+                wait_for_auto_cdp_endpoint(Path("unused"), process, 1,
+                    monotonic=clock.monotonic, sleep=clock.sleep)
+        self.assertLess(clock.value, 1.2)
+
+    def test_endpoint_rejects_different_browser_on_same_port(self):
+        response = CdpReadinessTests.Response(
+            b'{"webSocketDebuggerUrl":"ws://127.0.0.1:40000/devtools/browser/other"}')
+        self.assertFalse(is_cdp_endpoint_ready("http://127.0.0.1:40000",
+            expected_browser_path=self.browser_path, open_url=lambda *a, **k: response))
+
+    def test_cleanup_checks_actual_port_and_keeps_history(self):
+        session = FmkoreaChromeSession(FmkoreaBrowserConfig(Path("unused"), Path("chrome")))
+        session._process = Mock()
+        session._active_cdp_port = 40123
+        session.cdp_ports_used.append(40123)
+        with patch.object(session, "_stop_owned_process_tree"), patch(
+            "crawler.fmkorea_browser.wait_for_cdp_listener_to_stop", return_value=True
+        ) as stopped:
+            session.close()
+            session.close()
+        self.assertEqual(stopped.call_count, 1)
+        self.assertEqual(stopped.call_args.args[0], 40123)
+        self.assertEqual(session.cdp_ports_used, [40123])
 
 
 class ChromeLifecycleTests(unittest.TestCase):

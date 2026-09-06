@@ -455,7 +455,7 @@ class CrawlWorkflowContractTests(unittest.TestCase):
             r"TC_FMKOREA_PROFILE_DIR: C:\ProgramData\TodayCommunity\fmkorea-chrome-profile",
             workflow,
         )
-        self.assertIn('TC_FMKOREA_CDP_PORT: "39225"', workflow)
+        self.assertIn('      TC_FMKOREA_CDP_PORT: "0"', workflow)
         self.assertIn('TC_FMKOREA_HEADLESS: "1"', workflow)
         self.assertIn('TC_FMKOREA_REQUEST_INTERVAL_SECONDS: "10"', workflow)
         self.assertIn("crawler/requirements-fmkorea-browser.txt", workflow)

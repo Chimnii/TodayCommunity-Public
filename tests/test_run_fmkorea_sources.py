@@ -24,6 +24,7 @@ class FakeChromeSession:
         self.entered = False
         self.exited = False
         self.cleanup_warnings = []
+        self.cdp_ports_used = []
         self.__class__.instances.append(self)
 
     def __enter__(self):

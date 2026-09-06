@@ -131,6 +131,7 @@ def run_local_fmkorea_sources(
             targets=targets,
             runner=runner,
         )
+    result["browser_cdp_ports"] = list(session.cdp_ports_used)
     if session.cleanup_warnings:
         result["browser_cleanup_warnings"] = list(session.cleanup_warnings)
         if result["status"] != "failed":
