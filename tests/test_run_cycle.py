@@ -1786,6 +1786,65 @@ class CrawlCycleTests(unittest.TestCase):
         self.assertEqual(cycle_runtime.request_count, 0)
         self.assertEqual(fetcher.requested_pages, [])
 
+    def test_operator_retry_clears_old_block_only_after_success(self) -> None:
+        for scenario in ("success", "blocked", "write_failure"):
+            with self.subTest(scenario=scenario):
+                client = FailingPostClient() if scenario == "write_failure" else SqliteClient()
+                settings = config()
+                target = get_target("dcinside-singularity")
+                initial = CrawlCycle(
+                    target=target, config=settings, runtime=runtime(settings),
+                    client=client, mode=CYCLE_MODE_HOT, cycle_started_at=FIXED_NOW,
+                )
+                old_block = "2026-07-16T11:00:00Z"
+                with patch("crawler.jobs.run_cycle.utc_now", return_value=old_block), patch(
+                    "crawler.jobs.scan_new_posts.utc_now", return_value=old_block
+                ):
+                    initial._record_block("HTTP 403", [])
+                fetcher = MappingFetcher(
+                    {1: page_html(row(1000, "2026-07-16 19:55:00", upvotes=4))},
+                    blocked_page=1 if scenario == "blocked" else None,
+                    last_page=1,
+                )
+                retry = CrawlCycle(
+                    target=target, config=settings, runtime=runtime(settings),
+                    client=client, mode=CYCLE_MODE_HOT, cycle_started_at=FIXED_NOW,
+                    fetcher=fetcher, retry_source_block=True,
+                )
+                with patch("crawler.jobs.run_cycle.utc_now", return_value="2026-07-16T12:00:01Z"), patch(
+                    "crawler.jobs.scan_new_posts.utc_now", return_value="2026-07-16T12:00:01Z"
+                ):
+                    result = retry.run()
+                self.assertEqual(fetcher.requested_pages, [1])
+                if scenario == "success":
+                    self.assertIn(result["status"], {"completed", "partial"})
+                    self.assertEqual(len(client.query("SELECT id FROM posts")), 1)
+                    self.assertEqual(retry.source_state.blocked_until, "")
+                else:
+                    self.assertEqual(result["status"], "blocked" if scenario == "blocked" else "failed")
+                    self.assertNotIn("block_retry_succeeded_at", retry.source_state.state_metadata)
+                follow = CrawlCycle(
+                    target=target, config=settings, runtime=runtime(settings),
+                    client=client, mode=CYCLE_MODE_HOT,
+                    cycle_started_at=datetime(2026, 7, 16, 12, 15, tzinfo=timezone.utc),
+                    fetcher=MappingFetcher({1: page_html(row(1000, "2026-07-16 19:55:00", upvotes=4))}, last_page=1),
+                )
+                self.assertEqual(follow.run()["status"] == "cooldown", scenario != "success")
+                if scenario == "success":
+                    # A later block must not be suppressed by the old retry receipt.
+                    with patch("crawler.jobs.run_cycle.utc_now", return_value="2026-07-16T12:16:00Z"), patch(
+                        "crawler.jobs.scan_new_posts.utc_now", return_value="2026-07-16T12:16:00Z"
+                    ):
+                        follow._record_block("new HTTP 403", [])
+                    client.query("UPDATE source_state SET blocked_until = ''")
+                    next_cycle = CrawlCycle(
+                        target=target, config=settings, runtime=runtime(settings),
+                        client=client, mode=CYCLE_MODE_HOT,
+                        cycle_started_at=datetime(2026, 7, 16, 12, 30, tzinfo=timezone.utc),
+                        fetcher=MappingFetcher({}),
+                    )
+                    self.assertEqual(next_cycle.run()["status"], "cooldown")
+
     def test_exact_24_hour_boundary_is_eligible(self) -> None:
         settings = config()
         cycle = CrawlCycle(

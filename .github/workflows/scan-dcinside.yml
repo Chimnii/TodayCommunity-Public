@@ -3,6 +3,11 @@ name: Run DC Hot crawl
 on:
   workflow_dispatch:
     inputs:
+      retry_source_block:
+        description: "Operator-requested retry during source cooldown (stops on a new block)"
+        required: false
+        default: false
+        type: boolean
       hot_lookback_minutes:
         description: "Singularity lookback for this Hot run only (15-1440 minutes)"
         required: false
@@ -95,6 +100,7 @@ jobs:
           TC_REQUEST_INTERVAL_SECONDS: "10"
           TC_DEEP_RESERVED_SECONDS: "0"
           TC_BLOCK_COOLDOWN_HOURS: "6"
+          TC_RETRY_SOURCE_BLOCK: ${{ inputs.retry_source_block && '1' || '0' }}
           TC_TRANSIENT_FETCH_ATTEMPTS: "2"
         run: python -m crawler.jobs.run_all_sources --mode hot --persist
 

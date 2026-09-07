@@ -221,6 +221,7 @@ class CrawlCycle:
         fetcher: Callable[[str, float], str] = fetch_html,
         cycle_started_at: Optional[datetime] = None,
         mode: str = CYCLE_MODE_FULL,
+        retry_source_block: bool = False,
     ) -> None:
         if mode not in VALID_CYCLE_MODES:
             choices = ", ".join(VALID_CYCLE_MODES)
@@ -236,6 +237,7 @@ class CrawlCycle:
         self._d1_usage_start = d1_usage_snapshot(client) if client else None
         self.fetcher = fetcher
         self.mode = mode
+        self.retry_source_block = retry_source_block
         self.cycle_started_at = ensure_aware(
             cycle_started_at or datetime.now(timezone.utc)
         ).replace(microsecond=0)
@@ -279,7 +281,7 @@ class CrawlCycle:
 
     def run(self) -> Dict[str, object]:
         blocked_until = parse_optional_datetime(self.source_state.blocked_until)
-        if blocked_until and blocked_until > self.cycle_started_at:
+        if blocked_until and blocked_until > self.cycle_started_at and not self.retry_source_block:
             return self._result(
                 "cooldown",
                 self.summaries,
@@ -311,6 +313,11 @@ class CrawlCycle:
             self._record_failure(str(exc), self.summaries)
             return self._result("failed", self.summaries, str(exc))
 
+        if self.retry_source_block and any(item.scanned_posts > 0 for item in self.summaries):
+            # Only acknowledge the old block after validated collection. A new
+            # block or fetch/persistence error returns above and keeps protection.
+            self.source_state.blocked_until = ""
+            self.source_state.state_metadata["block_retry_succeeded_at"] = self.run_started_at
         if self.client:
             try:
                 save_source_state(self.client, self.source_state)
@@ -1531,6 +1538,12 @@ class CrawlCycle:
             str(rows[0].get("finished_at") or rows[0].get("started_at") or "")
         )
         if not blocked_at:
+            return
+
+        retry_succeeded_at = parse_optional_datetime(
+            str(self.source_state.state_metadata.get("block_retry_succeeded_at") or "")
+        )
+        if retry_succeeded_at and retry_succeeded_at > blocked_at:
             return
 
         recovered_until = blocked_at + timedelta(

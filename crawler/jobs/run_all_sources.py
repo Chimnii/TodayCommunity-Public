@@ -144,6 +144,10 @@ def run_dc_target(
         runtime=runtime,
         client=client,
         mode=mode,
+        retry_source_block=(
+            mode == CYCLE_MODE_HOT
+            and is_truthy(get_env("TC_RETRY_SOURCE_BLOCK", "0"))
+        ),
     ).run()
 
 
