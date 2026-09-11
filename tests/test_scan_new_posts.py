@@ -713,6 +713,10 @@ class BatchedPostUpsertTests(unittest.TestCase):
             ({"upvotes": 8}, ["any", "upvotes"]),
             ({"comments": 12}, ["any", "comments"]),
             ({"upvotes": 8, "comments": 12}, ["any", "comments", "upvotes"]),
+            ({"upvotes": 8, "title": "changed – title"}, ["any", "upvotes"]),
+            ({"comments": 12, "created_at_raw": "yesterday"}, ["any", "comments"]),
+            ({"upvotes": 8, "comments": 12, "title": "changed", "qualifies_by": "score"}, ["any", "comments", "upvotes"]),
+            ({"title": "content only", "post_url": "https://example.com/changed"}, ["any"]),
         ):
             with self.subTest(changes=changes):
                 client = SqliteClient()

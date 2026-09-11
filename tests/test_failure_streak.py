@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 from urllib import error, parse
 
@@ -466,6 +467,28 @@ class FakeActionsClient:
 
 
 class FailureStreakEvaluationTests(unittest.TestCase):
+    @patch("crawler.jobs.enforce_failure_streak.time.sleep")
+    def test_current_attempt_waits_for_completed_state(self, sleep):
+        client = FakeActionsClient(jobs_by_run={100: [successful_attempt()]}, previous_run_pages=[])
+        pending = {"name": ATTEMPT_JOB_NAME, "status": "in_progress", "conclusion": None}
+        with patch.object(client, "get_jobs", side_effect=[[pending], [pending], [successful_attempt()]]) as jobs:
+            decision = evaluate_failure_streak(client, current_run_id=100, current_run_number=100,
+                current_run_attempt=1, attempt_job_name=ATTEMPT_JOB_NAME, gate_job_name=GATE_JOB_NAME)
+        self.assertEqual(decision.current_kind, AttemptKind.SUCCESS)
+        self.assertEqual(jobs.call_count, 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2])
+
+    @patch("crawler.jobs.enforce_failure_streak.time.sleep")
+    def test_unfinished_current_attempt_remains_an_error_after_bounded_wait(self, sleep):
+        client = FakeActionsClient(jobs_by_run={100: [successful_attempt()]}, previous_run_pages=[])
+        pending = {"name": ATTEMPT_JOB_NAME, "status": "in_progress", "conclusion": None}
+        with patch.object(client, "get_jobs", return_value=[pending]) as jobs:
+            with self.assertRaisesRegex(GitHubApiError, "not complete"):
+                evaluate_failure_streak(client, current_run_id=100, current_run_number=100,
+                    current_run_attempt=1, attempt_job_name=ATTEMPT_JOB_NAME, gate_job_name=GATE_JOB_NAME)
+        self.assertEqual(jobs.call_count, 4)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2, 4])
+
     def test_threshold_applies_to_each_counted_failure(self) -> None:
         for failure_count in range(1, 5):
             with self.subTest(failure_count=failure_count):

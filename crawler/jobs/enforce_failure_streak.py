@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import argparse
 import json
 import os
@@ -457,8 +459,18 @@ def evaluate_failure_streak(
     if not isinstance(head_branch, str) or not head_branch:
         raise GitHubApiError("current run is missing a valid head_branch")
 
+    for refresh_attempt in range(4):
+        current_jobs = client.get_jobs(current_run_id)
+        current_job = _find_attempt_job(current_jobs, attempt_job_name)
+        if current_job is None or (
+            current_job.get("status") == "completed"
+            and _normalized_conclusion(current_job.get("conclusion")) is not None
+        ):
+            break
+        if refresh_attempt < 3:
+            time.sleep(2 ** refresh_attempt)
     current_kind = classify_attempt_jobs(
-        client.get_jobs(current_run_id),
+        current_jobs,
         attempt_job_name=attempt_job_name,
         gate_job_name=gate_job_name,
         success_marker=success_marker,

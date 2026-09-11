@@ -587,13 +587,20 @@ def _observation_stats_statements(target, posts, canonical_keys, checked_at):
 
 def _metric_update_statements(archive_key, posts, canonical_keys, checked_at):
     latest_posts = dict(zip(canonical_keys, posts))
-    values = ", ".join("(?, ?, ?)" for _ in latest_posts)
+    content_columns = ("post_url", "title", "created_at_raw", "created_at_basis",
+                       "created_at_precision", "qualifies_by")
+    incoming_columns = ("key", "upvotes", "comments", *content_columns)
+    values = ", ".join("(" + ", ".join("?" for _ in incoming_columns) + ")"
+                       for _ in latest_posts)
     incoming_params = [
         value
         for key, post in latest_posts.items()
-        for value in (key, post["upvotes"], post["comments"])
+        for value in (key, post["upvotes"], post["comments"],
+                      *(post[column] for column in content_columns))
     ]
     statements = []
+    # Content fields are not indexed. Co-write them on metric changes so the
+    # content-only fallback does not rewrite the same observed post again.
     # Both first; after it runs, the two single-column paths cannot rewrite
     # those rows. All predicates are evaluated inside the same atomic batch.
     for columns, predicate in (
@@ -603,11 +610,11 @@ def _metric_update_statements(archive_key, posts, canonical_keys, checked_at):
     ):
         assignments = ", ".join(
             f"{column} = incoming.{column}"
-            for column in columns
+            for column in (*columns, *content_columns)
         )
         statements.append((
             f"""
-            WITH incoming(key, upvotes, comments) AS (VALUES {values})
+            WITH incoming({", ".join(incoming_columns)}) AS (VALUES {values})
             UPDATE posts
             SET {assignments}, fetched_at = ?, last_seen_at = ?
             FROM incoming

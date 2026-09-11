@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from crawler.cli_output import configure_utf8_stdio
+from crawler.d1 import attach_d1_failure_usage, d1_failure_report
+from crawler.schema_reads import retry_schema_read
+
 import argparse
 import json
 import re
@@ -639,7 +643,7 @@ def inspect_schema(client: D1Client, *, deep_data_audit: bool = False) -> dict:
 
 
 def validate_schema(client: D1Client, *, deep_data_audit: bool = False) -> dict:
-    report = inspect_schema(client, deep_data_audit=deep_data_audit)
+    report = retry_schema_read(lambda: inspect_schema(client, deep_data_audit=deep_data_audit))
     if not report["valid"]:
         raise SchemaValidationError(report)
     return report
@@ -784,6 +788,7 @@ def _format_key(columns: Iterable[str]) -> str:
 
 
 def main() -> None:
+    configure_utf8_stdio()
     parser = argparse.ArgumentParser(description="Validate the crawler D1 schema.")
     parser.add_argument(
         "--deep-data-audit",
@@ -805,6 +810,10 @@ def main() -> None:
             exc.report["d1_usage"] = usage
         print(json.dumps(exc.report, ensure_ascii=False, indent=2))
         raise SystemExit(f"D1 schema preflight failed: {exc}") from exc
+    except Exception as exc:
+        attach_d1_failure_usage(exc, client)
+        print(json.dumps(d1_failure_report(exc), ensure_ascii=False, indent=2))
+        raise SystemExit(1) from exc
     usage = d1_usage_summary(client)
     if usage is not None:
         report["d1_usage"] = usage
