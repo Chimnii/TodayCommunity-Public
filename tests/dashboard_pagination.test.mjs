@@ -65,7 +65,7 @@ function archiveRequestHarness({ storage, fetchImpl, now = () => 1000 } = {}) {
         reportValidity() { events.push({ type: "report-validity" }); },
       };
     } },
-    window: {},
+    window: { clearTimeout() {} },
     localStorage: storage,
     TextEncoder,
     URLSearchParams,
@@ -84,10 +84,52 @@ function archiveRequestHarness({ storage, fetchImpl, now = () => 1000 } = {}) {
     setFiltersExpanded = () => {};
     withArchiveCatalog = value => value;
     syncStateToUrl = () => {};
-    globalThis.archiveReview = {state, loadArchive, markArchiveChanged, archiveCacheBypassActive};
+    writeStateToControls = () => {};
+    renderArchiveTabs = () => {};
+    globalThis.archiveReview = {state, loadArchive, selectArchive, markArchiveChanged, archiveCacheBypassActive};
   `, runtime);
   return { ...runtime.archiveReview, calls, urls, events, successfulResponse };
 }
+
+test("reselecting the current archive reloads page one and resets filters and cursors", async () => {
+  const app = archiveRequestHarness();
+  Object.assign(app.state, {
+    page: 3, cursor: "old-cursor", search: "query", subject: "subject",
+    topicId: 101, minUpvotes: 10, minComments: 20, sortBy: "comments", pageSize: 50,
+  });
+  await app.selectArchive("dcinside-singularity");
+  assert.equal(app.calls.length, 1);
+  const query = new URL(app.urls[0], "https://example.test").searchParams;
+  assert.equal(query.get("target"), "dcinside-singularity");
+  assert.equal(query.get("page"), "1");
+  assert.equal(query.get("page_size"), "30");
+  assert.equal(query.get("sort"), "created_at");
+  assert.equal(query.get("min_upvotes"), "0");
+  assert.equal(query.get("min_comments"), "0");
+  for (const key of ["q", "subject", "topic", "cursor"]) assert.equal(query.has(key), false);
+  assert.equal(app.state.page, 1);
+  assert.equal(app.state.cursor, "");
+  assert.equal(app.state.focusArchiveTabAfterLoad, true);
+
+  await app.selectArchive("dcinside-singularity");
+  assert.equal(app.calls.length, 2, "page one can also be refreshed");
+});
+
+test("reselecting a tab replaces its pending request and ignores the older response", async () => {
+  let finishFetch;
+  let count = 0;
+  const app = archiveRequestHarness({ fetchImpl: () => ++count === 1
+    ? new Promise((resolve) => { finishFetch = resolve; })
+    : Promise.resolve(app.successfulResponse) });
+  const pending = app.loadArchive();
+  await app.selectArchive("dcinside-singularity");
+  assert.equal(app.calls.length, 2);
+  assert.equal(app.calls[0].signal.aborted, true);
+  const renders = app.events.filter((event) => event.type === "render").length;
+  finishFetch(app.successfulResponse);
+  await pending;
+  assert.equal(app.events.filter((event) => event.type === "render").length, renders);
+});
 
 test("an invalid initial search renders an input error and recovers after correction", async () => {
   const app = archiveRequestHarness();

@@ -308,6 +308,22 @@ a {
   margin-bottom: var(--space-3);
 }
 
+.archive-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.archive-site-link {
+  flex-shrink: 0;
+  text-decoration: none;
+}
+
+.archive-site-link[hidden] {
+  display: none;
+}
+
 .game-news-tools {
   display: flex;
   flex-wrap: wrap;

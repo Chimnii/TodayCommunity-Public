@@ -28,6 +28,12 @@ const ARCHIVE_ROW_LABELS = Object.freeze({
   "fmkorea-munich": "Bayern",
   "game-news": "게임뉴스",
 });
+const ARCHIVE_SITE_LINKS = Object.freeze({
+  "dcinside-singularity": "https://gall.dcinside.com/mgallery/board/lists/?id=thesingularity",
+  "dcinside-agent-stack": "https://gall.dcinside.com/mgallery/board/lists/?id=ai_utilize",
+  "dcinside-zeus-pride": "https://gall.dcinside.com/mgallery/board/lists/?id=zeusthegodofpride",
+  "fmkorea-munich": "https://www.fmkorea.com/index.php?mid=football_world&category=853073246",
+});
 const FALLBACK_ARCHIVES = Object.freeze([
   {
     archive_key: "dcinside-singularity",
@@ -160,6 +166,7 @@ const elements = {
   runsDrawer: document.querySelector("#runs-drawer"),
   runs: document.querySelector("#runs"),
   archiveTitle: document.querySelector("#archive-title"),
+  archiveSiteLink: document.querySelector("#archive-site-link"),
   board: document.querySelector("#archive-board"),
   boardHeaderRow: document.querySelector("#board-header-row"),
   numberColumnLabel: document.querySelector("#number-column-label"),
@@ -907,7 +914,7 @@ function handleArchiveTabKeydown(event) {
 
 function selectArchive(target) {
   const normalizedTarget = normalizeTarget(target);
-  if (!normalizedTarget || normalizedTarget === state.target) {
+  if (!normalizedTarget) {
     return;
   }
 
@@ -922,7 +929,7 @@ function selectArchive(target) {
   writeStateToControls();
   syncStateToUrl({ replace: false });
   renderArchiveTabs();
-  loadArchive();
+  return loadArchive();
 }
 
 function render() {
@@ -1151,6 +1158,15 @@ function renderSummary(view) {
   const sources = getCurrentSources();
   const source = sources[0] || state.archive?.source;
   const summary = state.archive?.summary || {};
+  const siteUrl = ARCHIVE_SITE_LINKS[state.target];
+  elements.archiveSiteLink.hidden = !siteUrl;
+  if (siteUrl) {
+    elements.archiveSiteLink.href = siteUrl;
+    elements.archiveSiteLink.setAttribute("aria-label", `${ARCHIVE_TAB_LABELS[state.target]} 바로가기 (새 탭)`);
+  } else {
+    elements.archiveSiteLink.removeAttribute("href");
+    elements.archiveSiteLink.removeAttribute("aria-label");
+  }
 
   if (archive) {
     const descriptionLead =
