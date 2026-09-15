@@ -187,7 +187,7 @@ class RunAllSourcesTests(unittest.TestCase):
 
         self.assertEqual(singularity.hot_lookback_minutes, 600)
         self.assertEqual(singularity.hot_max_seconds, 300)
-        self.assertEqual(agent.hot_lookback_minutes, 240)
+        self.assertEqual(agent.hot_lookback_minutes, 180)
         self.assertEqual(agent.hot_max_seconds, 240)
 
     def test_backfill_config_reserves_positive_history_window(self) -> None:

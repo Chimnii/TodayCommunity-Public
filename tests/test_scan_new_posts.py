@@ -265,7 +265,7 @@ class FetchHtmlTests(unittest.TestCase):
 
 
 class DirectScanLayoutTests(unittest.TestCase):
-    def test_zeus_scan_threads_layout_and_upvotes_only_policy(self) -> None:
+    def test_zeus_scan_threads_layout_and_weighted_policy(self) -> None:
         constructor_args = []
 
         class Diagnostics:
@@ -279,7 +279,7 @@ class DirectScanLayoutTests(unittest.TestCase):
                     DcinsidePost(
                         external_post_id="2",
                         subject="",
-                        title="comments cannot qualify",
+                        title="comments contribute to the weighted score",
                         post_url="https://example.com/2",
                         created_at="2026-07-16T00:00:00+09:00",
                         created_at_raw="2026-07-16 00:00:00",
@@ -287,12 +287,12 @@ class DirectScanLayoutTests(unittest.TestCase):
                         created_at_precision="second",
                         upvotes=2,
                         comments=100_000,
-                        qualifies_by="none",
+                        qualifies_by="comments",
                     ),
                     DcinsidePost(
                         external_post_id="3",
                         subject="",
-                        title="three upvotes qualify",
+                        title="three upvotes alone do not qualify",
                         post_url="https://example.com/3",
                         created_at="2026-07-16T00:01:00+09:00",
                         created_at_raw="2026-07-16 00:01:00",
@@ -300,7 +300,7 @@ class DirectScanLayoutTests(unittest.TestCase):
                         created_at_precision="second",
                         upvotes=3,
                         comments=0,
-                        qualifies_by="upvotes",
+                        qualifies_by="none",
                     ),
                 ]
 
@@ -318,11 +318,15 @@ class DirectScanLayoutTests(unittest.TestCase):
             )
 
         self.assertEqual(len(constructor_args), 1)
-        self.assertEqual(constructor_args[0]["policy"], "upvotes-only")
+        self.assertEqual(constructor_args[0]["policy"], "weighted-engagement")
+        self.assertEqual(
+            constructor_args[0]["subject_rules"],
+            get_target("dcinside-zeus-pride").subject_rules,
+        )
         self.assertEqual(constructor_args[0]["subject_cell_mode"], "optional")
         self.assertEqual(
             [post["external_post_id"] for post in result["posts"]],
-            ["3"],
+            ["2"],
         )
 
 
@@ -396,8 +400,8 @@ class SourceBootstrapTests(unittest.TestCase):
                 "dcinside",
                 "AI 활용 마이너 갤러리",
                 "https://gall.dcinside.com/mgallery/board/lists/?id=ai_utilize",
-                4,
-                40,
+                5,
+                50,
                 "2026-07-25T00:00:00Z",
                 "2026-07-25T00:00:00Z",
             ],
@@ -626,7 +630,7 @@ class BatchedPostUpsertTests(unittest.TestCase):
             {
                 **sample_post(2),
                 "upvotes": 3,
-                "comments": 5,
+                "comments": 20,
                 "qualifies_by": "upvotes+comments",
             },
         ]
@@ -647,20 +651,20 @@ class BatchedPostUpsertTests(unittest.TestCase):
         self.assertIn("2", insert_calls[0][1])
         self.assertNotIn("1", insert_calls[0][1])
 
-    def test_finalizer_uses_zeus_upvotes_only_policy_for_new_posts(self) -> None:
+    def test_finalizer_uses_zeus_weighted_policy_for_new_posts(self) -> None:
         client = RecordingClient()
         posts = [
             {
                 **sample_post(1),
                 "upvotes": 2,
-                "comments": 100_000,
+                "comments": 29,
                 "qualifies_by": "none",
             },
             {
                 **sample_post(2),
                 "upvotes": 3,
-                "comments": 0,
-                "qualifies_by": "upvotes",
+                "comments": 20,
+                "qualifies_by": "upvotes+comments",
             },
         ]
 

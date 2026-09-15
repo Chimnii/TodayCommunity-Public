@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
+from crawler.collection_rules import SubjectCollectionRule
+
 
 @dataclass(frozen=True)
 class ArchiveDefinition:
@@ -40,6 +42,7 @@ class TargetBoard:
     finalization_age_hours: float = 12.0
     block_cooldown_hours: float = 6.0
     subject_cell_mode: str = "required"
+    subject_rules: Tuple[SubjectCollectionRule, ...] = ()
 
     @property
     def archive(self) -> ArchiveDefinition:
@@ -90,12 +93,16 @@ TARGETS = {
             "https://gall.dcinside.com/mgallery/board/lists/"
             "?id=thesingularity&page={page}"
         ),
-        min_upvotes=4,
-        min_comments=20,
+        min_upvotes=5,
+        min_comments=50,
         archive_key="dcinside-singularity",
         collector_kind="dcinside-board",
         origin_key="dcinside",
         canonical_namespace="dcinside:thesingularity",
+        subject_rules=(
+            SubjectCollectionRule("📪정보"),
+            SubjectCollectionRule("☕작업잡담"),
+        ),
         hot_lookback_minutes=180.0,
         hot_max_seconds=180.0,
         backfill_max_seconds=600.0,
@@ -109,14 +116,21 @@ TARGETS = {
             "https://gall.dcinside.com/mgallery/board/lists/"
             "?id=ai_utilize&page={page}"
         ),
-        min_upvotes=4,
-        min_comments=40,
+        min_upvotes=5,
+        min_comments=50,
         # Keep the stable public archive key so legacy and migrated posts
         # remain one user-facing collection without rewriting stored rows.
         archive_key="dcinside-agent-stack",
         collector_kind="dcinside-board",
         origin_key="dcinside",
         canonical_namespace="dcinside:ai_utilize",
+        subject_rules=(
+            SubjectCollectionRule("📢정보"),
+            SubjectCollectionRule("📚활용"),
+            SubjectCollectionRule("📰뉴스"),
+            SubjectCollectionRule("⭐후기"),
+        ),
+        hot_lookback_minutes=180.0,
         hot_max_seconds=240.0,
         backfill_max_seconds=480.0,
     ),
@@ -132,13 +146,16 @@ TARGETS = {
             "https://gall.dcinside.com/mgallery/board/lists/"
             "?id=zeusthegodofpride&page={page}"
         ),
-        min_upvotes=3,
-        min_comments=0,
+        min_upvotes=5,
+        min_comments=50,
         archive_key="dcinside-zeus-pride",
         collector_kind="dcinside-board",
         origin_key="dcinside",
-        policy="upvotes-only",
         canonical_namespace="dcinside:zeusthegodofpride",
+        subject_rules=(
+            SubjectCollectionRule("정보"),
+            SubjectCollectionRule("공략"),
+        ),
         hot_lookback_minutes=180.0,
         hot_max_seconds=180.0,
         backfill_max_seconds=600.0,

@@ -231,7 +231,7 @@ class ExitStatusTests(unittest.TestCase):
                 self.assertTrue(status_requires_failure_exit(status))
 
 
-def post(post_id: int, created_at: str, upvotes: int = 4) -> DcinsidePost:
+def post(post_id: int, created_at: str, upvotes: int = 5) -> DcinsidePost:
     return DcinsidePost(
         external_post_id=str(post_id),
         subject="일반",
@@ -243,7 +243,7 @@ def post(post_id: int, created_at: str, upvotes: int = 4) -> DcinsidePost:
         created_at_precision="second",
         upvotes=upvotes,
         comments=0,
-        qualifies_by="upvotes" if upvotes >= 4 else "none",
+        qualifies_by="upvotes" if upvotes >= 5 else "none",
     )
 
 
@@ -733,9 +733,9 @@ class CrawlCycleTests(unittest.TestCase):
         """
         pages = {
             1: page_html(
-                row(110, "2026-07-16 20:59:00", upvotes=4),
+                row(110, "2026-07-16 20:59:00", upvotes=5),
                 unknown_row,
-                row(109, "2026-07-16 20:58:00", upvotes=4),
+                row(109, "2026-07-16 20:58:00", upvotes=5),
             )
         }
         settings = config()
@@ -758,9 +758,9 @@ class CrawlCycleTests(unittest.TestCase):
     def test_malformed_numeric_row_keeps_valid_posts_but_blocks_coverage(self) -> None:
         pages = {
             1: page_html(
-                row(110, "2026-07-16 20:59:00", upvotes=4),
-                row(109, "", upvotes=4),
-                row(108, "2026-07-16 20:58:00", upvotes=4),
+                row(110, "2026-07-16 20:59:00", upvotes=5),
+                row(109, "", upvotes=5),
+                row(108, "2026-07-16 20:58:00", upvotes=5),
             )
         }
         settings = config()
@@ -792,7 +792,7 @@ class CrawlCycleTests(unittest.TestCase):
             1: page_html(
                 row(110, "2026-07-16 20:59:00"),
                 unknown_row,
-                row(109, "2026-07-16 19:00:00", upvotes=4),
+                row(109, "2026-07-16 19:00:00", upvotes=5),
             ),
             2: page_html(
                 row(108, "2026-07-16 19:59:00"),
@@ -820,7 +820,7 @@ class CrawlCycleTests(unittest.TestCase):
         pages = {
             1: page_html(
                 row(110, "2026-07-16 20:59:00"),
-                row(90, "2026-07-16 19:00:00", upvotes=4),
+                row(90, "2026-07-16 19:00:00", upvotes=5),
                 row(109, "2026-07-16 20:58:00"),
             )
         }
@@ -845,7 +845,7 @@ class CrawlCycleTests(unittest.TestCase):
         pages = {
             1: page_html(
                 row(110, "2026-07-16 20:59:00"),
-                row(90, "2026-07-16 19:00:00", upvotes=4),
+                row(90, "2026-07-16 19:00:00", upvotes=5),
                 row(109, "2026-07-16 20:58:00"),
             ),
             2: page_html(
@@ -873,11 +873,11 @@ class CrawlCycleTests(unittest.TestCase):
     def test_hot_stops_when_a_young_board_clamps_after_its_last_page(self) -> None:
         pages = {
             1: page_html(
-                row(110, "2026-07-16 20:59:00", upvotes=4),
+                row(110, "2026-07-16 20:59:00", upvotes=5),
                 row(109, "2026-07-16 20:58:00"),
             ),
             2: page_html(
-                row(108, "2026-07-16 20:30:00", upvotes=4),
+                row(108, "2026-07-16 20:30:00", upvotes=5),
                 row(107, "2026-07-16 20:29:00"),
             ),
         }
@@ -951,7 +951,7 @@ class CrawlCycleTests(unittest.TestCase):
             2: page_html(row(100, "2026-07-16 20:50:00")),
             4: page_html(row(80, "2026-07-16 20:40:00")),
             8: page_html(row(40, "2026-07-16 20:30:00")),
-            11: page_html(row(1, "2026-07-15 20:00:00", upvotes=4)),
+            11: page_html(row(1, "2026-07-15 20:00:00", upvotes=5)),
         }
         fetcher = MappingFetcher(
             pages,
@@ -987,7 +987,7 @@ class CrawlCycleTests(unittest.TestCase):
             ),
             2: page_html(
                 row(89, "2026-07-15 21:00:01"),
-                row(88, "2026-07-15 20:59:59", upvotes=4),
+                row(88, "2026-07-15 20:59:59", upvotes=5),
             ),
         }
         fetcher = MappingFetcher(pages, last_page=2)
@@ -1020,7 +1020,7 @@ class CrawlCycleTests(unittest.TestCase):
         pages = {
             1: page_html(
                 row(110, "2026-07-16 20:59:00"),
-                row(90, "2026-07-15 20:59:00", upvotes=4),
+                row(90, "2026-07-15 20:59:00", upvotes=5),
                 row(109, "2026-07-16 20:58:00"),
             )
         }
@@ -1079,11 +1079,11 @@ class CrawlCycleTests(unittest.TestCase):
         pages = {
             2: page_html(
                 row(110, "2026-07-15 20:50:00"),
-                row(90, "2026-07-15 20:40:00", upvotes=4),
+                row(90, "2026-07-15 20:40:00", upvotes=5),
                 row(109, "2026-07-15 20:49:00"),
             ),
             3: page_html(
-                row(89, "2026-07-15 20:30:00", upvotes=4),
+                row(89, "2026-07-15 20:30:00", upvotes=5),
                 row(88, "2026-07-15 20:20:00"),
             ),
         }
@@ -1122,11 +1122,11 @@ class CrawlCycleTests(unittest.TestCase):
         pages = {
             2: page_html(
                 row(110, "2026-07-15 20:50:00"),
-                row(90, "2026-07-15 20:40:00", upvotes=4),
+                row(90, "2026-07-15 20:40:00", upvotes=5),
                 row(109, "2026-07-15 20:49:00"),
             ),
             3: page_html(
-                row(89, "2026-07-15 20:30:00", upvotes=4),
+                row(89, "2026-07-15 20:30:00", upvotes=5),
                 row(88, "2026-07-16 20:20:00"),
             ),
         }
@@ -1163,11 +1163,11 @@ class CrawlCycleTests(unittest.TestCase):
             1: page_html(row(160, "2026-07-16 20:59:00")),
             2: page_html(
                 row(110, "2026-07-15 20:50:00"),
-                row(90, "2026-07-15 20:40:00", upvotes=4),
+                row(90, "2026-07-15 20:40:00", upvotes=5),
                 row(109, "2026-07-15 20:49:00"),
             ),
             3: page_html(
-                row(89, "2026-07-15 20:30:00", upvotes=4),
+                row(89, "2026-07-15 20:30:00", upvotes=5),
                 row(88, "2026-07-15 20:20:00"),
             ),
         }
@@ -1204,11 +1204,11 @@ class CrawlCycleTests(unittest.TestCase):
             1: page_html(row(160, "2026-07-16 20:59:00")),
             2: page_html(
                 row(110, "2026-07-15 20:50:00"),
-                row(90, "2026-07-15 20:40:00", upvotes=4),
+                row(90, "2026-07-15 20:40:00", upvotes=5),
                 row(109, "2026-07-15 20:49:00"),
             ),
             3: page_html(
-                row(89, "2026-07-15 20:30:00", upvotes=4),
+                row(89, "2026-07-15 20:30:00", upvotes=5),
                 row(88, "2026-07-15 20:20:00"),
             ),
         }
@@ -1244,11 +1244,11 @@ class CrawlCycleTests(unittest.TestCase):
         pages = {
             2: page_html(
                 row(110, "2026-07-15 20:50:00"),
-                row(90, "2026-07-15 20:40:00", upvotes=4),
+                row(90, "2026-07-15 20:40:00", upvotes=5),
                 row(109, "2026-07-15 20:49:00"),
             ),
             3: page_html(
-                row(89, "2026-07-15 20:30:00", upvotes=4),
+                row(89, "2026-07-15 20:30:00", upvotes=5),
                 row(88, "2026-07-15 20:20:00"),
             ),
         }
@@ -1291,7 +1291,7 @@ class CrawlCycleTests(unittest.TestCase):
                 row(109, "2026-07-16 20:58:00"),
             ),
             2: page_html(
-                row(89, "2026-07-15 20:50:00", upvotes=4),
+                row(89, "2026-07-15 20:50:00", upvotes=5),
                 row(88, "2026-07-15 20:40:00"),
             ),
         }
@@ -1717,11 +1717,11 @@ class CrawlCycleTests(unittest.TestCase):
                 row(999, "2026-07-16 20:30:00"),
             ),
             2: page_html(
-                row(998, "2026-07-15 19:50:00", upvotes=4),
+                row(998, "2026-07-15 19:50:00", upvotes=5),
                 row(997, "2026-07-15 19:40:00"),
             ),
             3: page_html(
-                row(996, "2026-07-15 19:30:00", upvotes=4),
+                row(996, "2026-07-15 19:30:00", upvotes=5),
                 row(995, "2026-07-15 19:20:00"),
             ),
         }
@@ -1802,7 +1802,7 @@ class CrawlCycleTests(unittest.TestCase):
                 ):
                     initial._record_block("HTTP 403", [])
                 fetcher = MappingFetcher(
-                    {1: page_html(row(1000, "2026-07-16 19:55:00", upvotes=4))},
+                    {1: page_html(row(1000, "2026-07-16 19:55:00", upvotes=5))},
                     blocked_page=1 if scenario == "blocked" else None,
                     last_page=1,
                 )
@@ -1827,7 +1827,7 @@ class CrawlCycleTests(unittest.TestCase):
                     target=target, config=settings, runtime=runtime(settings),
                     client=client, mode=CYCLE_MODE_HOT,
                     cycle_started_at=datetime(2026, 7, 16, 12, 15, tzinfo=timezone.utc),
-                    fetcher=MappingFetcher({1: page_html(row(1000, "2026-07-16 19:55:00", upvotes=4))}, last_page=1),
+                    fetcher=MappingFetcher({1: page_html(row(1000, "2026-07-16 19:55:00", upvotes=5))}, last_page=1),
                 )
                 self.assertEqual(follow.run()["status"] == "cooldown", scenario != "success")
                 if scenario == "success":
@@ -1876,7 +1876,7 @@ class CrawlCycleTests(unittest.TestCase):
         )
         cycle._commit_finalized_page(
             [
-                post(100, "2026-07-15T10:00:00+00:00", upvotes=4),
+                post(100, "2026-07-15T10:00:00+00:00", upvotes=5),
                 post(99, "2026-07-15T09:59:00+00:00", upvotes=0),
             ]
         )
@@ -1902,7 +1902,7 @@ class CrawlCycleTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "injected post write failure"):
             cycle._commit_finalized_page(
-                [post(100, "2026-07-15T10:00:00+00:00", upvotes=4)]
+                [post(100, "2026-07-15T10:00:00+00:00", upvotes=5)]
             )
 
         coverage = client.query("SELECT * FROM coverage_intervals")
@@ -2011,7 +2011,7 @@ class CrawlCycleTests(unittest.TestCase):
             fetcher=MappingFetcher({}),
             cycle_started_at=FIXED_NOW,
         )
-        initial = post(100, "2026-07-15T10:00:00+00:00", upvotes=4)
+        initial = post(100, "2026-07-15T10:00:00+00:00", upvotes=5)
         upsert_posts(client, target, [initial.__dict__], FIXED_NOW.isoformat())
         final = post(100, "2026-07-15T10:00:00+00:00", upvotes=0)
 
@@ -2794,7 +2794,7 @@ class CrawlCycleTests(unittest.TestCase):
             runtime=cycle_runtime,
             client=client,
             fetcher=MappingFetcher(
-                {1: page_html(row(1000, "2026-07-16 20:00:00", upvotes=4))}
+                {1: page_html(row(1000, "2026-07-16 20:00:00", upvotes=5))}
             ),
             cycle_started_at=FIXED_NOW,
         )
@@ -2844,7 +2844,7 @@ class CrawlCycleTests(unittest.TestCase):
             runtime=cycle_runtime,
             client=client,
             fetcher=MappingFetcher(
-                {1: page_html(row(1000, "2026-07-16 20:00:00", upvotes=4))}
+                {1: page_html(row(1000, "2026-07-16 20:00:00", upvotes=5))}
             ),
             cycle_started_at=FIXED_NOW,
             mode=CYCLE_MODE_HOT,
@@ -2882,7 +2882,7 @@ class CrawlCycleTests(unittest.TestCase):
         )
         candidate_count = 29
         qualifying_rows = [
-            row(1000 - index, "2026-07-16 20:00:00", upvotes=4)
+            row(1000 - index, "2026-07-16 20:00:00", upvotes=5)
             for index in range(candidate_count)
         ]
         cycle = CrawlCycle(
@@ -2918,7 +2918,7 @@ class CrawlCycleTests(unittest.TestCase):
             row(
                 3000 - index,
                 "2026-07-16 20:30:00",
-                upvotes=4,
+                upvotes=5,
             )
             for index in range(candidate_count)
         ]
@@ -2965,7 +2965,7 @@ class CrawlCycleTests(unittest.TestCase):
             row(
                 4000 - index,
                 f"2026-07-16 20:{minute:02}:00",
-                upvotes=4,
+                upvotes=5,
             )
             for index, minute in enumerate(minutes)
         ]
@@ -3016,7 +3016,7 @@ class CrawlCycleTests(unittest.TestCase):
             row(
                 5000 - index,
                 f"2026-07-16 20:{minute:02}:00",
-                upvotes=4,
+                upvotes=5,
             )
             for index, minute in enumerate(minutes)
         ]
@@ -3066,7 +3066,7 @@ class CrawlCycleTests(unittest.TestCase):
             runtime=runtime(settings),
             client=client,
             fetcher=MappingFetcher(
-                {1: page_html(row(1000, "2026-07-16 20:00:00", upvotes=4))}
+                {1: page_html(row(1000, "2026-07-16 20:00:00", upvotes=5))}
             ),
             cycle_started_at=FIXED_NOW,
             mode=CYCLE_MODE_HOT,
@@ -3109,7 +3109,7 @@ class CrawlCycleTests(unittest.TestCase):
             runtime=cycle_runtime,
             client=client,
             fetcher=MappingFetcher(
-                {1: page_html(row(1000, "2026-07-15 10:00:00", upvotes=4))},
+                {1: page_html(row(1000, "2026-07-15 10:00:00", upvotes=5))},
                 last_page=1,
             ),
             cycle_started_at=FIXED_NOW,
@@ -3172,7 +3172,7 @@ class CrawlCycleTests(unittest.TestCase):
                 {
                     1: page_html(row(1100, "2026-07-16 20:00:00")),
                     2: page_html(
-                        row(1000, "2026-07-15 10:00:00", upvotes=4)
+                        row(1000, "2026-07-15 10:00:00", upvotes=5)
                     ),
                 },
                 last_page=2,

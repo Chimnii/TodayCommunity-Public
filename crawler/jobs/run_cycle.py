@@ -56,7 +56,7 @@ from crawler.timestamps import canonical_utc
 
 
 DEFAULT_FINALIZATION_AGE_HOURS = 12.0
-DEFAULT_HOT_LOOKBACK_MINUTES = 240.0
+DEFAULT_HOT_LOOKBACK_MINUTES = 180.0
 DEFAULT_HOT_MAX_SECONDS = 7 * 60.0
 DEFAULT_CYCLE_MAX_SECONDS = 20 * 60.0
 DEFAULT_MIN_REQUEST_INTERVAL_SECONDS = 10.0
@@ -360,6 +360,7 @@ class CrawlCycle:
                     self.target.min_upvotes,
                     self.target.min_comments,
                     policy=self.target.policy,
+                    subject_rules=self.target.subject_rules,
                 ):
                     deduped[post.external_post_id] = post
 
@@ -1237,6 +1238,7 @@ class CrawlCycle:
             min_comments=self.target.min_comments,
             policy=self.target.policy,
             subject_cell_mode=self.target.subject_cell_mode,
+            subject_rules=self.target.subject_rules,
             requested_page=page,
             expected_board_id=self.target_board_id,
         )
@@ -1715,6 +1717,7 @@ def count_qualifying(posts: Sequence[DcinsidePost], target: TargetBoard) -> int:
             target.min_upvotes,
             target.min_comments,
             policy=target.policy,
+            subject_rules=target.subject_rules,
         )
     )
 

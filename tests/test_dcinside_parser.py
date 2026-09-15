@@ -458,15 +458,17 @@ class DcinsideListParserTests(unittest.TestCase):
 
     def test_combined_collection_threshold_boundaries(self) -> None:
         cases = (
-            (4, 0, True, "upvotes"),
-            (3, 4, False, "none"),
-            (3, 5, True, "upvotes+comments"),
-            (2, 9, False, "none"),
-            (2, 10, True, "upvotes+comments"),
-            (1, 14, False, "none"),
-            (1, 15, True, "upvotes+comments"),
-            (0, 19, False, "none"),
-            (0, 20, True, "comments"),
+            (5, 0, True, "upvotes"),
+            (4, 9, False, "none"),
+            (4, 10, True, "upvotes+comments"),
+            (3, 19, False, "none"),
+            (3, 20, True, "upvotes+comments"),
+            (2, 29, False, "none"),
+            (2, 30, True, "upvotes+comments"),
+            (1, 39, False, "none"),
+            (1, 40, True, "upvotes+comments"),
+            (0, 49, False, "none"),
+            (0, 50, True, "comments"),
         )
 
         for upvotes, comments, expected, reason in cases:

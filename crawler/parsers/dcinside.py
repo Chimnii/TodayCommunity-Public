@@ -4,8 +4,10 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Sequence
 from urllib.parse import parse_qs, urljoin, urlparse
+
+from crawler.collection_rules import SubjectCollectionRule, matches_subject_rule
 
 from crawler.timestamps import (
     DATE_PRECISION,
@@ -32,8 +34,8 @@ FULL_DATETIME_PATTERN = re.compile(
 TIME_PATTERN = re.compile(r"^(\d{1,2}):(\d{1,2})$")
 SHORT_DATE_PATTERN = re.compile(r"^(\d{2})[./](\d{1,2})[./](\d{1,2})$")
 FULL_DATE_PATTERN = re.compile(r"^(\d{4})[./-](\d{1,2})[./-](\d{1,2})$")
-DEFAULT_MIN_UPVOTES = 4
-DEFAULT_MIN_COMMENTS = 20
+DEFAULT_MIN_UPVOTES = 5
+DEFAULT_MIN_COMMENTS = 50
 WEIGHTED_ENGAGEMENT_POLICY = "weighted-engagement"
 UPVOTES_ONLY_POLICY = "upvotes-only"
 SUPPORTED_COLLECTION_POLICIES = frozenset(
@@ -216,6 +218,7 @@ class DcinsideListParser(HTMLParser):
         expected_board_id: Optional[str] = None,
         policy: str = WEIGHTED_ENGAGEMENT_POLICY,
         subject_cell_mode: str = SUBJECT_CELL_REQUIRED,
+        subject_rules: Sequence[SubjectCollectionRule] = (),
     ) -> None:
         super().__init__(convert_charrefs=True)
         self.base_url = base_url
@@ -227,6 +230,7 @@ class DcinsideListParser(HTMLParser):
         self.policy = policy
         validate_subject_cell_mode(subject_cell_mode)
         self.subject_cell_mode = subject_cell_mode
+        self.subject_rules = tuple(subject_rules)
         self.posts: List[DcinsidePost] = []
         self.diagnostics = DcinsideParseDiagnostics()
         normalized_requested_page, requested_page_error = normalize_optional_page(
@@ -1073,6 +1077,8 @@ class DcinsideListParser(HTMLParser):
                     min_upvotes=self.min_upvotes,
                     min_comments=self.min_comments,
                     policy=self.policy,
+                    subject=subject,
+                    subject_rules=self.subject_rules,
                 ),
             ),
             None,
@@ -1085,6 +1091,9 @@ def build_qualifies_by(
     min_upvotes: int = DEFAULT_MIN_UPVOTES,
     min_comments: int = DEFAULT_MIN_COMMENTS,
     policy: str = WEIGHTED_ENGAGEMENT_POLICY,
+    *,
+    subject: str = "",
+    subject_rules: Sequence[SubjectCollectionRule] = (),
 ) -> str:
     if not meets_collection_threshold(
         upvotes,
@@ -1092,8 +1101,13 @@ def build_qualifies_by(
         min_upvotes=min_upvotes,
         min_comments=min_comments,
         policy=policy,
+        subject=subject,
+        subject_rules=subject_rules,
     ):
         return "none"
+
+    if matches_subject_rule(subject, upvotes, comments, subject_rules):
+        return "subject"
 
     if policy == UPVOTES_ONLY_POLICY:
         return "upvotes"
@@ -1112,26 +1126,32 @@ def meets_collection_threshold(
     min_upvotes: int = DEFAULT_MIN_UPVOTES,
     min_comments: int = DEFAULT_MIN_COMMENTS,
     policy: str = WEIGHTED_ENGAGEMENT_POLICY,
+    *,
+    subject: str = "",
+    subject_rules: Sequence[SubjectCollectionRule] = (),
 ) -> bool:
     """Return whether engagement reaches the target's collection policy.
 
     Weighted engagement treats ``min_upvotes`` and ``min_comments`` as solo
-    thresholds and uses exact cross multiplication for mixed scores. The
-    upvotes-only policy ignores comments completely.
+    thresholds and uses exact cross multiplication for mixed scores.
+    Subject rules are an independent OR branch with their own count floors.
+    The upvotes-only policy ignores comments in the general score branch.
     """
 
     validate_collection_policy(policy)
     if policy == UPVOTES_ONLY_POLICY:
         if min_upvotes <= 0:
             raise ValueError("The upvotes-only threshold must be positive.")
-        return upvotes >= min_upvotes
+        return upvotes >= min_upvotes or matches_subject_rule(
+            subject, upvotes, comments, subject_rules
+        )
 
     if min_upvotes <= 0 or min_comments <= 0:
         raise ValueError("Collection thresholds must be positive integers.")
     return (
         upvotes * min_comments + comments * min_upvotes
         >= min_upvotes * min_comments
-    )
+    ) or matches_subject_rule(subject, upvotes, comments, subject_rules)
 
 
 def is_qualifying_post(
@@ -1139,6 +1159,8 @@ def is_qualifying_post(
     min_upvotes: int,
     min_comments: int,
     policy: str = WEIGHTED_ENGAGEMENT_POLICY,
+    *,
+    subject_rules: Sequence[SubjectCollectionRule] = (),
 ) -> bool:
     return meets_collection_threshold(
         post.upvotes,
@@ -1146,6 +1168,8 @@ def is_qualifying_post(
         min_upvotes=min_upvotes,
         min_comments=min_comments,
         policy=policy,
+        subject=post.subject,
+        subject_rules=subject_rules,
     )
 
 

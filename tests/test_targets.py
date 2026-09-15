@@ -44,9 +44,9 @@ class TargetRegistryTests(unittest.TestCase):
         zeus = get_target("dcinside-zeus-pride")
         bayern = get_target("fmkorea-bayern-board")
 
-        self.assertEqual((agent_stack.min_upvotes, agent_stack.min_comments), (4, 40))
-        self.assertEqual((zeus.min_upvotes, zeus.min_comments), (3, 0))
-        self.assertEqual(zeus.policy, "upvotes-only")
+        self.assertEqual((agent_stack.min_upvotes, agent_stack.min_comments), (5, 50))
+        self.assertEqual((zeus.min_upvotes, zeus.min_comments), (5, 50))
+        self.assertEqual(zeus.policy, "weighted-engagement")
         self.assertEqual(zeus.subject_cell_mode, "optional")
         self.assertEqual(agent_stack.subject_cell_mode, "required")
         self.assertEqual((bayern.min_upvotes, bayern.min_comments), (13, 130))

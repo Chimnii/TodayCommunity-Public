@@ -153,6 +153,7 @@ def scan_target(target: TargetBoard, pages: int, page_delay_seconds: float) -> D
             min_comments=target.min_comments,
             policy=target.policy,
             subject_cell_mode=target.subject_cell_mode,
+            subject_rules=target.subject_rules,
         )
         parser.feed(html)
         if not parser.diagnostics.is_collection_safe:
@@ -169,6 +170,7 @@ def scan_target(target: TargetBoard, pages: int, page_delay_seconds: float) -> D
                 target.min_upvotes,
                 target.min_comments,
                 policy=target.policy,
+                subject_rules=target.subject_rules,
             ):
                 continue
             deduped[post.external_post_id] = asdict(post)
@@ -723,6 +725,8 @@ def update_finalized_posts(
                 min_upvotes=target.min_upvotes,
                 min_comments=target.min_comments,
                 policy=target.policy,
+                subject=post.get("subject", ""),
+                subject_rules=target.subject_rules,
             )
             or canonical_post_key(target, post["external_post_id"])
             in existing_canonical_keys
