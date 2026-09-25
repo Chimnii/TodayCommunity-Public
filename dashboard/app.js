@@ -275,14 +275,19 @@ async function initialize() {
 let archiveCacheBypassUntil = 0;
 const QUICK_PAGE_COUNT = 5;
 let quickPageCursors = { key: "", expiresAt: 0, cursors: new Map([[1, ""]]), endPage: null };
+let searchComposing = false;
 
 function filteredArchiveRequest() {
   return Boolean(state.search || state.subject || state.topicId > 0 || state.minUpvotes > 0 || state.minComments > 0);
 }
 
-function prepareQuickPageCursors(bypassCache) {
-  const key = JSON.stringify([state.target, state.pageSize, state.search, state.subject,
+function archiveFilterKey() {
+  return JSON.stringify([state.target, state.pageSize, state.search, state.subject,
     state.topicId, state.minUpvotes, state.minComments, state.sortBy, [...state.excludedArchiveKeys].sort()]);
+}
+
+function prepareQuickPageCursors(bypassCache) {
+  const key = archiveFilterKey();
   if (bypassCache || quickPageCursors.key !== key || Date.now() >= quickPageCursors.expiresAt) {
     quickPageCursors = { key, expiresAt: Date.now() + 15_000, cursors: new Map([[1, ""]]), endPage: null };
   }
@@ -449,7 +454,7 @@ function buildApiUrl({ page = state.page, cursor = state.cursor } = {}) {
     params.set("cursor", cursor);
   }
   if (canUseArchiveFilter()) {
-    for (const archiveKey of state.excludedArchiveKeys) {
+    for (const archiveKey of [...state.excludedArchiveKeys].sort()) {
       params.append("exclude_archive", archiveKey);
     }
   }
@@ -2507,6 +2512,8 @@ function compareExternalId(left, right) {
 }
 
 function bindEvents() {
+  elements.searchInput.addEventListener("compositionstart", handleSearchCompositionStart);
+  elements.searchInput.addEventListener("compositionend", handleSearchCompositionEnd);
   elements.searchInput.addEventListener("input", () => {
     elements.searchInput.setCustomValidity(archiveSearchError(elements.searchInput.value));
   });
@@ -2627,9 +2634,23 @@ function bindEvents() {
   });
 }
 
+function handleSearchCompositionStart() {
+  searchComposing = true;
+  window.clearTimeout(state.filterTimer);
+}
+
+function handleSearchCompositionEnd(event) {
+  searchComposing = false;
+  handleFilterControlUpdate(event);
+}
+
 function handleFilterControlUpdate(event) {
   if (event.target?.matches?.("input[data-archive-filter-key]")) {
     state.pendingArchiveFilterSave = true;
+  }
+  if (searchComposing || event.isComposing) {
+    window.clearTimeout(state.filterTimer);
+    return;
   }
   scheduleFilterUpdate();
 }
@@ -2643,9 +2664,17 @@ function setFiltersExpanded(expanded) {
 function scheduleFilterUpdate() {
   window.clearTimeout(state.filterTimer);
   state.filterTimer = window.setTimeout(() => {
+    const previousKey = archiveFilterKey();
+    const previousCursor = state.cursor;
     readStateFromControls();
     const shouldSaveArchiveFilter = state.pendingArchiveFilterSave;
     state.pendingArchiveFilterSave = false;
+    if (archiveFilterKey() === previousKey) {
+      // input followed by blur/change (or whitespace-only edits) is one query.
+      // Normalization may clear the cursor even when no filter changed.
+      state.cursor = previousCursor;
+      return;
+    }
     state.page = 1;
     state.cursor = "";
     state.focusPageContentAfterLoad = false;

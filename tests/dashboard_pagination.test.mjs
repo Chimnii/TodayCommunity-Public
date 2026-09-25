@@ -91,6 +91,121 @@ function archiveRequestHarness({ storage, fetchImpl, now = () => 1000 } = {}) {
   return { ...runtime.archiveReview, calls, urls, events, successfulResponse };
 }
 
+function filterRequestHarness() {
+  const timers = new Map();
+  let timerId = 0;
+  const requests = [];
+  let saves = 0;
+  const runtime = vm.createContext({
+    document: { querySelector: () => ({ value: "" }) },
+    URLSearchParams,
+    window: {
+      clearTimeout(id) { timers.delete(id); },
+      setTimeout(callback) { timers.set(++timerId, callback); return timerId; },
+    },
+    recordRequest(url) { requests.push(url); },
+    recordSave() { saves += 1; },
+  });
+  vm.runInContext(`${appWithoutInitialization}\n
+    syncStateToUrl = () => {};
+    loadArchive = () => recordRequest(buildApiUrl());
+    queueArchiveFilterPreferenceSave = () => recordSave();
+    elements.searchInput.value = state.search;
+    elements.subjectSelect.value = state.subject;
+    elements.upvotesInput.value = state.minUpvotes;
+    elements.commentsInput.value = state.minComments;
+    elements.sortSelect.value = state.sortBy;
+    elements.pageSizeSelect.value = state.pageSize;
+    globalThis.filterReview = { state, elements, buildApiUrl, handleFilterControlUpdate,
+      handleSearchCompositionStart, handleSearchCompositionEnd };
+  `, runtime);
+  return {
+    ...runtime.filterReview, requests,
+    get saves() { return saves; },
+    flush() { const pending = [...timers.values()]; timers.clear(); pending.forEach(fn => fn()); },
+  };
+}
+
+test("a committed search issues one request even after blur and whitespace-only edits", () => {
+  const app = filterRequestHarness();
+  app.elements.searchInput.value = "게임";
+  app.handleFilterControlUpdate({ type: "input", target: app.elements.searchInput });
+  app.flush();
+  assert.equal(app.requests.length, 1);
+  Object.assign(app.state, { page: 3, cursor: "third-page" });
+  app.handleFilterControlUpdate({ type: "change", target: app.elements.searchInput });
+  app.flush();
+  app.elements.searchInput.value = " 게임  ";
+  app.handleFilterControlUpdate({ type: "input", target: app.elements.searchInput });
+  app.flush();
+  assert.equal(app.requests.length, 1);
+  assert.equal(app.state.page, 3);
+  assert.equal(app.state.cursor, "third-page");
+  app.elements.searchInput.value = "게임 출시";
+  app.handleFilterControlUpdate({ type: "input", target: app.elements.searchInput });
+  app.flush();
+  assert.equal(app.requests.length, 2);
+  assert.equal(app.state.page, 1);
+  assert.equal(app.state.cursor, "");
+});
+
+test("IME cancels a pending partial search and waits through pauses for composition end", () => {
+  const app = filterRequestHarness();
+  app.elements.searchInput.value = "g";
+  app.handleFilterControlUpdate({ type: "input", target: app.elements.searchInput });
+  app.handleSearchCompositionStart();
+  app.flush();
+  app.elements.searchInput.value = "게";
+  app.handleFilterControlUpdate({ type: "input", isComposing: true, target: app.elements.searchInput });
+  app.flush();
+  assert.equal(app.requests.length, 0);
+  app.elements.searchInput.value = "게임";
+  app.handleSearchCompositionEnd({ target: app.elements.searchInput });
+  app.handleFilterControlUpdate({ type: "input", isComposing: false, target: app.elements.searchInput });
+  app.flush();
+  app.handleFilterControlUpdate({ type: "change", target: app.elements.searchInput });
+  app.flush();
+  assert.equal(app.requests.length, 1);
+  assert.equal(new URL(app.requests[0], "https://example.test").searchParams.get("q"), "게임");
+});
+
+test("unchanged mixed-archive controls preserve a cursor cleared by normalization", () => {
+  const app = filterRequestHarness();
+  Object.assign(app.state, { target: "all", page: 4, cursor: "fourth-page" });
+  app.handleFilterControlUpdate({ target: app.elements.searchInput });
+  app.flush();
+  assert.equal(app.requests.length, 0);
+  assert.equal(app.state.cursor, "fourth-page");
+  assert.equal(app.state.page, 4);
+});
+
+test("equivalent archive exclusion order shares a URL and does not repeat preference writes", () => {
+  const app = filterRequestHarness();
+  Object.assign(app.state, {
+    target: "all", archiveFilterLoaded: true,
+    feedbackSession: { authentication: "authenticated" },
+    excludedArchiveKeys: new Set(["game-news", "fmkorea-munich"]),
+  });
+  const keyBefore = app.buildApiUrl();
+  let unchecked = ["fmkorea-munich", "game-news"];
+  app.elements.archiveFilterOptions.querySelectorAll = () => unchecked.map(key => ({
+    checked: false, dataset: { archiveFilterKey: key },
+  }));
+  const event = { target: { matches: () => true } };
+  app.handleFilterControlUpdate(event);
+  app.flush();
+  assert.equal(app.buildApiUrl(), keyBefore);
+  assert.equal(app.requests.length, 0);
+  assert.equal(app.saves, 0);
+  unchecked = ["game-news"];
+  app.handleFilterControlUpdate(event);
+  app.flush();
+  app.handleFilterControlUpdate(event);
+  app.flush();
+  assert.equal(app.requests.length, 1);
+  assert.equal(app.saves, 1);
+});
+
 test("reselecting the current archive reloads page one and resets filters and cursors", async () => {
   const app = archiveRequestHarness();
   Object.assign(app.state, {
