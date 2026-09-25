@@ -534,6 +534,9 @@ def upsert_posts(
 
 
 def _observation_stats_statements(target, posts, canonical_keys, checked_at):
+    # Consecutive chunks share one observation time. Keep the stats revision
+    # unchanged when neither counts nor timestamps change; additions still
+    # derive from the current post state inside the same atomic batch.
     values = ", ".join("(?, ?, ?)" for _ in posts)
     params = [value for key, post in zip(canonical_keys, posts)
               for value in (key, str(post["external_post_id"]).strip(), normalized_subject(post["subject"]))]
@@ -564,7 +567,9 @@ def _observation_stats_statements(target, posts, canonical_keys, checked_at):
               latest_seen_at = max(latest_seen_at, ?),
               stats_version = stats_version + 1, updated_at = ?
           WHERE archive_key = ?
-        """, [*params, checked_at, checked_at, target.archive_key]),
+            AND (latest_seen_at < ? OR updated_at IS NOT ?
+                 OR EXISTS (SELECT 1 FROM additions))
+        """, [*params, checked_at, checked_at, target.archive_key, checked_at, checked_at]),
         (changes + """
           INSERT INTO archive_subject_stats (archive_key, subject, active_post_count, updated_at)
           SELECT ?, subject, count(*), ? FROM additions

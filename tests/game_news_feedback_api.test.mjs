@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { DatabaseSync } from "node:sqlite";
 
 const authSource = await readFile(
   new URL("../functions/api/_auth.js", import.meta.url),
@@ -307,6 +308,45 @@ const writeHeaders = {
   "Sec-Fetch-Site": "same-origin",
   "X-TodayCommunity-Write": "1",
 };
+
+test("hidden count is private, bounded like the list, and does not load article content", async () => {
+  const sqlite = new DatabaseSync(":memory:");
+  sqlite.exec(`CREATE TABLE posts (
+    archive_key TEXT, status TEXT, external_post_id TEXT, title TEXT,
+    post_url TEXT, subject TEXT, last_seen_at TEXT, id INTEGER PRIMARY KEY
+  )`);
+  const migration = await readFile(new URL("../cloudflare/migrations/017_game_news_hidden_index.sql", import.meta.url), "utf8");
+  sqlite.exec(migration);
+  sqlite.exec(migration);
+  let queries = 0;
+  const plans = [];
+  const db = { prepare(sql) { return {
+    bind() { return this; },
+    async all() {
+      queries += 1;
+      plans.push(sqlite.prepare(`EXPLAIN QUERY PLAN ${sql}`).all().map(row => row.detail).join("\n"));
+      return { results: sqlite.prepare(sql).all() };
+    },
+  }; } };
+  try {
+    const denied = await request("hidden?count_only=1", { db, authenticated: false });
+    assert.equal(denied.status, 401);
+    assert.equal(queries, 0);
+    assert.deepEqual(await body(await request("hidden?count_only=1", { db })), { count: 0 });
+    const insert = sqlite.prepare("INSERT INTO posts(archive_key,status,title) VALUES (?,?,?)");
+    for (let i = 0; i < 205; i++) insert.run("game-news", "hidden", "private content");
+    insert.run("game-news", "active", "visible");
+    insert.run("another-archive", "hidden", "unrelated");
+    const counted = await request("hidden?count_only=1", { db });
+    assert.match(counted.headers.get("cache-control"), /private, no-store/);
+    assert.deepEqual(await body(counted), { count: 200 });
+    assert.equal((await body(await request("hidden", { db }))).items.length, 200);
+    assert.ok(plans.every(plan => plan.includes("idx_posts_game_news_hidden")));
+    assert.ok(plans.every(plan => !plan.includes("TEMP B-TREE")));
+  } finally {
+    sqlite.close();
+  }
+});
 
 test("exposes guest and admin states through one authentication boundary", async () => {
   const guestResponse = await request("session", { authenticated: false });

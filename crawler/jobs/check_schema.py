@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from crawler.cli_output import configure_utf8_stdio
 from crawler.d1 import attach_d1_failure_usage, d1_failure_report
-from crawler.schema_reads import retry_schema_read
+from crawler.schema_reads import prime_schema_reads, retry_schema_read
 
 import argparse
 import json
@@ -293,6 +293,12 @@ def inspect_schema(client: D1Client, *, deep_data_audit: bool = False) -> dict:
     }
     errors: List[str] = []
     details = {}
+    client = prime_schema_reads(
+        client, present.intersection(REQUIRED_TABLES),
+        extended_indexes={name for requirements in (
+            REQUIRED_INDEXES, REQUIRED_PARTIAL_INDEXES, REQUIRED_INDEX_VARIANTS
+        ) for indexes in requirements.values() for name in indexes},
+    )
     # sqlite_schema has no name index: individual lookups each scan the catalog.
     # Read current definitions once per inspection; retain all live PRAGMA checks.
     index_definitions = {

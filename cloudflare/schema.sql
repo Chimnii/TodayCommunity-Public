@@ -133,6 +133,11 @@ CREATE INDEX IF NOT EXISTS idx_posts_active_comments
   ON posts (comments DESC, created_at DESC, id DESC)
   WHERE status = 'active';
 
+-- Only hidden news rows participate; normal collection adds no index writes.
+CREATE INDEX IF NOT EXISTS idx_posts_game_news_hidden
+  ON posts (archive_key, status, last_seen_at DESC, id DESC)
+  WHERE archive_key = 'game-news' AND status = 'hidden';
+
 CREATE TABLE IF NOT EXISTS archive_stats (
   archive_key TEXT PRIMARY KEY,
   active_post_count INTEGER NOT NULL DEFAULT 0

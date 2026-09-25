@@ -773,6 +773,30 @@ class BatchedPostUpsertTests(unittest.TestCase):
         self.assertNotIn("subject", update_clause)
         self.assertIn("일반", params)
 
+    def test_same_observation_chunks_only_revise_stats_when_values_change(self) -> None:
+        client = SqliteClient()
+        target = get_target("dcinside-singularity")
+        first = "2026-07-16T00:00:00Z"
+        later = "2026-07-16T00:15:00Z"
+        posts = [sample_post(i) for i in range(1, 13)]
+        upsert_source(client, target, first)
+        upsert_posts(client, target, posts, first)
+        stats = lambda: client.query(
+            "SELECT * FROM archive_stats WHERE archive_key = ?", [target.archive_key]
+        )[0]
+        before = stats()
+        upsert_posts(client, target, posts, later)
+        after = stats()
+        self.assertEqual(after["stats_version"], before["stats_version"] + 1)
+        self.assertEqual(after["active_post_count"], 12)
+        self.assertEqual(after["latest_seen_at"], later)
+        self.assertEqual(client.query("SELECT DISTINCT last_seen_at FROM posts"), [{"last_seen_at": later}])
+        upsert_posts(client, target, posts, later)
+        self.assertEqual(stats(), after)
+        upsert_posts(client, target, [sample_post(13)], later)
+        self.assertEqual(stats()["active_post_count"], 13)
+        self.assertEqual(stats()["stats_version"], after["stats_version"] + 1)
+
     def test_unchanged_rescan_updates_only_observation_times(self) -> None:
         client = SqliteClient()
         target = get_target("dcinside-singularity")

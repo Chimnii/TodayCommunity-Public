@@ -276,6 +276,8 @@ let archiveCacheBypassUntil = 0;
 const QUICK_PAGE_COUNT = 5;
 let quickPageCursors = { key: "", expiresAt: 0, cursors: new Map([[1, ""]]), endPage: null };
 let searchComposing = false;
+let hiddenCountRequest = null;
+let hiddenCountGeneration = 0;
 
 function filteredArchiveRequest() {
   return Boolean(state.search || state.subject || state.topicId > 0 || state.minUpvotes > 0 || state.minComments > 0);
@@ -1838,6 +1840,7 @@ async function hidePost(post, toolbar, sourceButton) {
       action: "hide",
       idempotency_key: createRequestKey("hide"),
     });
+    invalidateHiddenCount();
     const title = String(post?.title || "게임 기사");
     const triggerButtons = Array.from(
       elements.posts.querySelectorAll(".feedback-open-button")
@@ -1881,6 +1884,7 @@ async function restoreHiddenPost(postKey) {
     action: "restore",
     idempotency_key: createRequestKey("restore"),
   });
+  invalidateHiddenCount();
   showFeedbackToast("숨긴 글을 목록에 복구했습니다.");
   markArchiveChanged();
   await loadArchive();
@@ -2849,15 +2853,31 @@ async function refreshHiddenItems() {
   }
 }
 
-async function refreshHiddenCount() {
-  try {
-    const payload = await fetchGameNewsJson("/api/game-news/hidden");
-    elements.hiddenCount.textContent = numberFormatter.format(
-      Array.isArray(payload?.items) ? payload.items.length : 0
-    );
-  } catch {
-    elements.hiddenCount.textContent = "-";
-  }
+function invalidateHiddenCount() {
+  hiddenCountGeneration += 1;
+  hiddenCountRequest = null;
+}
+
+function refreshHiddenCount() {
+  if (hiddenCountRequest) return hiddenCountRequest;
+  const generation = hiddenCountGeneration;
+  const request = fetchGameNewsJson("/api/game-news/hidden?count_only=1")
+    .then((payload) => {
+      if (generation === hiddenCountGeneration) {
+        elements.hiddenCount.textContent = numberFormatter.format(
+          normalizeNonNegativeNumber(payload?.count, 0)
+        );
+      }
+    })
+    .catch(() => {
+      if (generation === hiddenCountGeneration) elements.hiddenCount.textContent = "-";
+    })
+    .finally(() => {
+      if (hiddenCountRequest === request) hiddenCountRequest = null;
+    });
+  // Share only an in-flight read; never extend the freshness of private data.
+  hiddenCountRequest = request;
+  return request;
 }
 
 function renderHiddenItems(items) {

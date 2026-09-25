@@ -126,6 +126,53 @@ function filterRequestHarness() {
   };
 }
 
+function hiddenCountHarness() {
+  const pending = [];
+  const runtime = vm.createContext({
+    document: { querySelector: () => ({}) },
+    fetch(url, options) {
+      return new Promise((resolve, reject) => pending.push({ url, options,
+        resolve: count => resolve({ ok: true, json: async () => ({ count }) }), reject }));
+    },
+  });
+  vm.runInContext(`${appWithoutInitialization}\n
+    globalThis.hiddenReview = { refreshHiddenCount, invalidateHiddenCount, elements };
+  `, runtime);
+  return { ...runtime.hiddenReview, pending };
+}
+
+test("simultaneous hidden count reads share one request without caching later reads", async () => {
+  const app = hiddenCountHarness();
+  const first = app.refreshHiddenCount();
+  assert.equal(app.refreshHiddenCount(), first);
+  assert.equal(app.pending.length, 1);
+  assert.equal(app.pending[0].url, "/api/game-news/hidden?count_only=1");
+  assert.equal(app.pending[0].options.cache, "no-store");
+  app.pending[0].resolve(4);
+  await first;
+  assert.equal(app.elements.hiddenCount.textContent, "4");
+  const next = app.refreshHiddenCount();
+  assert.equal(app.pending.length, 2);
+  app.pending[1].resolve(5);
+  await next;
+  assert.equal(app.elements.hiddenCount.textContent, "5");
+});
+
+test("visibility changes invalidate in-flight counts and ignore stale successes or failures", async () => {
+  for (const staleFailure of [false, true]) {
+    const app = hiddenCountHarness();
+    const stale = app.refreshHiddenCount();
+    app.invalidateHiddenCount();
+    const fresh = app.refreshHiddenCount();
+    app.pending[1].resolve(6);
+    await fresh;
+    if (staleFailure) app.pending[0].reject(new Error("old failure"));
+    else app.pending[0].resolve(1);
+    await stale;
+    assert.equal(app.elements.hiddenCount.textContent, "6");
+  }
+});
+
 test("a committed search issues one request even after blur and whitespace-only edits", () => {
   const app = filterRequestHarness();
   app.elements.searchInput.value = "게임";

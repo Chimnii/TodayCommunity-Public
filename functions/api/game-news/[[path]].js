@@ -349,7 +349,18 @@ function assertIdempotentMatch(row, columns, values) {
   }
 }
 
-async function getHidden(db) {
+async function getHidden(db, countOnly = false) {
+  if (countOnly) {
+    const rows = await queryAll(db, `
+      SELECT COUNT(*) AS count FROM (
+        SELECT 1 FROM posts
+        WHERE archive_key = 'game-news' AND status = 'hidden'
+        LIMIT ${MAX_HIDDEN_ITEMS}
+      )
+    `);
+    // Match the bounded management list without sorting or loading its content.
+    return jsonResponse({ count: Number(rows[0]?.count || 0) });
+  }
   const rows = await queryAll(
     db,
     `
@@ -707,7 +718,7 @@ export async function onRequestGet(context) {
       if (!db) {
         throw new Error("D1 binding is unavailable");
       }
-      response = await getHidden(db);
+      response = await getHidden(db, new URL(context.request.url).searchParams.get("count_only") === "1");
     } else if (resource === "preferences") {
       requireCapability(identity, "manage_rules");
       if (!db) {
