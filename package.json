@@ -13,6 +13,6 @@
     "verify:scheduler": "wrangler deploy --dry-run --config scheduler/wrangler.jsonc"
   },
   "devDependencies": {
-    "wrangler": "4.124.0"
+    "wrangler": "4.131.0"
   }
 }
