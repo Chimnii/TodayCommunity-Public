@@ -195,6 +195,7 @@ const elements = {
   upvotesColumnLabel: document.querySelector("#upvotes-column-label"),
   dateColumnLabel: document.querySelector("#date-column-label"),
   feedbackColumnLabel: document.querySelector("#feedback-column-label"),
+  favoriteColumnLabel: document.querySelector("#favorite-column-label"),
   upvotesInput: document.querySelector("#upvotes-input"),
   commentsInput: document.querySelector("#comments-input"),
   sortSelect: document.querySelector("#sort-select"),
@@ -687,7 +688,7 @@ function renderColumnHeaders(mixedMode) {
         elements.dateColumnLabel,
         elements.feedbackColumnLabel,
       ];
-  elements.boardHeaderRow.append(...orderedHeaders.filter(Boolean));
+  elements.boardHeaderRow.append(...[...orderedHeaders, elements.favoriteColumnLabel].filter(Boolean));
 }
 
 function getCurrentSources() {
@@ -1487,7 +1488,7 @@ function renderPosts(posts) {
     reserveBoardRows(3);
     const pagination = state.archive?.pagination;
     if (state.target === FAVORITES_TARGET && !pagination?.has_next && !pagination?.has_previous) {
-      renderBoardState("아직 즐겨찾기한 글이 없습니다. 글 제목 옆 ☆을 눌러 함께 모아보세요.");
+      renderBoardState("아직 즐겨찾기한 글이 없습니다. 글 오른쪽 끝의 ☆을 눌러 함께 모아보세요.");
       return;
     }
     if (pagination?.bounded_scan && pagination.has_next && pagination.next_cursor) {
@@ -1548,6 +1549,7 @@ function renderPosts(posts) {
           ])
     );
 
+    row.append(createFavoriteCell(post));
     elements.posts.append(row);
   }
 }
@@ -2181,18 +2183,22 @@ function createTitleCell(post) {
     content.append(commentDescription);
   }
 
+  cell.append(content);
+  return cell;
+}
+
+function createFavoriteCell(post) {
+  const cell = createCell("", "cell-favorite");
   if (hasSecretLinkSession() && Number.isSafeInteger(post.post_id) && post.post_id > 0) {
-    cell.classList.add("has-favorite");
     const button = document.createElement("button");
     button.type = "button";
     button.className = "favorite-button";
     button.dataset.postId = String(post.post_id);
-    button.dataset.postTitle = title;
+    button.dataset.postTitle = String(post.title || "제목 없음");
     button.addEventListener("click", () => { void toggleFavorite(post, button); });
     syncFavoriteButton(button);
     cell.append(button);
   }
-  cell.append(content);
   return cell;
 }
 
