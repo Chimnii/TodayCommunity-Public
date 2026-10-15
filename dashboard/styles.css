@@ -851,6 +851,31 @@ body[data-content-kind="mixed"] .cell-source {
   text-overflow: ellipsis;
 }
 
+.cell-title.has-favorite {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.favorite-button {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-ink-muted);
+  font: inherit;
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.favorite-button[aria-pressed="true"] { color: #9b6800; }
+.favorite-button:hover { background: var(--color-surface-muted, #f4f4f4); }
+.favorite-button:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
+.favorite-button:disabled { opacity: 0.45; cursor: wait; }
+
 .cell-title .post-title-content {
   display: inline-flex;
   max-width: 100%;

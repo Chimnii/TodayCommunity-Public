@@ -1,5 +1,10 @@
 const DEFAULT_TARGET = "dcinside-singularity";
 const ALL_TARGET = "all";
+const FAVORITES_TARGET = "favorites";
+const FAVORITES_ARCHIVE = Object.freeze({
+  archive_key: FAVORITES_TARGET, display_name: "즐겨찾기", content_kind: "mixed",
+  description: "시크릿 사용자들이 함께 저장한 글 · 최근 저장순", display_order: 110,
+});
 const TARGET_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const SOURCE_DESCRIPTION =
   "추천수 또는 댓글수가 일정 조건을 만족하는 글을 모읍니다. 본문 내용은 수집하지 않고 제목과 원문 링크 등 목록 정보만 수집합니다.";
@@ -134,6 +139,9 @@ const state = {
   feedbackByPost: new Map(),
   feedbackReady: false,
   pendingFeedback: new Set(),
+  favorites: new Map(),
+  pendingFavorites: new Set(),
+  favoritesRevision: 0,
   feedbackDialogPost: null,
   feedbackDialogTrigger: null,
   preferenceDocument: {
@@ -267,6 +275,10 @@ async function initialize() {
   if (hasSecretLinkSession()) {
     await loadArchiveFilterPreference();
   }
+  if (state.target === FAVORITES_TARGET && !hasSecretLinkSession()) {
+    Object.assign(state, DEFAULT_STATE, { target: DEFAULT_TARGET });
+    syncStateToUrl();
+  }
   applyContentKindMode();
   writeStateToControls();
   loadArchive();
@@ -296,6 +308,12 @@ function prepareQuickPageCursors(bypassCache) {
 }
 
 async function fetchArchivePage(controller, bypassCache) {
+  if (state.target === FAVORITES_TARGET) {
+    const params = new URLSearchParams();
+    if (state.cursor) params.set("cursor", state.cursor);
+    const payload = await fetchGameNewsJson(`/api/favorites?${params}`, { signal: controller.signal });
+    return { payload, cursor: state.cursor };
+  }
   prepareQuickPageCursors(bypassCache);
   const desiredPage = state.page;
   const filtered = filteredArchiveRequest();
@@ -377,6 +395,7 @@ async function loadArchive() {
 
   try {
     const bypassCache = archiveCacheBypassActive();
+    const favoritesRevision = state.favoritesRevision;
     const loaded = await fetchArchivePage(controller, bypassCache);
     if (!loaded || controller.signal.aborted) return;
     const { payload, cursor } = loaded;
@@ -387,6 +406,18 @@ async function loadArchive() {
 
     state.archive = withArchiveCatalog(payload);
     state.dataSource = "live";
+
+    if (hasSecretLinkSession()) {
+      if (payload.target === FAVORITES_TARGET && favoritesRevision === state.favoritesRevision) {
+        // The authenticated list itself already provides saved state; avoid a duplicate request.
+        for (const post of payload.posts || []) {
+          if (!state.pendingFavorites.has(post.post_id)) state.favorites.set(post.post_id, true);
+        }
+      } else {
+        await loadFavoritesState(payload.posts || [], controller.signal);
+      }
+      if (controller.signal.aborted) return;
+    }
 
     const responseTarget = normalizeTarget(payload.target);
     if (responseTarget && responseTarget !== state.target) {
@@ -405,9 +436,13 @@ async function loadArchive() {
     if (error.name === "AbortError" || controller.signal.aborted) {
       return;
     }
+    if (state.target === FAVORITES_TARGET && error.status === 401) {
+      loseFavoriteAccess();
+      return;
+    }
 
     const fallback = window.__TODAY_COMMUNITY_ARCHIVE__;
-    if (!error.inputError && fallback && (!fallback.target || fallback.target === state.target)) {
+    if (state.target !== FAVORITES_TARGET && !error.inputError && fallback && (!fallback.target || fallback.target === state.target)) {
       state.archive = withArchiveCatalog(fallback);
       state.dataSource = "fallback";
     } else {
@@ -420,7 +455,7 @@ async function loadArchive() {
         summary: { total_posts: 0, filtered_posts: 0, recent_runs: 0 },
         runs: [],
         posts: [],
-        error: error.inputError ? error.message : "라이브 데이터와 로컬 스냅샷을 모두 읽지 못했습니다.",
+        error: error.inputError || state.target === FAVORITES_TARGET ? error.message : "라이브 데이터와 로컬 스냅샷을 모두 읽지 못했습니다.",
         input_error: Boolean(error.inputError),
       };
       state.dataSource = "unavailable";
@@ -488,7 +523,9 @@ function getAvailableArchives() {
   const archives = Array.isArray(state.archive?.archives) && state.archive.archives.length
     ? state.archive.archives
     : FALLBACK_ARCHIVES;
-  return [...archives].sort((left, right) => {
+  const available = archives.filter(archive => archive.archive_key !== FAVORITES_TARGET);
+  if (hasSecretLinkSession()) available.push(FAVORITES_ARCHIVE);
+  return available.sort((left, right) => {
     const orderDifference =
       normalizeNonNegativeNumber(left?.display_order, 0) -
       normalizeNonNegativeNumber(right?.display_order, 0);
@@ -499,6 +536,7 @@ function getAvailableArchives() {
 }
 
 function getCurrentArchive() {
+  if (state.target === FAVORITES_TARGET) return FAVORITES_ARCHIVE;
   const candidate = state.archive?.archive;
   if (candidate?.archive_key === state.target) {
     return candidate;
@@ -514,7 +552,7 @@ function isArticleArchive() {
 }
 
 function isMixedArchive() {
-  return state.target === ALL_TARGET || getCurrentArchive()?.content_kind === "mixed";
+  return state.target === ALL_TARGET || state.target === FAVORITES_TARGET || getCurrentArchive()?.content_kind === "mixed";
 }
 
 function isGameNewsPost(post) {
@@ -544,6 +582,11 @@ function canUseArchiveFilter() {
 }
 
 function normalizeContentState() {
+  if (state.target === FAVORITES_TARGET) {
+    const { page, cursor } = state;
+    Object.assign(state, DEFAULT_STATE, { page, cursor });
+    return;
+  }
   if (isMixedArchive()) {
     state.topicId = 0;
     if (!hasActivePostFilters()) {
@@ -564,6 +607,8 @@ function normalizeContentState() {
 }
 
 function applyContentKindMode() {
+  elements.filterShell.hidden = state.target === FAVORITES_TARGET;
+  elements.runsOpen.hidden = state.target === FAVORITES_TARGET;
   const articleMode = isArticleArchive();
   const mixedMode = isMixedArchive();
   const authentication = ["authenticated", "admin"].includes(
@@ -921,7 +966,7 @@ function handleArchiveTabKeydown(event) {
 
 function selectArchive(target) {
   const normalizedTarget = normalizeTarget(target);
-  if (!normalizedTarget) {
+  if (!normalizedTarget || (normalizedTarget === FAVORITES_TARGET && !hasSecretLinkSession())) {
     return;
   }
 
@@ -1441,6 +1486,10 @@ function renderPosts(posts) {
   if (posts.length === 0) {
     reserveBoardRows(3);
     const pagination = state.archive?.pagination;
+    if (state.target === FAVORITES_TARGET && !pagination?.has_next && !pagination?.has_previous) {
+      renderBoardState("아직 즐겨찾기한 글이 없습니다. 글 제목 옆 ☆을 눌러 함께 모아보세요.");
+      return;
+    }
     if (pagination?.bounded_scan && pagination.has_next && pagination.next_cursor) {
       renderBoardState("이 구간에는 조건에 맞는 글이 없습니다.", "다음 구간",
         () => goToCursor(pagination.next_cursor, pagination.page + 1));
@@ -2132,8 +2181,96 @@ function createTitleCell(post) {
     content.append(commentDescription);
   }
 
+  if (hasSecretLinkSession() && Number.isSafeInteger(post.post_id) && post.post_id > 0) {
+    cell.classList.add("has-favorite");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "favorite-button";
+    button.dataset.postId = String(post.post_id);
+    button.dataset.postTitle = title;
+    button.addEventListener("click", () => { void toggleFavorite(post, button); });
+    syncFavoriteButton(button);
+    cell.append(button);
+  }
   cell.append(content);
   return cell;
+}
+
+function syncFavoriteButton(button) {
+  const id = Number(button.dataset.postId);
+  const saved = state.favorites.get(id);
+  button.disabled = saved === undefined || state.pendingFavorites.has(id);
+  button.textContent = saved ? "★" : "☆";
+  button.setAttribute("aria-pressed", String(Boolean(saved)));
+  const label = saved === undefined ? "즐겨찾기 상태 확인 필요" : saved ? "즐겨찾기 해제" : "즐겨찾기 추가";
+  button.setAttribute("aria-label", `${button.dataset.postTitle}, ${label}`);
+  button.title = label;
+}
+
+function syncFavoriteButtons() {
+  for (const button of elements.posts.querySelectorAll(".favorite-button")) syncFavoriteButton(button);
+}
+
+async function loadFavoritesState(posts, signal) {
+  const ids = posts.map(post => post.post_id).filter(id => Number.isSafeInteger(id) && id > 0);
+  if (!ids.length || !hasSecretLinkSession()) return;
+  const revision = state.favoritesRevision;
+  try {
+    const payload = await fetchGameNewsJson(`/api/favorites?ids=${ids.join(",")}`, { signal });
+    if (signal.aborted) return;
+    // A concurrent write may have overtaken this read. Obtain a fresh state before enabling controls.
+    if (revision !== state.favoritesRevision) return loadFavoritesState(posts, signal);
+    const saved = new Set(payload.post_ids);
+    for (const id of ids) {
+      if (!state.pendingFavorites.has(id)) state.favorites.set(id, saved.has(id));
+    }
+  } catch (error) {
+    if (signal.aborted) return;
+    for (const id of ids) if (!state.pendingFavorites.has(id)) state.favorites.delete(id);
+    if (error.status === 401) loseFavoriteAccess();
+    else showFeedbackToast("즐겨찾기 상태를 읽지 못했습니다. 탭을 다시 선택해 주세요.");
+  }
+}
+
+function loseFavoriteAccess() {
+  state.feedbackSession = { authentication: "guest", capabilities: {} };
+  state.favorites.clear();
+  if (state.target === FAVORITES_TARGET) {
+    void selectArchive(DEFAULT_TARGET);
+  } else {
+    render();
+  }
+  showFeedbackToast("시크릿 링크 인증이 만료되었습니다. 링크로 다시 접속해 주세요.");
+}
+
+async function toggleFavorite(post, button) {
+  const id = post.post_id;
+  if (!hasSecretLinkSession() || !state.favorites.has(id) || state.pendingFavorites.has(id)) return;
+  const saved = !state.favorites.get(id);
+  state.pendingFavorites.add(id);
+  state.favoritesRevision += 1;
+  syncFavoriteButtons();
+  try {
+    const payload = await postGameNewsJson("/api/favorites", { post_id: id, saved });
+    state.favorites.set(id, payload.saved);
+    showFeedbackToast(payload.saved ? "공유 즐겨찾기에 저장했습니다." : "공유 즐겨찾기에서 해제했습니다.");
+    if (state.target === FAVORITES_TARGET && !payload.saved) {
+      // Reload from the start so removing the final item on a page cannot strand navigation.
+      state.page = 1;
+      state.cursor = "";
+      syncStateToUrl();
+      state.focusPageContentAfterLoad = true;
+      await loadArchive();
+    }
+  } catch (error) {
+    if (error.status === 401) loseFavoriteAccess();
+    else showFeedbackToast(error.message || "즐겨찾기 변경에 실패했습니다. 다시 시도해 주세요.");
+  } finally {
+    state.pendingFavorites.delete(id);
+    state.favoritesRevision += 1;
+    syncFavoriteButtons();
+    if (button.isConnected) button.focus();
+  }
 }
 
 function renderBoardState(message, actionLabel, action) {

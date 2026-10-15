@@ -1081,10 +1081,11 @@ export async function onRequestGet(context) {
       ? makeCursor("previous", page - 1, previousBoundary, sort, signature, postRows.length === 0) : null;
     const nextCursor = sequentialMode && hasNext && nextBoundary
       ? makeCursor("next", page + 1, nextBoundary, sort, signature, postRows.length === 0) : null;
-    const posts = visibleRows.map(({ cursor_id: _cursorId, matches_filter: _match, ...post }) => (
-      post.archive_key === "game-news"
-        ? { ...post, feedback_key: String(post.external_post_id || "") } : post
-    ));
+    const posts = visibleRows.map(({ cursor_id: post_id, matches_filter: _match, ...fields }) => {
+      const post = { ...fields, post_id };
+      return post.archive_key === "game-news"
+        ? { ...post, feedback_key: String(post.external_post_id || "") } : post;
+    });
     const visibleFrom = posts.length > 0 ? offset + 1 : 0;
     const visibleTo = posts.length > 0 ? offset + posts.length : 0;
 
