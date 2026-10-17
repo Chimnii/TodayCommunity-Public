@@ -137,7 +137,7 @@ a {
 
 .guest-ad {
   width: 300px;
-  margin: var(--space-4) auto;
+  margin: var(--space-4) calc((100% - 300px) / 2);
 }
 
 .guest-ad[hidden] {
@@ -156,12 +156,6 @@ a {
 #guest-ad-content {
   width: 300px;
   min-height: 100px;
-}
-
-@media (max-width: 323px) {
-  .guest-ad {
-    margin-inline: calc((100% - 300px) / 2);
-  }
 }
 
 @media (max-width: 319px) {
