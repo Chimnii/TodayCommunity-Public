@@ -40,14 +40,15 @@ test("describes the service as a metadata-only bookmark that requires the origin
   assert.doesNotMatch(aboutHtml, /개인 운영|제휴|공식적으로 운영|삭제·정정|GitHub/u);
 });
 
-test("states that the public page collects no personal data and keeps advertising conditional", () => {
+test("discloses guest-only Adcash advertising and third-party data handling", () => {
   assert.match(privacyHtml, /이용자의 개인정보를 직접 수집하거나\s+저장하지 않습니다/u);
-  assert.match(privacyHtml, /현재 광고는 게재하지 않습니다/u);
-  assert.match(privacyHtml, /광고가 게재되는 경우에는 광고 제공 과정에서\s+쿠키 등이 사용될 수 있으며/u);
-  assert.match(privacyHtml, /광고가 게재되지 않는 경우에는 해당하지 않습니다/u);
-  assert.match(privacyHtml, /광고를 도입할 때 실제 처리 내용을 이 방침에 반영합니다/u);
-  assert.doesNotMatch(privacyHtml, /시크릿 링크|관리자|IP 주소|기사 평가|Google|adssettings|partner-sites|GitHub/u);
-  assert.match(privacyHtml, /시행일: 2026년 8월 25일/u);
+  assert.match(privacyHtml, /비로그인 방문자에게 Adcash의 일반 배너/u);
+  assert.match(privacyHtml, /인증 상태를 확인하지 못한 경우에도 광고를 불러오지 않습니다/u);
+  assert.match(privacyHtml, /쿠키·웹 비콘/u);
+  assert.match(privacyHtml, /IP 주소, 브라우저·기기 정보/u);
+  assert.match(privacyHtml, /href="https:\/\/adcash.com\/legal\/"/u);
+  assert.doesNotMatch(privacyHtml, /현재 광고는 게재하지 않습니다|시크릿 링크|관리자|기사 평가/u);
+  assert.match(privacyHtml, /시행일: 2026년 10월 18일/u);
 });
 
 test("ships static, responsive pages through the public mirror", () => {

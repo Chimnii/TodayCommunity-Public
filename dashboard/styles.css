@@ -135,6 +135,41 @@ a {
   padding: var(--space-8) var(--space-6) var(--space-16);
 }
 
+.guest-ad {
+  width: 300px;
+  margin: var(--space-4) auto;
+}
+
+.guest-ad[hidden] {
+  display: none;
+}
+
+.guest-ad-label {
+  display: block;
+  color: var(--color-ink-muted);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  margin-bottom: var(--space-1);
+  text-align: center;
+}
+
+#guest-ad-content {
+  width: 300px;
+  min-height: 100px;
+}
+
+@media (max-width: 323px) {
+  .guest-ad {
+    margin-inline: calc((100% - 300px) / 2);
+  }
+}
+
+@media (max-width: 319px) {
+  .guest-ad {
+    display: none;
+  }
+}
+
 .masthead {
   display: flex;
   align-items: flex-end;

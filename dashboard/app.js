@@ -260,7 +260,8 @@ async function initialize() {
   syncTopicPanelForViewport();
   bindEvents();
   try {
-    await ensureFeedbackSession();
+    const session = await ensureFeedbackSession();
+    initializeGuestBanner(session);
   } catch {
     state.feedbackSession = {
       authentication: "guest",
@@ -1745,6 +1746,51 @@ async function ensureFeedbackSession() {
       });
   }
   return state.feedbackSessionPromise;
+}
+
+let guestBannerAttempted = false;
+
+function initializeGuestBanner(session) {
+  // A UI fallback to guest is not proof of a successful server session check.
+  const isVerifiedGuest = () => session === state.feedbackSession
+    && session?.authentication === "guest" && session.actor === null
+    && session.capabilities?.rate === false && session.capabilities?.manage_auth === false;
+  if (guestBannerAttempted || !isVerifiedGuest()
+    || window.location.origin !== "https://todaycommunity.pages.dev"
+    || !window.matchMedia("(min-width: 320px)").matches) {
+    return;
+  }
+  const slot = document.querySelector("#guest-ad");
+  const mount = document.querySelector("#guest-ad-content");
+  if (!slot || !mount || document.querySelector("#aclib")) {
+    return;
+  }
+  // One library and one banner per document, including tab/filter/page changes.
+  guestBannerAttempted = true;
+  const library = document.createElement("script");
+  library.id = "aclib";
+  library.async = true;
+  library.src = "https://acscdn.com/script/aclib.js";
+  library.onerror = () => {
+    slot.hidden = true;
+    mount.replaceChildren();
+  };
+  library.onload = () => {
+    if (!isVerifiedGuest() || typeof window.aclib?.runBanner !== "function") {
+      library.onerror();
+      return;
+    }
+    // Adcash locates the placement through the calling script's parent element.
+    const tag = document.createElement("script");
+    tag.textContent = `try {
+      aclib.runBanner({ zoneId: '12327306' });
+    } catch {
+      document.getElementById('guest-ad').hidden = true;
+    }`;
+    mount.append(tag);
+  };
+  slot.hidden = false;
+  document.head.append(library);
 }
 
 function normalizeFeedbackState(item) {
