@@ -8,6 +8,7 @@ const PUBLIC_ARCHIVES = Object.freeze({
   "game-news": ["게임 뉴스", "게임 신작, 인터뷰와 업계 동향을 휴리스틱하게 선별한 기사.", "article"],
   all: ["모두", "모든 공개 아카이브의 글을 최신순으로 모았습니다.", "mixed"],
 });
+// Keep search aliases in document metadata while preserving visible labels and leads.
 const ARCHIVE_SEARCH_METADATA = Object.freeze({
   "dcinside-singularity": {
     title: "특이점이 온다(특갤) 인기글 모음",
