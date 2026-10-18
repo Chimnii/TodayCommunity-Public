@@ -26,6 +26,24 @@ const ARCHIVE_MASTHEAD_DESCRIPTIONS = Object.freeze({
   "game-news": "게임 신작, 인터뷰와 업계 동향을 휴리스틱하게 선별한 기사.",
   all: "모든 공개 아카이브의 글을 최신순으로 모았습니다.",
 });
+const ARCHIVE_SEARCH_METADATA = Object.freeze({
+  "dcinside-singularity": {
+    title: "특이점이 온다(특갤) 인기글 모음",
+    description: "특갤로 불리는 디시인사이드 특이점이 온다 갤러리의 인기글을 모아봅니다.",
+  },
+  "dcinside-agent-stack": {
+    title: "AI 활용(에활갤) 인기글 모음",
+    description: "에활갤로 불리는 디시인사이드 AI 활용 갤러리의 인기글을 모아봅니다.",
+  },
+  "dcinside-zeus-pride": {
+    title: "제우스 오만의 신 인기글 모음",
+    description: "디시인사이드 제우스 오만의 신 갤러리의 정보·공략과 인기글을 모아봅니다.",
+  },
+  "fmkorea-munich": {
+    title: "바이에른 뮌헨 인기글 모음",
+    description: "에펨코리아의 바이에른 뮌헨 소식과 팬 커뮤니티 인기글을 모아봅니다.",
+  },
+});
 const ARCHIVE_ROW_LABELS = Object.freeze({
   "dcinside-singularity": "특이점",
   "dcinside-agent-stack": "AI활용",
@@ -3176,11 +3194,12 @@ function writeStateToControls() {
 function updatePageMetadata() {
   const archive = findArchive(FALLBACK_ARCHIVES, state.target);
   const isFavorites = state.target === FAVORITES_TARGET;
+  const metadata = archive ? ARCHIVE_SEARCH_METADATA[state.target] : null;
   const title = archive
-    ? `${archive.display_name} | 오늘의 커뮤니티`
+    ? `${metadata?.title || archive.display_name} | 오늘의 커뮤니티`
     : isFavorites ? "즐겨찾기 | 오늘의 커뮤니티" : "오늘의 커뮤니티 | 선별 글 아카이브";
   const description = archive
-    ? `${ARCHIVE_MASTHEAD_DESCRIPTIONS[state.target]} ${state.target === "game-news"
+    ? `${metadata?.description || ARCHIVE_MASTHEAD_DESCRIPTIONS[state.target]} ${state.target === "game-news"
       ? "제목과 출처를 살펴보고 원문 기사로 이동하세요."
       : state.target === ALL_TARGET
         ? "관심 있는 주제의 제목과 원문 링크를 한곳에서 확인하세요."
