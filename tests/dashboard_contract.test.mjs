@@ -22,7 +22,7 @@ const [html, app, css, design, fixtureServer] = await Promise.all([
 ]);
 
 test("ships the compact archive surface and hidden collection dialog", () => {
-  assert.match(html, /<title>특이점이 온다\(특갤\) 인기글 모음 \| 오늘의 커뮤니티<\/title>/);
+  assert.match(html, /<title>오늘의 커뮤니티<\/title>/);
   assert.match(html, /id="archive-board"[\s\S]*role="table"/);
   assert.match(html, /id="pagination"[\s\S]*aria-label="게시글 페이지"/);
   assert.match(html, /<dialog[^>]*id="runs-drawer"/);
@@ -314,7 +314,7 @@ test("switches archive targets and pages with history-aware URLs", () => {
   assert.match(app, /state\.page = 1/);
   assert.match(app, /elements\.archiveTitle\.textContent = `\$\{archive\.display_name\} 아카이브`/);
   assert.match(app, /document\.title = title/);
-  assert.match(app, /`\$\{metadata\?\.title \|\| archive\.display_name\} \| 오늘의 커뮤니티`/);
+  assert.match(app, /const title = "오늘의 커뮤니티"/);
 });
 
 test("keeps source provenance when a display archive combines feeds", () => {
@@ -396,9 +396,9 @@ test("filters by exact subjects from the complete saved set", () => {
 });
 
 test("shows an archive-specific two-line collection summary", () => {
-  assert.match(html, /디시인사이드 특이점이 온다 갤러리 인기글\.<br \/>/);
-  assert.match(app, /"dcinside-singularity": "디시인사이드 특이점이 온다 갤러리 인기글\."/);
-  assert.match(app, /"dcinside-agent-stack": "디시인사이드 AI 활용 갤러리 인기글\."/);
+  assert.match(html, /디시인사이드 특이점이 온다 갤러리 \(특갤\) 인기글\.<br \/>/);
+  assert.match(app, /"dcinside-singularity": "디시인사이드 특이점이 온다 갤러리 \(특갤\) 인기글\."/);
+  assert.match(app, /"dcinside-agent-stack": "디시인사이드 AI 활용 갤러리 \(에활갤\) 인기글\."/);
   assert.match(app, /"dcinside-zeus-pride": "디시인사이드 제우스 오만의 신 갤러리 인기글\."/);
   assert.match(app, /"fmkorea-munich": "에펨코리아 바이에른 뮌헨 관련 인기글\."/);
   assert.match(

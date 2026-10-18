@@ -1,31 +1,12 @@
 const ORIGIN = "https://todaycommunity.pages.dev";
 const DEFAULT_TARGET = "dcinside-singularity";
 const PUBLIC_ARCHIVES = Object.freeze({
-  "dcinside-singularity": ["특이점이 온다", "디시인사이드 특이점이 온다 갤러리 인기글.", "community"],
-  "dcinside-agent-stack": ["AI 활용", "디시인사이드 AI 활용 갤러리 인기글.", "community"],
+  "dcinside-singularity": ["특이점이 온다", "디시인사이드 특이점이 온다 갤러리 (특갤) 인기글.", "community"],
+  "dcinside-agent-stack": ["AI 활용", "디시인사이드 AI 활용 갤러리 (에활갤) 인기글.", "community"],
   "dcinside-zeus-pride": ["제우스 오만의 신", "디시인사이드 제우스 오만의 신 갤러리 인기글.", "community"],
   "fmkorea-munich": ["뮌헨", "에펨코리아 바이에른 뮌헨 관련 인기글.", "community"],
   "game-news": ["게임 뉴스", "게임 신작, 인터뷰와 업계 동향을 휴리스틱하게 선별한 기사.", "article"],
   all: ["모두", "모든 공개 아카이브의 글을 최신순으로 모았습니다.", "mixed"],
-});
-// Keep search aliases in document metadata while preserving visible labels and leads.
-const ARCHIVE_SEARCH_METADATA = Object.freeze({
-  "dcinside-singularity": {
-    title: "특이점이 온다(특갤) 인기글 모음",
-    description: "특갤로 불리는 디시인사이드 특이점이 온다 갤러리의 인기글을 모아봅니다.",
-  },
-  "dcinside-agent-stack": {
-    title: "AI 활용(에활갤) 인기글 모음",
-    description: "에활갤로 불리는 디시인사이드 AI 활용 갤러리의 인기글을 모아봅니다.",
-  },
-  "dcinside-zeus-pride": {
-    title: "제우스 오만의 신 인기글 모음",
-    description: "디시인사이드 제우스 오만의 신 갤러리의 정보·공략과 인기글을 모아봅니다.",
-  },
-  "fmkorea-munich": {
-    title: "바이에른 뮌헨 인기글 모음",
-    description: "에펨코리아의 바이에른 뮌헨 소식과 팬 커뮤니티 인기글을 모아봅니다.",
-  },
 });
 const ARCHIVE_LABELS = { "dcinside-singularity": "특이점", "dcinside-agent-stack": "AI활용",
   "dcinside-zeus-pride": "제우스", "fmkorea-munich": "Bayern", "game-news": "게임뉴스" };
@@ -73,12 +54,11 @@ export function publicPageState(request) {
   const [label, lead, kind] = known ? PUBLIC_ARCHIVES[target] : favorites
     ? ["즐겨찾기", "시크릿 사용자들이 함께 저장한 글.", "mixed"]
     : ["아카이브를 찾을 수 없습니다", "아카이브 탭에서 공개 목록을 선택해 주세요.", "community"];
-  const metadata = known ? ARCHIVE_SEARCH_METADATA[target] : null;
-  const description = known ? `${metadata?.description || lead} ${kind === "article" ? "제목과 출처를 살펴보고 원문 기사로 이동하세요."
+  const description = known ? `${lead} ${kind === "article" ? "제목과 출처를 살펴보고 원문 기사로 이동하세요."
     : kind === "mixed" ? "관심 있는 주제의 제목과 원문 링크를 한곳에서 확인하세요."
       : "제목·말머리·추천·댓글 정보를 살펴보고 원문으로 이동하세요."}` : lead;
   return { target, known, favorites, privateRequest, canonical, label, lead, kind, description,
-    title: `${metadata?.title || label} | 오늘의 커뮤니티`,
+    title: "오늘의 커뮤니티",
     robots: !known ? "noindex, nofollow" : privateRequest || !baseQuery || url.origin !== ORIGIN ? "noindex, follow" : "index, follow",
     renderArchive: known && baseQuery && !privateRequest,
     status: known || favorites ? 200 : 404,

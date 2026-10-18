@@ -73,7 +73,7 @@ function bootstrap(html) {
   return match ? JSON.parse(match[1]) : null;
 }
 
-test("all six public archive entry URLs render real stored links and distinct canonical metadata", async () => {
+test("public archives share the site title while keeping distinct descriptions and canonical URLs", async () => {
   const targets = ["dcinside-singularity", "dcinside-agent-stack", "dcinside-zeus-pride", "fmkorea-munich", "game-news", "all"];
   const titles = new Set();
   const descriptions = new Set();
@@ -103,7 +103,7 @@ test("all six public archive entry URLs render real stored links and distinct ca
       assert.match(html, /data-content-kind="mixed"/);
     }
   }
-  assert.equal(titles.size, 6);
+  assert.deepEqual([...titles], ["오늘의 커뮤니티"]);
   assert.equal(descriptions.size, 6);
   const root = await page();
   assert.equal(bootstrap(root.html).payload.target, targets[0]);

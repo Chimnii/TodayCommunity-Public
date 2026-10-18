@@ -175,16 +175,15 @@ function metadataHarness(href = "https://todaycommunity.pages.dev/") {
 test("public tab navigation and back navigation keep canonical, title and sharing metadata aligned", () => {
   const h = metadataHarness();
   h.hydrateStateFromUrl();
-  assert.equal(h.document.title, "특이점이 온다(특갤) 인기글 모음 | 오늘의 커뮤니티");
+  assert.equal(h.document.title, "오늘의 커뮤니티");
   assert.equal(h.canonical(), "https://todaycommunity.pages.dev/");
-  for (const [target, name] of [
-    ["dcinside-singularity", "특이점이 온다(특갤) 인기글 모음"],
-    ["dcinside-agent-stack", "AI 활용(에활갤) 인기글 모음"], ["dcinside-zeus-pride", "제우스 오만의 신 인기글 모음"],
-    ["fmkorea-munich", "바이에른 뮌헨 인기글 모음"], ["game-news", "게임 뉴스"], ["all", "모두"],
+  for (const target of [
+    "dcinside-singularity", "dcinside-agent-stack", "dcinside-zeus-pride",
+    "fmkorea-munich", "game-news", "all",
   ]) {
     h.state.target = target;
     h.syncStateToUrl({ replace: false });
-    assert.equal(h.document.title, `${name} | 오늘의 커뮤니티`);
+    assert.equal(h.document.title, "오늘의 커뮤니티");
     const serverPage = publicPageState(new Request(h.window.location.href));
     assert.equal(h.canonical(), target === "dcinside-singularity"
       ? "https://todaycommunity.pages.dev/" : `https://todaycommunity.pages.dev/?target=${target}`);
@@ -197,7 +196,7 @@ test("public tab navigation and back navigation keep canonical, title and sharin
   }
   h.window.location.href = "https://todaycommunity.pages.dev/?target=dcinside-agent-stack";
   h.hydrateStateFromUrl();
-  assert.equal(h.document.title, "AI 활용(에활갤) 인기글 모음 | 오늘의 커뮤니티");
+  assert.equal(h.document.title, "오늘의 커뮤니티");
   assert.equal(h.canonical(), h.window.location.href);
 });
 
