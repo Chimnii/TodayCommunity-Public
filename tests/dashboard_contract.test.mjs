@@ -22,7 +22,7 @@ const [html, app, css, design, fixtureServer] = await Promise.all([
 ]);
 
 test("ships the compact archive surface and hidden collection dialog", () => {
-  assert.match(html, /<title>오늘의 커뮤니티 \| 선별 글 아카이브<\/title>/);
+  assert.match(html, /<title>특이점이 온다 \| 오늘의 커뮤니티<\/title>/);
   assert.match(html, /id="archive-board"[\s\S]*role="table"/);
   assert.match(html, /id="pagination"[\s\S]*aria-label="게시글 페이지"/);
   assert.match(html, /<dialog[^>]*id="runs-drawer"/);
@@ -313,7 +313,8 @@ test("switches archive targets and pages with history-aware URLs", () => {
   assert.match(app, /window\.addEventListener\("popstate"/);
   assert.match(app, /state\.page = 1/);
   assert.match(app, /elements\.archiveTitle\.textContent = `\$\{archive\.display_name\} 아카이브`/);
-  assert.match(app, /document\.title = `\$\{archive\.display_name\} \| 오늘의 커뮤니티`/);
+  assert.match(app, /document\.title = title/);
+  assert.match(app, /`\$\{archive\.display_name\} \| 오늘의 커뮤니티`/);
 });
 
 test("keeps source provenance when a display archive combines feeds", () => {

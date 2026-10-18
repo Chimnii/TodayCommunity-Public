@@ -50,7 +50,7 @@ test("loads the dashboard's pagination helpers without running initialize", () =
   assert.equal(typeof normalizePagination, "function");
 });
 
-function archiveRequestHarness({ storage, fetchImpl, now = () => 1000 } = {}) {
+function archiveRequestHarness({ storage, fetchImpl, bootstrap, now = () => 1000 } = {}) {
   const calls = [];
   const urls = [];
   const events = [];
@@ -59,7 +59,9 @@ function archiveRequestHarness({ storage, fetchImpl, now = () => 1000 } = {}) {
     json: async () => ({ target: "dcinside-singularity", posts: [], pagination: { page: 1 } }),
   };
   const runtime = vm.createContext({
-    document: { querySelector() {
+    document: { querySelector(selector) {
+      if (selector === "#archive-bootstrap") return bootstrap === undefined
+        ? null : { textContent: typeof bootstrap === "string" ? bootstrap : JSON.stringify(bootstrap) };
       return {
         setCustomValidity(value) { events.push({ type: "validity", value }); },
         reportValidity() { events.push({ type: "report-validity" }); },
@@ -90,6 +92,133 @@ function archiveRequestHarness({ storage, fetchImpl, now = () => 1000 } = {}) {
   `, runtime);
   return { ...runtime.archiveReview, calls, urls, events, successfulResponse };
 }
+
+function publicBootstrap(overrides = {}) {
+  return {
+    version: 1,
+    api_url: "/api/archive?target=dcinside-singularity&page=1&page_size=30&min_upvotes=0&min_comments=0&sort=created_at",
+    expires_at: 10_000,
+    payload: { target: "dcinside-singularity", posts: [{ title: "server-rendered post" }], pagination: { page: 1 } },
+    ...overrides,
+  };
+}
+
+test("fresh matching public bootstrap renders once without an empty loading state or duplicate API request", async () => {
+  const h = archiveRequestHarness({ bootstrap: publicBootstrap() });
+  await h.loadArchive();
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.state.archive.posts[0].title, "server-rendered post");
+  assert.deepEqual(h.events.map(event => event.type), ["validity", "render"]);
+  await h.loadArchive();
+  assert.equal(h.calls.length, 1, "subsequent explicit reloads must use the normal API cache");
+});
+
+test("expired, malformed, mismatched and visibility-invalidated bootstrap always uses the live API", async () => {
+  for (const options of [
+    { bootstrap: publicBootstrap({ expires_at: 1000 }) },
+    { bootstrap: publicBootstrap({ expires_at: "10000" }) },
+    { bootstrap: "not JSON" },
+    { bootstrap: publicBootstrap({ version: 2 }) },
+    { bootstrap: publicBootstrap({ api_url: "/api/archive?target=game-news" }) },
+    { bootstrap: publicBootstrap({ payload: { target: "game-news", posts: [] } }) },
+    { bootstrap: publicBootstrap(), storage: { getItem: () => "2000" } },
+  ]) {
+    const h = archiveRequestHarness(options);
+    await h.loadArchive();
+    assert.equal(h.calls.length, 1);
+    assert.ok(h.events.some(event => event.type === "loading"));
+  }
+});
+
+test("filters, later pages and authenticated all exclusions cannot reuse the public first-page bootstrap", async () => {
+  for (const change of [
+    { search: "query" }, { subject: "AI" }, { page: 2 }, { pageSize: 50 },
+    { minComments: 1 }, { minUpvotes: 1 }, { sortBy: "comments" },
+  ]) {
+    const h = archiveRequestHarness({ bootstrap: publicBootstrap() });
+    Object.assign(h.state, change);
+    await h.loadArchive();
+    assert.equal(h.calls.length, 1, JSON.stringify(change));
+  }
+  const h = archiveRequestHarness({ bootstrap: publicBootstrap({
+    api_url: publicBootstrap().api_url.replace("dcinside-singularity", "all"),
+    payload: { target: "all", posts: [], pagination: { page: 1 } },
+  }) });
+  Object.assign(h.state, { target: "all", archiveFilterLoaded: true,
+    feedbackSession: { authentication: "authenticated" }, excludedArchiveKeys: new Set(["game-news"]) });
+  await h.loadArchive();
+  assert.equal(h.calls.length, 1);
+  assert.match(h.urls[0], /exclude_archive=game-news/);
+});
+
+function metadataHarness(href = "https://todaycommunity.pages.dev/") {
+  const nodes = new Map();
+  const document = { body: { dataset: {} }, querySelector(selector) {
+    if (!nodes.has(selector)) nodes.set(selector, { setAttribute(key, value) { this[key] = value; } });
+    return nodes.get(selector);
+  } };
+  const window = { location: { href }, history: {
+    replaceState(_state, _title, url) { window.location.href = String(url); },
+    pushState(_state, _title, url) { window.location.href = String(url); },
+  } };
+  const runtime = vm.createContext({ document, window, URL });
+  vm.runInContext(`${appWithoutInitialization}
+    globalThis.metadataReview = { state, hydrateStateFromUrl, syncStateToUrl, updatePageMetadata };
+  `, runtime);
+  return { ...runtime.metadataReview, document, window,
+    content: selector => nodes.get(selector)?.content,
+    canonical: () => nodes.get('link[rel="canonical"]')?.href };
+}
+
+test("public tab navigation and back navigation keep canonical, title and sharing metadata aligned", () => {
+  const h = metadataHarness();
+  h.hydrateStateFromUrl();
+  assert.equal(h.document.title, "특이점이 온다 | 오늘의 커뮤니티");
+  assert.equal(h.canonical(), "https://todaycommunity.pages.dev/");
+  for (const [target, name] of [
+    ["dcinside-agent-stack", "AI 활용"], ["dcinside-zeus-pride", "제우스 오만의 신"],
+    ["fmkorea-munich", "뮌헨"], ["game-news", "게임 뉴스"], ["all", "모두"],
+  ]) {
+    h.state.target = target;
+    h.syncStateToUrl({ replace: false });
+    assert.equal(h.document.title, `${name} | 오늘의 커뮤니티`);
+    assert.equal(h.canonical(), `https://todaycommunity.pages.dev/?target=${target}`);
+    assert.equal(h.content('meta[property="og:title"]'), h.document.title);
+    assert.equal(h.content('meta[property="og:url"]'), h.canonical());
+    assert.equal(h.content('meta[name="twitter:description"]'), h.content('meta[name="description"]'));
+    assert.equal(h.content('meta[name="robots"]'), "index,follow");
+  }
+  h.window.location.href = "https://todaycommunity.pages.dev/?target=game-news";
+  h.hydrateStateFromUrl();
+  assert.equal(h.document.title, "게임 뉴스 | 오늘의 커뮤니티");
+  assert.equal(h.canonical(), h.window.location.href);
+});
+
+test("private, search, cursor and malformed query views remain noindex until navigation clears the variant", () => {
+  for (const query of ["q=AI", "page=2", "cursor=next", "page_size=50", "target=all&sort=comments", "target=all&target=all", "unknown=1"]) {
+    const h = metadataHarness(`https://todaycommunity.pages.dev/?${query}`);
+    h.hydrateStateFromUrl();
+    assert.equal(h.content('meta[name="robots"]'), "noindex,follow", query);
+  }
+  for (const target of ["favorites", "missing-archive"]) {
+    const h = metadataHarness(`https://todaycommunity.pages.dev/?target=${target}`);
+    h.hydrateStateFromUrl();
+    assert.equal(h.content('meta[name="robots"]'), "noindex,nofollow");
+    assert.equal(h.canonical(), "https://todaycommunity.pages.dev/");
+  }
+  const h = metadataHarness("https://todaycommunity.pages.dev/?target=game-news&q=AI");
+  h.hydrateStateFromUrl();
+  h.state.search = "";
+  h.syncStateToUrl();
+  assert.equal(h.content('meta[name="robots"]'), "index,follow");
+  h.state.feedbackSession = { authentication: "authenticated" };
+  h.updatePageMetadata();
+  assert.equal(h.content('meta[name="robots"]'), "noindex,follow");
+  h.state.feedbackSession = { authentication: "guest" };
+  h.document.body.dataset.privateRequest = "true";
+  h.updatePageMetadata();
+  assert.equal(h.content('meta[name="robots"]'), "noindex,follow");
+});
 
 function filterRequestHarness() {
   const timers = new Map();

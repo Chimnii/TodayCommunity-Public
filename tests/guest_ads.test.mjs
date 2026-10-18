@@ -7,10 +7,10 @@ const source = (await readFile(new URL("../dashboard/app.js", import.meta.url), 
   .replace(/\binitialize\(\);\s*$/, "");
 const guest = { authentication: "guest", actor: null, capabilities: { rate: false, manage_auth: false } };
 
-function harness(fetchImpl, { origin = "https://todaycommunity.pages.dev", wide = true } = {}) {
+function harness(fetchImpl, { origin = "https://todaycommunity.pages.dev", width = 390 } = {}) {
   const scripts = [];
   const calls = [];
-  const slot = { hidden: true };
+  const slot = { hidden: true, dataset: {} };
   let context;
   const mount = {
     children: [],
@@ -34,7 +34,8 @@ function harness(fetchImpl, { origin = "https://todaycommunity.pages.dev", wide 
   };
   const aclib = { runBanner(options) { calls.push({ ...options, parent: document.currentScript.parentElement }); } };
   context = vm.createContext({
-    document, window: { location: { origin }, matchMedia: () => ({ matches: wide }), aclib },
+    document, window: { location: { origin },
+      matchMedia: query => ({ matches: width >= Number(query.match(/min-width: (\d+)px/)[1]) }), aclib },
     aclib, fetch: fetchImpl, console,
   });
   vm.runInContext(`${source}
@@ -43,7 +44,8 @@ function harness(fetchImpl, { origin = "https://todaycommunity.pages.dev", wide 
       loadArchive = () => {};
     globalThis.review = { initialize, initializeGuestBanner, state };
   `, context);
-  return { ...context.review, scripts, calls, slot, mount, context };
+  return { ...context.review, scripts, calls, slot, mount, context,
+    resize(value) { width = value; } };
 }
 
 const response = payload => async () => ({ ok: true, json: async () => payload });
@@ -104,13 +106,45 @@ test("unregistered origins and viewports narrower than the banner never request 
   for (const options of [
     { origin: "http://127.0.0.1:4173" },
     { origin: "https://preview.todaycommunity.pages.dev" },
-    { wide: false },
+    { width: 319 },
   ]) {
     const h = harness(response(guest), options);
     await h.initialize();
     assert.equal(h.scripts.length, 0);
     assert.equal(h.slot.hidden, true);
   }
+});
+
+test("desktop and mobile select one matching zone and resizing never creates a second placement", async () => {
+  for (const [width, zoneId, format] of [
+    [320, "12327306", "mobile"], [390, "12327306", "mobile"], [819, "12327306", "mobile"],
+    [820, "12331002", "leaderboard"], [1280, "12331002", "leaderboard"],
+  ]) {
+    const h = harness(response(guest), { width });
+    await h.initialize();
+    h.scripts[0].onload();
+    assert.equal(h.calls.length, 1);
+    assert.equal(h.calls[0].zoneId, zoneId);
+    assert.equal(h.slot.dataset.format, format);
+    h.resize(width >= 820 ? 390 : 1280);
+    h.initializeGuestBanner(guest);
+    assert.equal(h.scripts.length, 1);
+    assert.equal(h.calls.length, 1);
+    assert.equal(h.slot.dataset.format, format);
+  }
+});
+
+test("a delayed wide banner is not initialized after the viewport becomes too narrow", async () => {
+  const h = harness(response(guest), { width: 1280 });
+  await h.initialize();
+  h.resize(390);
+  h.scripts[0].onload();
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.slot.hidden, true);
+  h.resize(1280);
+  h.initializeGuestBanner(guest);
+  assert.equal(h.scripts.length, 1);
+  assert.equal(h.calls.length, 0);
 });
 
 test("a delayed library cannot mount a banner after the verified session changes", async () => {

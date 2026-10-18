@@ -292,6 +292,26 @@ let quickPageCursors = { key: "", expiresAt: 0, cursors: new Map([[1, ""]]), end
 let searchComposing = false;
 let hiddenCountRequest = null;
 let hiddenCountGeneration = 0;
+let archiveBootstrapConsumed = false;
+
+function consumeArchiveBootstrap(bypassCache) {
+  if (archiveBootstrapConsumed) return null;
+  archiveBootstrapConsumed = true;
+  const script = document.querySelector("#archive-bootstrap");
+  if (!script?.textContent || bypassCache || state.target === FAVORITES_TARGET) return null;
+  try {
+    const bootstrap = JSON.parse(script.textContent);
+    if (bootstrap?.version !== 1 || bootstrap.api_url !== buildApiUrl()
+      || !Number.isFinite(bootstrap.expires_at) || bootstrap.expires_at <= Date.now()
+      || bootstrap.payload?.target !== state.target || !Array.isArray(bootstrap.payload?.posts)
+      || !FALLBACK_ARCHIVES.some(archive => archive.archive_key === state.target)) {
+      return null;
+    }
+    return { payload: bootstrap.payload, cursor: state.cursor };
+  } catch {
+    return null;
+  }
+}
 
 function filteredArchiveRequest() {
   return Boolean(state.search || state.subject || state.topicId > 0 || state.minUpvotes > 0 || state.minComments > 0);
@@ -393,12 +413,13 @@ async function loadArchive() {
 
   const controller = new AbortController();
   state.activeRequest = controller;
-  renderLoadingState();
+  const bypassCache = archiveCacheBypassActive();
+  const bootstrap = consumeArchiveBootstrap(bypassCache);
+  if (!bootstrap) renderLoadingState();
 
   try {
-    const bypassCache = archiveCacheBypassActive();
     const favoritesRevision = state.favoritesRevision;
-    const loaded = await fetchArchivePage(controller, bypassCache);
+    const loaded = bootstrap || await fetchArchivePage(controller, bypassCache);
     if (!loaded || controller.signal.aborted) return;
     const { payload, cursor } = loaded;
     if (state.cursor !== cursor) {
@@ -904,6 +925,8 @@ function renderArchiveTabs() {
     tab.setAttribute("aria-selected", String(key === state.target));
     tab.tabIndex = key === state.target ? 0 : -1;
     tab.addEventListener("click", (event) => {
+      if (event.defaultPrevented || event.button !== 0 || event.metaKey
+        || event.ctrlKey || event.shiftKey || event.altKey) return;
       event.preventDefault();
       selectArchive(key);
     });
@@ -989,6 +1012,7 @@ function selectArchive(target) {
 function render() {
   normalizeContentState();
   applyContentKindMode();
+  updatePageMetadata();
   const view = getViewModel();
   elements.board.setAttribute("aria-busy", "false");
   renderArchiveTabs();
@@ -1232,17 +1256,14 @@ function renderSummary(view) {
     );
     elements.archiveTitle.textContent = `${archive.display_name} 아카이브`;
     elements.board.setAttribute("aria-label", `${archive.display_name} 저장 글`);
-    document.title = `${archive.display_name} | 오늘의 커뮤니티`;
   } else if (source) {
     elements.sourceDescription.textContent = `${source.board_name}에서 ${SOURCE_DESCRIPTION}`;
     elements.archiveTitle.textContent = "선별 글 아카이브";
     elements.board.setAttribute("aria-label", "저장된 커뮤니티 글");
-    document.title = "오늘의 커뮤니티 | 선별 글 아카이브";
   } else {
     elements.sourceDescription.textContent = state.archive?.error || "대상 게시판 정보를 확인할 수 없습니다.";
     elements.archiveTitle.textContent = "선별 글 아카이브";
     elements.board.setAttribute("aria-label", "저장된 커뮤니티 글");
-    document.title = "오늘의 커뮤니티 | 선별 글 아카이브";
   }
 
   elements.summaryTotal.textContent = numberFormatter.format(view.totalPosts);
@@ -1765,7 +1786,12 @@ function initializeGuestBanner(session) {
   if (!slot || !mount || document.querySelector("#aclib")) {
     return;
   }
+  const desktopBanner = window.matchMedia("(min-width: 820px)").matches;
+  const zoneId = desktopBanner ? "12331002" : "12327306";
+  const minimumViewport = desktopBanner ? "(min-width: 820px)" : "(min-width: 320px)";
+  slot.dataset.format = desktopBanner ? "leaderboard" : "mobile";
   // One library and one banner per document, including tab/filter/page changes.
+  // Resizing only hides a placement that no longer fits; it never requests another zone.
   guestBannerAttempted = true;
   const library = document.createElement("script");
   library.id = "aclib";
@@ -1776,14 +1802,15 @@ function initializeGuestBanner(session) {
     mount.replaceChildren();
   };
   library.onload = () => {
-    if (!isVerifiedGuest() || typeof window.aclib?.runBanner !== "function") {
+    if (!isVerifiedGuest() || !window.matchMedia(minimumViewport).matches
+      || typeof window.aclib?.runBanner !== "function") {
       library.onerror();
       return;
     }
     // Adcash locates the placement through the calling script's parent element.
     const tag = document.createElement("script");
     tag.textContent = `try {
-      aclib.runBanner({ zoneId: '12327306' });
+      aclib.runBanner({ zoneId: '${zoneId}' });
     } catch {
       document.getElementById('guest-ad').hidden = true;
     }`;
@@ -3146,6 +3173,42 @@ function writeStateToControls() {
   renderArchiveFilterControls();
 }
 
+function updatePageMetadata() {
+  const archive = findArchive(FALLBACK_ARCHIVES, state.target);
+  const isFavorites = state.target === FAVORITES_TARGET;
+  const title = archive
+    ? `${archive.display_name} | 오늘의 커뮤니티`
+    : isFavorites ? "즐겨찾기 | 오늘의 커뮤니티" : "오늘의 커뮤니티 | 선별 글 아카이브";
+  const description = archive
+    ? `${ARCHIVE_MASTHEAD_DESCRIPTIONS[state.target]} ${state.target === "game-news"
+      ? "제목과 출처를 살펴보고 원문 기사로 이동하세요."
+      : state.target === ALL_TARGET
+        ? "관심 있는 주제의 제목과 원문 링크를 한곳에서 확인하세요."
+        : "제목·말머리·추천·댓글 정보를 살펴보고 원문으로 이동하세요."}`
+    : isFavorites ? FAVORITES_ARCHIVE.description : LIST_ONLY_DESCRIPTION;
+  const canonical = new URL("https://todaycommunity.pages.dev/");
+  if (archive && state.target !== DEFAULT_TARGET) canonical.searchParams.set("target", state.target);
+  const params = new URL(window.location.href).searchParams;
+  const publicQuery = [...params.keys()].every(key => key === "target")
+    && params.getAll("target").length <= 1
+    && (!params.has("target") || params.get("target") === state.target);
+  const privateView = document.body?.dataset?.privateRequest === "true"
+    || ["authenticated", "admin"].includes(state.feedbackSession?.authentication);
+  const robots = !archive ? "noindex,nofollow"
+    : !publicQuery || privateView ? "noindex,follow" : "index,follow";
+  document.title = title;
+  document.querySelector('link[rel="canonical"]')?.setAttribute("href", canonical.href);
+  for (const [selector, value] of [
+    ['meta[name="description"]', description],
+    ['meta[name="robots"]', robots],
+    ['meta[property="og:title"]', title],
+    ['meta[property="og:description"]', description],
+    ['meta[property="og:url"]', canonical.href],
+    ['meta[name="twitter:title"]', title],
+    ['meta[name="twitter:description"]', description],
+  ]) document.querySelector(selector)?.setAttribute("content", value);
+}
+
 function hydrateStateFromUrl() {
   const params = new URL(window.location.href).searchParams;
   const sortBy = params.get("sort") || DEFAULT_STATE.sortBy;
@@ -3167,6 +3230,7 @@ function hydrateStateFromUrl() {
   state.pageSize = VALID_PAGE_SIZES.has(pageSize) ? pageSize : DEFAULT_STATE.pageSize;
   state.cursor = String(params.get("cursor") || "").trim().slice(0, 8192);
   normalizeContentState();
+  updatePageMetadata();
 }
 
 function syncStateToUrl({ replace = true } = {}) {
@@ -3195,6 +3259,7 @@ function syncStateToUrl({ replace = true } = {}) {
 
   const method = replace ? "replaceState" : "pushState";
   window.history[method](null, "", url);
+  updatePageMetadata();
 }
 
 function renderLoadingState() {

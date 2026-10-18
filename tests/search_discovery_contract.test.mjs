@@ -75,15 +75,20 @@ test("allows public crawling and advertises the sitemap", () => {
   );
 });
 
-test("lists only the three canonical public pages in the sitemap", () => {
+test("lists canonical public archives and information pages without private or filter URLs", () => {
   const locations = [...sitemap.matchAll(/<loc>([^<]+)<\/loc>/gu)].map((match) => match[1]);
   assert.deepEqual(locations, [
     "https://todaycommunity.pages.dev/",
+    "https://todaycommunity.pages.dev/?target=dcinside-agent-stack",
+    "https://todaycommunity.pages.dev/?target=dcinside-zeus-pride",
+    "https://todaycommunity.pages.dev/?target=fmkorea-munich",
+    "https://todaycommunity.pages.dev/?target=game-news",
+    "https://todaycommunity.pages.dev/?target=all",
     "https://todaycommunity.pages.dev/about",
     "https://todaycommunity.pages.dev/privacy",
   ]);
   for (const location of locations) {
-    assert.doesNotMatch(location, /[?&]|\/admin|\/owner|\/api/u);
+    assert.doesNotMatch(location, /[&]|favorites|\/admin|\/owner|\/api|cursor=|search=/u);
   }
 });
 

@@ -1134,6 +1134,8 @@ export async function onRequestGet(context) {
       const remaining = Math.max(0, Math.floor((cachedMetadata.expires_at - Date.now()) / 1000));
       response.headers.set("cache-control", `public, max-age=${Math.min(15, remaining)}, s-maxage=${remaining}`);
     }
+    const responseTtl = Number(response.headers.get("cache-control").match(/s-maxage=(\d+)/)?.[1] ?? 0);
+    response.headers.set("x-tc-expires-at", String(Date.now() + responseTtl * 1000));
     if (edgeCache) {
       await storePublicCache(edgeCache, cacheKey, response.clone(), context);
     }

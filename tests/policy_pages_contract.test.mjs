@@ -40,15 +40,21 @@ test("describes the service as a metadata-only bookmark that requires the origin
   assert.doesNotMatch(aboutHtml, /개인 운영|제휴|공식적으로 운영|삭제·정정|GitHub/u);
 });
 
-test("discloses guest-only Adcash advertising and third-party data handling", () => {
-  assert.match(privacyHtml, /이용자의 개인정보를 직접 수집하거나\s+저장하지 않습니다/u);
+test("discloses guest-only advertising, cookieless analytics and third-party data handling", () => {
+  assert.match(privacyHtml, /공개 글 목록을 회원가입 없이 제공합니다/u);
   assert.match(privacyHtml, /비로그인 방문자에게 Adcash의 일반 배너/u);
   assert.match(privacyHtml, /인증 상태를 확인하지 못한 경우에도 광고를 불러오지 않습니다/u);
   assert.match(privacyHtml, /쿠키·웹 비콘/u);
   assert.match(privacyHtml, /IP 주소, 브라우저·기기 정보/u);
   assert.match(privacyHtml, /href="https:\/\/adcash.com\/legal\/"/u);
-  assert.doesNotMatch(privacyHtml, /현재 광고는 게재하지 않습니다|시크릿 링크|관리자|기사 평가/u);
-  assert.match(privacyHtml, /시행일: 2026년 10월 18일/u);
+  assert.match(privacyHtml, /Cloudflare Web Analytics를 사용합니다/u);
+  assert.match(privacyHtml, /페이지 조회, 유입 사이트, 국가, 브라우저·기기 유형과 페이지 성능/u);
+  assert.match(privacyHtml, /개인을 추적하는 쿠키나 브라우저 지문을 사용하지 않습니다/u);
+  assert.match(privacyHtml, /통계만으로 특정 방문자의 신원이나 실제 사람 여부를 확정할 수는 없습니다/u);
+  assert.match(privacyHtml, /href="https:\/\/developers\.cloudflare\.com\/web-analytics\/about\/"/u);
+  assert.match(privacyHtml, /href="https:\/\/www\.cloudflare\.com\/privacypolicy\/"/u);
+  assert.doesNotMatch(privacyHtml, /현재 광고는 게재하지 않습니다|이용자의 개인정보를 직접 수집하거나\s+저장하지 않습니다|시크릿 링크|관리자|기사 평가/u);
+  assert.match(privacyHtml, /시행일: 2026년 10월 19일/u);
 });
 
 test("ships static, responsive pages through the public mirror", () => {
