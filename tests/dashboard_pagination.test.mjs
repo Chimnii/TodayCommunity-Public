@@ -165,7 +165,7 @@ function metadataHarness(href = "https://todaycommunity.pages.dev/") {
   } };
   const runtime = vm.createContext({ document, window, URL });
   vm.runInContext(`${appWithoutInitialization}
-    globalThis.metadataReview = { state, hydrateStateFromUrl, syncStateToUrl, updatePageMetadata };
+    globalThis.metadataReview = { state, hydrateStateFromUrl, syncStateToUrl, updatePageMetadata, headings: ARCHIVE_HEADINGS };
   `, runtime);
   return { ...runtime.metadataReview, document, window,
     content: selector => nodes.get(selector)?.content,
@@ -188,6 +188,7 @@ test("public tab navigation and back navigation keep canonical, title and sharin
     assert.equal(h.canonical(), target === "dcinside-singularity"
       ? "https://todaycommunity.pages.dev/" : `https://todaycommunity.pages.dev/?target=${target}`);
     assert.equal(h.document.title, serverPage.title);
+    assert.equal(h.headings[target], serverPage.heading);
     assert.equal(h.content('meta[name="description"]'), serverPage.description);
     assert.equal(h.content('meta[property="og:title"]'), serverPage.shareTitle);
     assert.equal(h.content('meta[property="og:url"]'), h.canonical());

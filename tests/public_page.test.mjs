@@ -21,6 +21,7 @@ const runtime = new Miniflare(convertV4MiniflareOptions({
 export default {
   async fetch(request, env, execution) {
     let apiRequest = null;
+    let apiCalls = 0;
     const context = { request, env,
       waitUntil: promise => execution.waitUntil(promise),
       next: async templateRequest => templateRequest.headers.has("if-none-match")
@@ -30,6 +31,7 @@ export default {
       } })
     };
     const response = await renderPublicPage(context, async inner => {
+      apiCalls++;
       apiRequest = inner.request;
       const target = new URL(inner.request.url).searchParams.get("target");
       if (request.headers.has("x-test-failure")) return new Response("Unavailable", {status: 503});
@@ -39,6 +41,16 @@ export default {
         summary: {total_posts: 2, latest_seen_at: "2026-10-19T02:00:00Z"},
         pagination: {page: 1, page_size: 30, has_next: false},
         runs: [],
+        topic_trends: request.headers.has("x-test-no-topics") ? null : {
+          window_hours: 24, generated_at: "2026-10-19T02:00:00Z",
+          topics: request.headers.has("x-test-empty-topics") ? [] : [
+            {topic_id: 17, label: '모델 비교 <img src=x onerror="bad()"> & 활용', post_count: 1234},
+            {topic_id: 18, label: "AI 도구", post_count: -2},
+            {topic_id: '19" onclick="bad()', label: "invalid identifier", post_count: 9},
+            {topic_id: 0, label: "zero identifier", post_count: 9},
+            {topic_id: 20, label: " ", post_count: 9},
+          ],
+        },
         posts: request.headers.has("x-test-empty") ? [] : [
           {post_id: 1, external_post_id: "123", archive_key: target === "all" ? "game-news" : target,
             source_key: "game-news-inven", subject: "release", title: '실제 저장 글 <script>alert("x")</script> & 제목',
@@ -55,6 +67,7 @@ export default {
     });
     const result = new Response(response.body, response);
     result.headers.set("x-test-api-url", apiRequest?.url || "not-called");
+    result.headers.set("x-test-api-calls", String(apiCalls));
     result.headers.set("x-test-api-cookie", apiRequest?.headers.get("cookie") || "absent");
     result.headers.set("x-test-api-refresh", apiRequest?.headers.get("x-tc-refresh") || "absent");
     return result;
@@ -88,6 +101,9 @@ test("public archives share the site title while keeping distinct descriptions a
     assert.ok(html.includes(`rel="canonical" href="https://todaycommunity.pages.dev${expectedCanonical}"`));
     titles.add(html.match(/<title>([^<]+)<\/title>/)[1]);
     descriptions.add(html.match(/name="description"\s+content="([^"]+)"/)[1]);
+    const expectedPage = publicPageState(new Request(`https://todaycommunity.pages.dev/?target=${target}`));
+    assert.ok(html.includes(`<h2 id="archive-title" tabindex="-1">${expectedPage.heading}</h2>`));
+    assert.ok(html.includes(`property="og:title" content="${expectedPage.heading} | 오늘의 커뮤니티"`));
     assert.match(html, /class="board-row post-row" role="row"/);
     assert.match(html, /href="https:\/\/example.com\/article\?id=123&amp;title=%22hello%22"/);
     assert.match(html, /aria-busy="false"/);
@@ -107,6 +123,41 @@ test("public archives share the site title while keeping distinct descriptions a
   assert.equal(descriptions.size, 6);
   const root = await page();
   assert.equal(bootstrap(root.html).payload.target, targets[0]);
+});
+
+test("initial community HTML includes escaped topic names and counts from the same single public read", async () => {
+  const { response, html } = await page();
+  assert.equal(response.headers.get("x-test-api-calls"), "1");
+  assert.match(html, /<aside[^>]+id="topic-panel"[^>]*>/);
+  assert.doesNotMatch(html.match(/<aside[^>]+id="topic-panel"[^>]*>/)[0], /hidden/);
+  assert.equal((html.match(/class="topic-entry"/g) || []).length, 2);
+  assert.match(html, /data-topic-id="17" aria-pressed="false"/);
+  assert.match(html, /모델 비교 &lt;img src=x onerror=&quot;bad\(\)&quot;&gt; &amp; 활용/);
+  assert.match(html, /class="topic-count">\(1,234개\)<\/span>/);
+  assert.match(html, /class="topic-count">\(0개\)<\/span>/);
+  assert.doesNotMatch(html, /<img src=x|onclick="bad|data-topic-id="(?:0|19|20)"/);
+  assert.match(html, /24시간 기준 · 10\. 19\. 11:00 갱신/);
+  assert.equal(bootstrap(html).payload.topic_trends.topics[0].post_count, 1234);
+  for (const [headers, message] of [
+    [{"x-test-empty-topics": "1"}, "반복해서 다뤄진 토픽이 아직 없습니다."],
+    [{"x-test-no-topics": "1"}, "첫 토픽 분석이 완료되면 여기에 표시됩니다."],
+  ]) {
+    const empty = await page("/", headers);
+    assert.match(empty.html, new RegExp(`<p class="topic-empty" id="topic-empty"[^>]*>${message}</p>`));
+    assert.doesNotMatch(empty.html.match(/<p[^>]+id="topic-empty"[^>]*>/)[0], /hidden/);
+    assert.doesNotMatch(empty.html, /class="topic-entry"/);
+  }
+});
+
+test("topics are not rendered for mixed, article, filtered, private or failed responses", async () => {
+  for (const [path, headers] of [
+    ["/?target=all", {}], ["/?target=game-news", {}], ["/?topic=17", {}],
+    ["/", {cookie: "__Host-tc_authenticated=private"}], ["/", {"x-test-failure": "1"}],
+  ]) {
+    const { html } = await page(path, headers);
+    assert.doesNotMatch(html, /class="topic-entry"/);
+    assert.match(html.match(/<aside[^>]+id="topic-panel"[^>]*>/)[0], /hidden/);
+  }
 });
 
 test("untrusted stored strings cannot escape a row, link attribute, or bootstrap JSON", async () => {

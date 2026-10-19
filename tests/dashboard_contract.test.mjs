@@ -312,7 +312,7 @@ test("switches archive targets and pages with history-aware URLs", () => {
   assert.match(app, /window\.history\[method\]\(null, "", url\)/);
   assert.match(app, /window\.addEventListener\("popstate"/);
   assert.match(app, /state\.page = 1/);
-  assert.match(app, /elements\.archiveTitle\.textContent = `\$\{archive\.display_name\} 아카이브`/);
+  assert.match(app, /elements\.archiveTitle\.textContent = ARCHIVE_HEADINGS\[archive\.archive_key\]/);
   assert.match(app, /document\.title = title/);
   assert.match(app, /const title = "오늘의 커뮤니티"/);
 });

@@ -26,6 +26,14 @@ const ARCHIVE_MASTHEAD_DESCRIPTIONS = Object.freeze({
   "game-news": "게임 신작, 인터뷰와 업계 동향을 휴리스틱하게 선별한 기사.",
   all: "모든 공개 아카이브의 글을 최신순으로 모았습니다.",
 });
+const ARCHIVE_HEADINGS = Object.freeze({
+  "dcinside-singularity": "특갤 실시간 인기글 모음",
+  "dcinside-agent-stack": "에활갤 AI 활용 인기글 모음",
+  "dcinside-zeus-pride": "제우스 오만의 신 인기글 모음",
+  "fmkorea-munich": "바이에른 뮌헨 인기글 모음",
+  "game-news": "게임 뉴스 모음",
+  all: "커뮤니티 인기글·게임 뉴스 모음",
+});
 const ARCHIVE_ROW_LABELS = Object.freeze({
   "dcinside-singularity": "특이점",
   "dcinside-agent-stack": "AI활용",
@@ -1254,7 +1262,7 @@ function renderSummary(view) {
       document.createElement("br"),
       LIST_ONLY_DESCRIPTION
     );
-    elements.archiveTitle.textContent = `${archive.display_name} 아카이브`;
+    elements.archiveTitle.textContent = ARCHIVE_HEADINGS[archive.archive_key] || `${archive.display_name} 아카이브`;
     elements.board.setAttribute("aria-label", `${archive.display_name} 저장 글`);
   } else if (source) {
     elements.sourceDescription.textContent = `${source.board_name}에서 ${SOURCE_DESCRIPTION}`;
@@ -3181,7 +3189,7 @@ function updatePageMetadata() {
     ? ARCHIVE_MASTHEAD_DESCRIPTIONS[state.target]
     : isFavorites ? FAVORITES_ARCHIVE.description : LIST_ONLY_DESCRIPTION;
   // Keep browser tabs compact; share metadata describes the selected archive.
-  const shareTitle = archive ? `${description.replace(/\.$/, "")} | ${title}` : title;
+  const shareTitle = archive ? `${ARCHIVE_HEADINGS[state.target]} | ${title}` : title;
   const canonical = new URL("https://todaycommunity.pages.dev/");
   if (archive && state.target !== DEFAULT_TARGET) canonical.searchParams.set("target", state.target);
   const params = new URL(window.location.href).searchParams;

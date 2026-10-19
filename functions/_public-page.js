@@ -10,6 +10,14 @@ const PUBLIC_ARCHIVES = Object.freeze({
 });
 const ARCHIVE_LABELS = { "dcinside-singularity": "특이점", "dcinside-agent-stack": "AI활용",
   "dcinside-zeus-pride": "제우스", "fmkorea-munich": "Bayern", "game-news": "게임뉴스" };
+const ARCHIVE_HEADINGS = Object.freeze({
+  "dcinside-singularity": "특갤 실시간 인기글 모음",
+  "dcinside-agent-stack": "에활갤 AI 활용 인기글 모음",
+  "dcinside-zeus-pride": "제우스 오만의 신 인기글 모음",
+  "fmkorea-munich": "바이에른 뮌헨 인기글 모음",
+  "game-news": "게임 뉴스 모음",
+  all: "커뮤니티 인기글·게임 뉴스 모음",
+});
 const SUBJECT_LABELS = { business: "biz", development: "dev", platform: "store",
   release: "launch", technology: "tech", other: "etc" };
 const AUTH_COOKIE = /(?:^|;\s*)(?:__Host-tc_authenticated|__Host-tc_admin)=/;
@@ -55,9 +63,11 @@ export function publicPageState(request) {
     ? ["즐겨찾기", "시크릿 사용자들이 함께 저장한 글.", "mixed"]
     : ["아카이브를 찾을 수 없습니다", "아카이브 탭에서 공개 목록을 선택해 주세요.", "community"];
   const description = lead;
+  const heading = known ? ARCHIVE_HEADINGS[target] : label;
   return { target, known, favorites, privateRequest, canonical, label, lead, kind, description,
+    heading,
     title: "오늘의 커뮤니티",
-    shareTitle: known ? `${lead.replace(/\.$/, "")} | 오늘의 커뮤니티` : "오늘의 커뮤니티",
+    shareTitle: known ? `${heading} | 오늘의 커뮤니티` : "오늘의 커뮤니티",
     robots: !known ? "noindex, nofollow" : privateRequest || !baseQuery || url.origin !== ORIGIN ? "noindex, follow" : "index, follow",
     renderArchive: known && baseQuery && !privateRequest,
     status: known || favorites ? 200 : 404,
@@ -91,6 +101,17 @@ function renderPosts(payload, page) {
 
 function basicApiUrl(target) {
   return `/api/archive?${new URLSearchParams({ target, page: "1", page_size: "30", min_upvotes: "0", min_comments: "0", sort: "created_at" })}`;
+}
+
+function renderTopics(trends) {
+  const topics = Array.isArray(trends?.topics) ? trends.topics : [];
+  return topics.map(topic => {
+    const id = count(topic?.topic_id);
+    const label = String(topic?.label || "").trim();
+    if (id <= 0 || !label) return "";
+    const posts = number.format(Math.max(0, count(topic?.post_count)));
+    return `<article class="topic-entry"><button class="topic-item" type="button" data-topic-id="${id}" aria-pressed="false" aria-label="${escapeHtml(`${label}, ${posts}개 글`)}"><span class="topic-label">${escapeHtml(label)}</span><span class="topic-count">(${posts}개)</span></button></article>`;
+  }).join("");
 }
 
 // The response is never cached separately from /api/archive. The same public
@@ -153,7 +174,7 @@ export async function renderPublicPage(context, loadArchive) {
       element.setAttribute("data-content-kind", page.kind);
       if (page.privateRequest) element.setAttribute("data-private-request", "true");
     } })
-    .on("#archive-title", { element(element) { element.setInnerContent(page.known ? `${page.label} 아카이브` : page.label); } })
+    .on("#archive-title", { element(element) { element.setInnerContent(page.heading); } })
     .on("#source-description", { element(element) { element.setInnerContent(`${escapeHtml(page.lead)}<br>본문 내용은 수집하지 않고 제목과 원문 링크 등 목록 정보만 수집합니다.`, { html: true }); } })
     .on("#archive-tabs a", { element(element) {
       const selected = new URL(element.getAttribute("href") || "/", ORIGIN).searchParams.get("target") === page.target;
@@ -162,6 +183,22 @@ export async function renderPublicPage(context, loadArchive) {
     } });
 
   if (payload) {
+    if (page.kind === "community") {
+      // Reuse the exact public API payload: no extra query or freshness window.
+      const trends = payload.topic_trends;
+      const topics = renderTopics(trends);
+      rewriter.on("#topic-panel", { element(element) { element.removeAttribute("hidden"); } })
+        .on("#topic-list", { element(element) { element.setInnerContent(topics, { html: true }); } })
+        .on("#topic-empty", { element(element) {
+          if (!topics) element.removeAttribute("hidden");
+          element.setInnerContent(trends ? "반복해서 다뤄진 토픽이 아직 없습니다." : "첫 토픽 분석이 완료되면 여기에 표시됩니다.");
+        } })
+        .on("#topic-panel-meta", { element(element) {
+          element.setInnerContent(trends
+            ? `${number.format(Math.max(0, count(trends.window_hours)))}시간 기준 · ${formatDate(trends.generated_at, time)} 갱신`
+            : "제목·말머리 기준");
+        } });
+    }
     const total = Math.max(0, count(payload.summary?.total_posts));
     rewriter.on("#posts", { element(element) {
       element.setInnerContent(renderPosts(payload, page), { html: true });
