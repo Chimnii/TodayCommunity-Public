@@ -396,11 +396,11 @@ test("filters by exact subjects from the complete saved set", () => {
 });
 
 test("shows an archive-specific two-line collection summary", () => {
-  assert.match(html, /디시인사이드 특이점이 온다 갤러리 \(특갤\) 인기글\.<br \/>/);
-  assert.match(app, /"dcinside-singularity": "디시인사이드 특이점이 온다 갤러리 \(특갤\) 인기글\."/);
-  assert.match(app, /"dcinside-agent-stack": "디시인사이드 AI 활용 갤러리 \(에활갤\) 인기글\."/);
-  assert.match(app, /"dcinside-zeus-pride": "디시인사이드 제우스 오만의 신 갤러리 인기글\."/);
-  assert.match(app, /"fmkorea-munich": "에펨코리아 바이에른 뮌헨 관련 인기글\."/);
+  assert.match(html, /디시인사이드 특이점이 온다 갤러리 \(특갤\) 실시간 인기글 모음\.<br \/>/);
+  assert.match(app, /"dcinside-singularity": "디시인사이드 특이점이 온다 갤러리 \(특갤\) 실시간 인기글 모음\."/);
+  assert.match(app, /"dcinside-agent-stack": "디시인사이드 AI 활용 갤러리 \(에활갤\) 실시간 인기글 모음\."/);
+  assert.match(app, /"dcinside-zeus-pride": "디시인사이드 제우스 오만의 신 갤러리 실시간 인기글 모음\."/);
+  assert.match(app, /"fmkorea-munich": "에펨코리아 바이에른 뮌헨 관련 실시간 인기글 모음\."/);
   assert.match(
     app,
     /elements\.sourceDescription\.replaceChildren\([\s\S]*document\.createElement\("br"\)[\s\S]*LIST_ONLY_DESCRIPTION/

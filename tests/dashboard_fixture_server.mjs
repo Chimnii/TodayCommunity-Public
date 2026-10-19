@@ -256,6 +256,8 @@ const runs = Array.from({ length: 10 }, (_, index) => ({
 }));
 
 const mimeTypes = {
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
   ".css": "text/css; charset=UTF-8",
   ".html": "text/html; charset=UTF-8",
   ".js": "text/javascript; charset=UTF-8",

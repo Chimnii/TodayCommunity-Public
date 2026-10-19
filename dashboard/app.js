@@ -19,10 +19,10 @@ const ARCHIVE_TAB_LABELS = Object.freeze({
   all: "모두",
 });
 const ARCHIVE_MASTHEAD_DESCRIPTIONS = Object.freeze({
-  "dcinside-singularity": "디시인사이드 특이점이 온다 갤러리 (특갤) 인기글.",
-  "dcinside-agent-stack": "디시인사이드 AI 활용 갤러리 (에활갤) 인기글.",
-  "dcinside-zeus-pride": "디시인사이드 제우스 오만의 신 갤러리 인기글.",
-  "fmkorea-munich": "에펨코리아 바이에른 뮌헨 관련 인기글.",
+  "dcinside-singularity": "디시인사이드 특이점이 온다 갤러리 (특갤) 실시간 인기글 모음.",
+  "dcinside-agent-stack": "디시인사이드 AI 활용 갤러리 (에활갤) 실시간 인기글 모음.",
+  "dcinside-zeus-pride": "디시인사이드 제우스 오만의 신 갤러리 실시간 인기글 모음.",
+  "fmkorea-munich": "에펨코리아 바이에른 뮌헨 관련 실시간 인기글 모음.",
   "game-news": "게임 신작, 인터뷰와 업계 동향을 휴리스틱하게 선별한 기사.",
   all: "모든 공개 아카이브의 글을 최신순으로 모았습니다.",
 });
@@ -3178,12 +3178,10 @@ function updatePageMetadata() {
   const isFavorites = state.target === FAVORITES_TARGET;
   const title = "오늘의 커뮤니티";
   const description = archive
-    ? `${ARCHIVE_MASTHEAD_DESCRIPTIONS[state.target]} ${state.target === "game-news"
-      ? "제목과 출처를 살펴보고 원문 기사로 이동하세요."
-      : state.target === ALL_TARGET
-        ? "관심 있는 주제의 제목과 원문 링크를 한곳에서 확인하세요."
-        : "제목·말머리·추천·댓글 정보를 살펴보고 원문으로 이동하세요."}`
+    ? ARCHIVE_MASTHEAD_DESCRIPTIONS[state.target]
     : isFavorites ? FAVORITES_ARCHIVE.description : LIST_ONLY_DESCRIPTION;
+  // Keep browser tabs compact; share metadata describes the selected archive.
+  const shareTitle = archive ? `${description.replace(/\.$/, "")} | ${title}` : title;
   const canonical = new URL("https://todaycommunity.pages.dev/");
   if (archive && state.target !== DEFAULT_TARGET) canonical.searchParams.set("target", state.target);
   const params = new URL(window.location.href).searchParams;
@@ -3199,10 +3197,10 @@ function updatePageMetadata() {
   for (const [selector, value] of [
     ['meta[name="description"]', description],
     ['meta[name="robots"]', robots],
-    ['meta[property="og:title"]', title],
+    ['meta[property="og:title"]', shareTitle],
     ['meta[property="og:description"]', description],
     ['meta[property="og:url"]', canonical.href],
-    ['meta[name="twitter:title"]', title],
+    ['meta[name="twitter:title"]', shareTitle],
     ['meta[name="twitter:description"]', description],
   ]) document.querySelector(selector)?.setAttribute("content", value);
 }

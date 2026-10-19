@@ -1,10 +1,10 @@
 const ORIGIN = "https://todaycommunity.pages.dev";
 const DEFAULT_TARGET = "dcinside-singularity";
 const PUBLIC_ARCHIVES = Object.freeze({
-  "dcinside-singularity": ["특이점이 온다", "디시인사이드 특이점이 온다 갤러리 (특갤) 인기글.", "community"],
-  "dcinside-agent-stack": ["AI 활용", "디시인사이드 AI 활용 갤러리 (에활갤) 인기글.", "community"],
-  "dcinside-zeus-pride": ["제우스 오만의 신", "디시인사이드 제우스 오만의 신 갤러리 인기글.", "community"],
-  "fmkorea-munich": ["뮌헨", "에펨코리아 바이에른 뮌헨 관련 인기글.", "community"],
+  "dcinside-singularity": ["특이점이 온다", "디시인사이드 특이점이 온다 갤러리 (특갤) 실시간 인기글 모음.", "community"],
+  "dcinside-agent-stack": ["AI 활용", "디시인사이드 AI 활용 갤러리 (에활갤) 실시간 인기글 모음.", "community"],
+  "dcinside-zeus-pride": ["제우스 오만의 신", "디시인사이드 제우스 오만의 신 갤러리 실시간 인기글 모음.", "community"],
+  "fmkorea-munich": ["뮌헨", "에펨코리아 바이에른 뮌헨 관련 실시간 인기글 모음.", "community"],
   "game-news": ["게임 뉴스", "게임 신작, 인터뷰와 업계 동향을 휴리스틱하게 선별한 기사.", "article"],
   all: ["모두", "모든 공개 아카이브의 글을 최신순으로 모았습니다.", "mixed"],
 });
@@ -54,11 +54,10 @@ export function publicPageState(request) {
   const [label, lead, kind] = known ? PUBLIC_ARCHIVES[target] : favorites
     ? ["즐겨찾기", "시크릿 사용자들이 함께 저장한 글.", "mixed"]
     : ["아카이브를 찾을 수 없습니다", "아카이브 탭에서 공개 목록을 선택해 주세요.", "community"];
-  const description = known ? `${lead} ${kind === "article" ? "제목과 출처를 살펴보고 원문 기사로 이동하세요."
-    : kind === "mixed" ? "관심 있는 주제의 제목과 원문 링크를 한곳에서 확인하세요."
-      : "제목·말머리·추천·댓글 정보를 살펴보고 원문으로 이동하세요."}` : lead;
+  const description = lead;
   return { target, known, favorites, privateRequest, canonical, label, lead, kind, description,
     title: "오늘의 커뮤니티",
+    shareTitle: known ? `${lead.replace(/\.$/, "")} | 오늘의 커뮤니티` : "오늘의 커뮤니티",
     robots: !known ? "noindex, nofollow" : privateRequest || !baseQuery || url.origin !== ORIGIN ? "noindex, follow" : "index, follow",
     renderArchive: known && baseQuery && !privateRequest,
     status: known || favorites ? 200 : 404,
@@ -144,11 +143,11 @@ export async function renderPublicPage(context, loadArchive) {
     .on("title", { element(element) { element.setInnerContent(page.title); } })
     .on('meta[name="description"]', { element(element) { element.setAttribute("content", page.description); } })
     .on('link[rel="canonical"]', { element(element) { element.setAttribute("href", page.canonical); } })
-    .on('meta[name="twitter:title"]', { element(element) { element.setAttribute("content", page.title); } })
+    .on('meta[name="twitter:title"]', { element(element) { element.setAttribute("content", page.shareTitle); } })
     .on('meta[name="twitter:description"]', { element(element) { element.setAttribute("content", page.description); } })
     .on('meta[name="robots"], meta[property="og:title"], meta[property="og:description"], meta[property="og:url"], meta[property="og:type"], meta[property="og:site_name"]', { element(element) { element.remove(); } })
     .on("head", { element(element) {
-      element.append(`<meta name="robots" content="${page.robots}"><meta property="og:title" content="${escapeHtml(page.title)}"><meta property="og:description" content="${escapeHtml(page.description)}"><meta property="og:url" content="${escapeHtml(page.canonical)}"><meta property="og:type" content="website"><meta property="og:site_name" content="오늘의 커뮤니티">${bootstrap ? `<script id="archive-bootstrap" type="application/json">${serializeJson(bootstrap)}</script>` : ""}`, { html: true });
+      element.append(`<meta name="robots" content="${page.robots}"><meta property="og:title" content="${escapeHtml(page.shareTitle)}"><meta property="og:description" content="${escapeHtml(page.description)}"><meta property="og:url" content="${escapeHtml(page.canonical)}"><meta property="og:type" content="website"><meta property="og:site_name" content="오늘의 커뮤니티">${bootstrap ? `<script id="archive-bootstrap" type="application/json">${serializeJson(bootstrap)}</script>` : ""}`, { html: true });
     } })
     .on("body", { element(element) {
       element.setAttribute("data-content-kind", page.kind);

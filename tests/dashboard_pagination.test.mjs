@@ -189,7 +189,7 @@ test("public tab navigation and back navigation keep canonical, title and sharin
       ? "https://todaycommunity.pages.dev/" : `https://todaycommunity.pages.dev/?target=${target}`);
     assert.equal(h.document.title, serverPage.title);
     assert.equal(h.content('meta[name="description"]'), serverPage.description);
-    assert.equal(h.content('meta[property="og:title"]'), h.document.title);
+    assert.equal(h.content('meta[property="og:title"]'), serverPage.shareTitle);
     assert.equal(h.content('meta[property="og:url"]'), h.canonical());
     assert.equal(h.content('meta[name="twitter:description"]'), h.content('meta[name="description"]'));
     assert.equal(h.content('meta[name="robots"]'), "index,follow");
