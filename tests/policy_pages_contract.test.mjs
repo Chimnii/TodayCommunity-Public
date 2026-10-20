@@ -58,7 +58,7 @@ test("ships static, responsive pages through the public mirror", () => {
   for (const html of [aboutHtml, privacyHtml]) {
     assert.match(html, /<link rel="stylesheet" href="\/styles\.css" \/>/u);
     assert.match(html, /class="skip-link" href="#main-content"/u);
-    assert.doesNotMatch(html, /<script\b/iu);
+    assert.match(html, /<script src="\/analytics\.js" data-standalone/u);
   }
 
   assert.match(css, /\.policy-content\s*\{/u);

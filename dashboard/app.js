@@ -269,6 +269,7 @@ async function initialize() {
   bindEvents();
   try {
     const session = await ensureFeedbackSession();
+    window.tcAnalytics?.setSession(session);
     initializeGuestBanner(session);
   } catch {
     state.feedbackSession = {
