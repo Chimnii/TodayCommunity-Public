@@ -49,7 +49,7 @@ test("describes the public root as the TodayCommunity website", () => {
   assert.equal(structuredData["@context"], "https://schema.org");
   assert.equal(structuredData["@type"], "WebSite");
   assert.equal(structuredData.name, "오늘의 커뮤니티");
-  assert.deepEqual(structuredData.alternateName, ["오늘의커뮤니티", "TodayCommunity", "todaycommunity.pages.dev"]);
+  assert.deepEqual(structuredData.alternateName, ["오늘의커뮤니티", "TodayCommunity"]);
   assert.equal(structuredData.url, "https://todaycommunity.pages.dev/");
 });
 

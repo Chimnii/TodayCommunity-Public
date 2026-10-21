@@ -1258,10 +1258,13 @@ function renderSummary(view) {
   if (archive) {
     const descriptionLead =
       ARCHIVE_MASTHEAD_DESCRIPTIONS[archive.archive_key] || `${archive.description}.`;
+    const collectionNotice = document.createElement("span");
+    collectionNotice.setAttribute("data-nosnippet", "");
+    collectionNotice.textContent = LIST_ONLY_DESCRIPTION;
     elements.sourceDescription.replaceChildren(
       descriptionLead,
       document.createElement("br"),
-      LIST_ONLY_DESCRIPTION
+      collectionNotice
     );
     elements.archiveTitle.textContent = ARCHIVE_HEADINGS[archive.archive_key] || `${archive.display_name} 아카이브`;
     elements.board.setAttribute("aria-label", `${archive.display_name} 저장 글`);

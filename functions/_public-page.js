@@ -175,7 +175,7 @@ export async function renderPublicPage(context, loadArchive) {
       if (page.privateRequest) element.setAttribute("data-private-request", "true");
     } })
     .on("#archive-title", { element(element) { element.setInnerContent(page.heading); } })
-    .on("#source-description", { element(element) { element.setInnerContent(`${escapeHtml(page.lead)}<br>본문 내용은 수집하지 않고 제목과 원문 링크 등 목록 정보만 수집합니다.`, { html: true }); } })
+    .on("#source-description", { element(element) { element.setInnerContent(`${escapeHtml(page.lead)}<br><span data-nosnippet>본문 내용은 수집하지 않고 제목과 원문 링크 등 목록 정보만 수집합니다.</span>`, { html: true }); } })
     .on("#archive-tabs a", { element(element) {
       const selected = new URL(element.getAttribute("href") || "/", ORIGIN).searchParams.get("target") === page.target;
       element.setAttribute("aria-selected", String(selected));
