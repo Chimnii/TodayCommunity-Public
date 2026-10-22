@@ -33,7 +33,7 @@ test("links the two public policy pages from every public surface", () => {
 });
 
 test("describes the service as a metadata-only bookmark that requires the original page", () => {
-  assert.match(aboutHtml, /화제가 된 글을 한곳에서 편하게\s+찾아보기 위한 페이지/u);
+  assert.match(aboutHtml, /반응이 많은 글과 지정 말머리의 글을 선별해 보여줍니다/u);
   assert.match(aboutHtml, /글의 제목과 원문 링크 등 목록에 필요한 정보만 표시합니다/u);
   assert.match(aboutHtml, /원문의 본문과 이미지는\s+가져오거나 저장하지 않으며/u);
   assert.match(aboutHtml, /글을 읽으려면 원문 페이지로 이동해야 합니다/u);

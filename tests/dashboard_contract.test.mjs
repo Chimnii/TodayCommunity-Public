@@ -403,7 +403,7 @@ test("shows an archive-specific two-line collection summary", () => {
   assert.match(app, /"fmkorea-munich": "에펨코리아 바이에른 뮌헨 관련 실시간 인기글 모음\."/);
   assert.match(
     app,
-    /elements\.sourceDescription\.replaceChildren\([\s\S]*document\.createElement\("br"\)[\s\S]*LIST_ONLY_DESCRIPTION/
+    /elements\.sourceDescription\.replaceChildren\([\s\S]*document\.createElement\("br"\)[\s\S]*collectionNotice/
   );
   assert.match(app, /본문 내용은 수집하지 않고 제목과 원문 링크 등 목록 정보만 수집합니다/);
   assert.doesNotMatch(app, /수집 기준:|추천수 \+ 댓글수\/|≥/);

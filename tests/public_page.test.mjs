@@ -104,6 +104,12 @@ test("public archives share the site title while keeping distinct descriptions a
     const expectedPage = publicPageState(new Request(`https://todaycommunity.pages.dev/?target=${target}`));
     assert.ok(html.includes(`<h2 id="archive-title" tabindex="-1">${expectedPage.heading}</h2>`));
     assert.ok(html.includes(`property="og:title" content="${expectedPage.heading} | 오늘의 커뮤니티"`));
+    if (expectedPage.selection) {
+      assert.ok(html.includes(`<span>${expectedPage.selection.description} <a class="selection-guide-link" href="${expectedPage.selection.url}">선별 기준</a></span>`));
+      assert.ok(html.includes(`name="description" content="${expectedPage.description}"`));
+    } else {
+      assert.doesNotMatch(html, /class="selection-guide-link"/);
+    }
     assert.match(html, /class="board-row post-row" role="row"/);
     assert.match(html, /href="https:\/\/example.com\/article\?id=123&amp;title=%22hello%22"/);
     assert.match(html, /aria-busy="false"/);

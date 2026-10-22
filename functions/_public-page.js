@@ -11,12 +11,22 @@ const PUBLIC_ARCHIVES = Object.freeze({
 const ARCHIVE_LABELS = { "dcinside-singularity": "특이점", "dcinside-agent-stack": "AI활용",
   "dcinside-zeus-pride": "제우스", "fmkorea-munich": "Bayern", "game-news": "게임뉴스" };
 const ARCHIVE_HEADINGS = Object.freeze({
-  "dcinside-singularity": "특갤 실시간 인기글 모음",
+  "dcinside-singularity": "특갤 인기글 모음",
   "dcinside-agent-stack": "에활갤 AI 활용 인기글 모음",
   "dcinside-zeus-pride": "제우스 오만의 신 인기글 모음",
   "fmkorea-munich": "바이에른 뮌헨 인기글 모음",
   "game-news": "게임 뉴스 모음",
   all: "커뮤니티 인기글·게임 뉴스 모음",
+});
+const ARCHIVE_SELECTIONS = Object.freeze({
+  "dcinside-singularity": {
+    description: "추천·댓글 반응 또는 정보·작업잡담 말머리로 선별합니다.",
+    url: "/about#singularity-selection",
+  },
+  "dcinside-agent-stack": {
+    description: "추천·댓글 반응 또는 정보·활용·뉴스·후기 말머리로 선별합니다.",
+    url: "/about#ai-selection",
+  },
 });
 const SUBJECT_LABELS = { business: "biz", development: "dev", platform: "store",
   release: "launch", technology: "tech", other: "etc" };
@@ -62,9 +72,10 @@ export function publicPageState(request) {
   const [label, lead, kind] = known ? PUBLIC_ARCHIVES[target] : favorites
     ? ["즐겨찾기", "시크릿 사용자들이 함께 저장한 글.", "mixed"]
     : ["아카이브를 찾을 수 없습니다", "아카이브 탭에서 공개 목록을 선택해 주세요.", "community"];
-  const description = lead;
+  const selection = known ? ARCHIVE_SELECTIONS[target] : null;
+  const description = selection ? `${lead} ${selection.description}` : lead;
   const heading = known ? ARCHIVE_HEADINGS[target] : label;
-  return { target, known, favorites, privateRequest, canonical, label, lead, kind, description,
+  return { target, known, favorites, privateRequest, canonical, label, lead, kind, description, selection,
     heading,
     title: "오늘의 커뮤니티",
     shareTitle: known ? `${heading} | 오늘의 커뮤니티` : "오늘의 커뮤니티",
@@ -175,7 +186,12 @@ export async function renderPublicPage(context, loadArchive) {
       if (page.privateRequest) element.setAttribute("data-private-request", "true");
     } })
     .on("#archive-title", { element(element) { element.setInnerContent(page.heading); } })
-    .on("#source-description", { element(element) { element.setInnerContent(`${escapeHtml(page.lead)}<br><span data-nosnippet>본문 내용은 수집하지 않고 제목과 원문 링크 등 목록 정보만 수집합니다.</span>`, { html: true }); } })
+    .on("#source-description", { element(element) {
+      const detail = page.selection
+        ? `<span>${escapeHtml(page.selection.description)} <a class="selection-guide-link" href="${escapeHtml(page.selection.url)}">선별 기준</a></span>`
+        : "<span data-nosnippet>본문 내용은 수집하지 않고 제목과 원문 링크 등 목록 정보만 수집합니다.</span>";
+      element.setInnerContent(`${escapeHtml(page.lead)}<br>${detail}`, { html: true });
+    } })
     .on("#archive-tabs a", { element(element) {
       const selected = new URL(element.getAttribute("href") || "/", ORIGIN).searchParams.get("target") === page.target;
       element.setAttribute("aria-selected", String(selected));

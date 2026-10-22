@@ -27,12 +27,22 @@ const ARCHIVE_MASTHEAD_DESCRIPTIONS = Object.freeze({
   all: "모든 공개 아카이브의 글을 최신순으로 모았습니다.",
 });
 const ARCHIVE_HEADINGS = Object.freeze({
-  "dcinside-singularity": "특갤 실시간 인기글 모음",
+  "dcinside-singularity": "특갤 인기글 모음",
   "dcinside-agent-stack": "에활갤 AI 활용 인기글 모음",
   "dcinside-zeus-pride": "제우스 오만의 신 인기글 모음",
   "fmkorea-munich": "바이에른 뮌헨 인기글 모음",
   "game-news": "게임 뉴스 모음",
   all: "커뮤니티 인기글·게임 뉴스 모음",
+});
+const ARCHIVE_SELECTIONS = Object.freeze({
+  "dcinside-singularity": {
+    description: "추천·댓글 반응 또는 정보·작업잡담 말머리로 선별합니다.",
+    url: "/about#singularity-selection",
+  },
+  "dcinside-agent-stack": {
+    description: "추천·댓글 반응 또는 정보·활용·뉴스·후기 말머리로 선별합니다.",
+    url: "/about#ai-selection",
+  },
 });
 const ARCHIVE_ROW_LABELS = Object.freeze({
   "dcinside-singularity": "특이점",
@@ -1258,9 +1268,18 @@ function renderSummary(view) {
   if (archive) {
     const descriptionLead =
       ARCHIVE_MASTHEAD_DESCRIPTIONS[archive.archive_key] || `${archive.description}.`;
+    const selection = ARCHIVE_SELECTIONS[archive.archive_key];
     const collectionNotice = document.createElement("span");
-    collectionNotice.setAttribute("data-nosnippet", "");
-    collectionNotice.textContent = LIST_ONLY_DESCRIPTION;
+    collectionNotice.textContent = selection?.description || LIST_ONLY_DESCRIPTION;
+    if (selection) {
+      const guideLink = document.createElement("a");
+      guideLink.className = "selection-guide-link";
+      guideLink.href = selection.url;
+      guideLink.textContent = "선별 기준";
+      collectionNotice.append(" ", guideLink);
+    } else {
+      collectionNotice.setAttribute("data-nosnippet", "");
+    }
     elements.sourceDescription.replaceChildren(
       descriptionLead,
       document.createElement("br"),
@@ -3189,9 +3208,11 @@ function updatePageMetadata() {
   const archive = findArchive(FALLBACK_ARCHIVES, state.target);
   const isFavorites = state.target === FAVORITES_TARGET;
   const title = "오늘의 커뮤니티";
-  const description = archive
+  const descriptionLead = archive
     ? ARCHIVE_MASTHEAD_DESCRIPTIONS[state.target]
     : isFavorites ? FAVORITES_ARCHIVE.description : LIST_ONLY_DESCRIPTION;
+  const selection = archive ? ARCHIVE_SELECTIONS[state.target] : null;
+  const description = selection ? `${descriptionLead} ${selection.description}` : descriptionLead;
   // Keep browser tabs compact; share metadata describes the selected archive.
   const shareTitle = archive ? `${ARCHIVE_HEADINGS[state.target]} | ${title}` : title;
   const canonical = new URL("https://todaycommunity.pages.dev/");
