@@ -13,7 +13,7 @@ async function readOptionalFile(url) {
   }
 }
 
-const [publicHtml, aboutHtml, privacyHtml, adsTxt, robots, sitemap, syncScript] =
+const [publicHtml, aboutHtml, privacyHtml, adsTxt, robots, sitemap, textSitemap, syncScript] =
   await Promise.all([
     readFile(new URL("../dashboard/index.html", import.meta.url), "utf8"),
     readFile(new URL("../dashboard/about.html", import.meta.url), "utf8"),
@@ -21,6 +21,7 @@ const [publicHtml, aboutHtml, privacyHtml, adsTxt, robots, sitemap, syncScript] 
     readFile(new URL("../dashboard/ads.txt", import.meta.url), "utf8"),
     readFile(new URL("../dashboard/robots.txt", import.meta.url), "utf8"),
     readFile(new URL("../dashboard/sitemap.xml", import.meta.url), "utf8"),
+    readFile(new URL("../dashboard/sitemap.txt", import.meta.url), "utf8"),
     readOptionalFile(new URL("../scripts/sync_public_mirror.ps1", import.meta.url)),
   ]);
 
@@ -92,11 +93,19 @@ test("lists canonical public archives and information pages without private or f
   }
 });
 
+test("keeps the alternative text sitemap identical to the XML canonical URL set", () => {
+  const xmlLocations = [...sitemap.matchAll(/<loc>([^<]+)<\/loc>/gu)].map((match) => match[1]);
+  assert.deepEqual(textSitemap.trimEnd().split(/\r?\n/u), xmlLocations);
+  assert.equal(new Set(xmlLocations).size, xmlLocations.length);
+  assert.doesNotMatch(textSitemap, /\uFEFF|[<>]/u);
+});
+
 test("exports search discovery files through the public mirror", () => {
   if (syncScript !== null) {
     assert.match(syncScript, /"dashboard\/ads\.txt"/u);
     assert.match(syncScript, /"dashboard\/robots\.txt"/u);
     assert.match(syncScript, /"dashboard\/sitemap\.xml"/u);
+    assert.equal([...syncScript.matchAll(/"dashboard\/sitemap\.txt"/gu)].length, 2);
     assert.match(syncScript, /"dashboard\/favicon\.ico"/u);
     assert.match(syncScript, /"dashboard\/404\.html"/u);
   }
