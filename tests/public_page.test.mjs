@@ -102,7 +102,10 @@ test("public archives share the site title while keeping distinct descriptions a
     titles.add(html.match(/<title>([^<]+)<\/title>/)[1]);
     descriptions.add(html.match(/name="description"\s+content="([^"]+)"/)[1]);
     const expectedPage = publicPageState(new Request(`https://todaycommunity.pages.dev/?target=${target}`));
-    assert.ok(html.includes(`<h2 id="archive-title" tabindex="-1">${expectedPage.heading}</h2>`));
+    assert.ok(html.includes(`<h1 id="archive-title" tabindex="-1">${expectedPage.heading}</h1>`));
+    assert.equal((html.match(/<h1(?:\s|>)/g) || []).length, 1);
+    const selectedTabs = [...html.matchAll(/<a\s[^>]*class="archive-tab"[^>]*aria-selected="true"[^>]*href="([^"]+)"/g)];
+    assert.deepEqual(selectedTabs.map(match => match[1]), [expectedCanonical]);
     assert.ok(html.includes(`property="og:title" content="${expectedPage.heading} | 오늘의 커뮤니티"`));
     if (expectedPage.selection) {
       assert.ok(html.includes(`<span>${expectedPage.selection.description} <a class="selection-guide-link" href="${expectedPage.selection.url}">선별 기준</a></span>`));

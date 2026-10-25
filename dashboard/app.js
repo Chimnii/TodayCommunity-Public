@@ -28,7 +28,7 @@ const ARCHIVE_MASTHEAD_DESCRIPTIONS = Object.freeze({
 });
 const ARCHIVE_HEADINGS = Object.freeze({
   "dcinside-singularity": "특갤 인기글 모음",
-  "dcinside-agent-stack": "에활갤 AI 활용 인기글 모음",
+  "dcinside-agent-stack": "AI 활용갤(에활갤) 인기글 모음",
   "dcinside-zeus-pride": "제우스 오만의 신 인기글 모음",
   "fmkorea-munich": "바이에른 뮌헨 인기글 모음",
   "game-news": "게임 뉴스 모음",
@@ -36,11 +36,11 @@ const ARCHIVE_HEADINGS = Object.freeze({
 });
 const ARCHIVE_SELECTIONS = Object.freeze({
   "dcinside-singularity": {
-    description: "추천·댓글 반응 또는 정보·작업잡담 말머리로 선별합니다.",
+    description: "AI 소식과 개발 이야기를 찾기 쉽도록 추천·댓글 반응 또는 정보·작업잡담 말머리로 선별합니다.",
     url: "/about#singularity-selection",
   },
   "dcinside-agent-stack": {
-    description: "추천·댓글 반응 또는 정보·활용·뉴스·후기 말머리로 선별합니다.",
+    description: "AI 도구 활용·바이브 코딩 경험을 찾기 쉽도록 추천·댓글 반응 또는 정보·활용·뉴스·후기 말머리로 선별합니다.",
     url: "/about#ai-selection",
   },
 });
@@ -978,7 +978,7 @@ function keepSelectedArchiveTabVisible() {
 function buildArchiveHref(target) {
   const url = new URL(window.location.href);
   url.search = "";
-  url.searchParams.set("target", target);
+  if (target !== DEFAULT_TARGET) url.searchParams.set("target", target);
   return `${url.pathname}${url.search}${url.hash}`;
 }
 

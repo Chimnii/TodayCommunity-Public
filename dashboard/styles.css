@@ -191,12 +191,14 @@ a {
 }
 
 .masthead h1,
-.archive-heading h2,
+.masthead-brand,
+.archive-heading h1,
 .drawer-header h2 {
   margin: 0;
 }
 
-.masthead h1 {
+.masthead h1,
+.masthead-brand {
   font-size: var(--text-xl);
   font-weight: 700;
   letter-spacing: -0.025em;
@@ -431,13 +433,13 @@ a {
   background: var(--color-surface-subtle);
 }
 
-.topic-panel-header h3,
+.topic-panel-header h2,
 .topic-empty,
 .topic-panel-meta {
   margin: 0;
 }
 
-.topic-panel-header h3 {
+.topic-panel-header h2 {
   font-size: var(--text-base);
   line-height: 1.35;
 }
@@ -544,7 +546,7 @@ a {
   line-height: 1.5;
 }
 
-.archive-heading h2,
+.archive-heading h1,
 .drawer-header h2 {
   font-size: var(--text-lg);
   font-weight: 700;
@@ -557,6 +559,11 @@ a {
 .board-footer p {
   margin-top: var(--space-1);
   font-size: var(--text-sm);
+}
+
+#archive-title {
+  word-break: keep-all;
+  overflow-wrap: anywhere;
 }
 
 .filter-shell {

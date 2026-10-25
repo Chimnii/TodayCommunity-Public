@@ -97,5 +97,20 @@ test("exports search discovery files through the public mirror", () => {
     assert.match(syncScript, /"dashboard\/ads\.txt"/u);
     assert.match(syncScript, /"dashboard\/robots\.txt"/u);
     assert.match(syncScript, /"dashboard\/sitemap\.xml"/u);
+    assert.match(syncScript, /"dashboard\/favicon\.ico"/u);
+    assert.match(syncScript, /"dashboard\/404\.html"/u);
   }
+});
+
+test("default favicon is an ICO containing the approved PNG, not an HTML fallback", async () => {
+  const icon = await readFile(new URL("../dashboard/favicon.ico", import.meta.url));
+  const png = await readFile(new URL("../dashboard/favicon.png", import.meta.url));
+  assert.equal(icon.readUInt16LE(0), 0);
+  assert.equal(icon.readUInt16LE(2), 1);
+  assert.equal(icon.readUInt16LE(4), 1);
+  assert.equal(icon[6], png.readUInt32BE(16));
+  assert.equal(icon[7], png.readUInt32BE(20));
+  const size = icon.readUInt32LE(14);
+  const offset = icon.readUInt32LE(18);
+  assert.deepEqual(icon.subarray(offset, offset + size), png);
 });

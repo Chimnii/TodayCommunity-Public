@@ -44,13 +44,13 @@ test("ships the compact archive surface and hidden collection dialog", () => {
   assert.doesNotMatch(html, /cell-comments" role="columnheader"/);
   assert.match(
     html,
-    /<h1><a class="masthead-home" href="\/">오늘의 커뮤니티<\/a><\/h1>/
+    /<div class="masthead-brand"><a class="masthead-home" href="\/">오늘의 커뮤니티<\/a><\/div>/
   );
 });
 
 test("ships six accessible archive tabs and replaces them from the API catalog", () => {
   assert.match(html, /id="archive-tabs"[^>]*role="tablist"/);
-  assert.match(html, /role="tab"[\s\S]*href="\/?\?target=dcinside-singularity"/);
+  assert.match(html, /role="tab"[\s\S]*href="\/"/);
   assert.match(html, /href="\/?\?target=dcinside-agent-stack"/);
   assert.match(html, /href="\/?\?target=dcinside-zeus-pride"/);
   assert.match(html, /href="\/?\?target=fmkorea-munich"/);
