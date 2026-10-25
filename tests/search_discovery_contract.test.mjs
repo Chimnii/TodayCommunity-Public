@@ -123,3 +123,25 @@ test("default favicon is an ICO containing the approved PNG, not an HTML fallbac
   const offset = icon.readUInt32LE(18);
   assert.deepEqual(icon.subarray(offset, offset + size), png);
 });
+
+test("sitemap diagnostics preserve asset body, cache headers, and conditional responses", async () => {
+  const { onRequest } = await import("../functions/sitemap.xml.js");
+  const routes = JSON.parse(await readFile(new URL("../dashboard/_routes.json", import.meta.url), "utf8"));
+  assert.ok(routes.include.includes("/sitemap.xml"));
+  for (const [method, status, body] of [["GET", 200, sitemap], ["HEAD", 200, null], ["GET", 304, null]]) {
+    const request = new Request("https://todaycommunity.pages.dev/sitemap.xml", {
+      method,
+      headers: status === 304 ? { "If-None-Match": '"sitemap-version"' } : {},
+    });
+    const asset = new Response(body, { status, headers: { "Content-Type": "application/xml", ETag: '"sitemap-version"' } });
+    let calls = 0;
+    const response = await onRequest({ request, env: { ASSETS: { fetch(received) {
+      calls += 1;
+      assert.equal(received, request);
+      return Promise.resolve(asset);
+    } } } });
+    assert.equal(calls, 1);
+    assert.equal(response, asset);
+    assert.equal(await response.text(), body ?? "");
+  }
+});
