@@ -312,6 +312,7 @@ let searchComposing = false;
 let hiddenCountRequest = null;
 let hiddenCountGeneration = 0;
 let archiveBootstrapConsumed = false;
+let archiveBootstrapSnapshot = null;
 
 function consumeArchiveBootstrap(bypassCache) {
   if (archiveBootstrapConsumed) return null;
@@ -321,12 +322,13 @@ function consumeArchiveBootstrap(bypassCache) {
   try {
     const bootstrap = JSON.parse(script.textContent);
     if (bootstrap?.version !== 1 || bootstrap.api_url !== buildApiUrl()
-      || !Number.isFinite(bootstrap.expires_at) || bootstrap.expires_at <= Date.now()
+      || !Number.isFinite(bootstrap.expires_at)
       || bootstrap.payload?.target !== state.target || !Array.isArray(bootstrap.payload?.posts)
       || !FALLBACK_ARCHIVES.some(archive => archive.archive_key === state.target)) {
       return null;
     }
-    return { payload: bootstrap.payload, cursor: state.cursor };
+    return { payload: bootstrap.payload, cursor: state.cursor, apiUrl: bootstrap.api_url,
+      fresh: bootstrap.expires_at > Date.now() };
   } catch {
     return null;
   }
@@ -434,11 +436,23 @@ async function loadArchive() {
   state.activeRequest = controller;
   const bypassCache = archiveCacheBypassActive();
   const bootstrap = consumeArchiveBootstrap(bypassCache);
-  if (!bootstrap) renderLoadingState();
+  if (bootstrap && !bootstrap.fresh) archiveBootstrapSnapshot = bootstrap;
+  // A displayed snapshot is not a fresh cache entry: always revalidate it.
+  // Drop it on navigation or visibility changes so it cannot show hidden posts
+  // or results belonging to a different filter, page, or private archive.
+  if (bypassCache || archiveBootstrapSnapshot?.apiUrl !== buildApiUrl()) archiveBootstrapSnapshot = null;
+  const snapshot = archiveBootstrapSnapshot;
+  if (snapshot) {
+    state.archive = withArchiveCatalog(snapshot.payload);
+    state.dataSource = "refreshing";
+    render();
+  } else if (!bootstrap) {
+    renderLoadingState();
+  }
 
   try {
     const favoritesRevision = state.favoritesRevision;
-    const loaded = bootstrap || await fetchArchivePage(controller, bypassCache);
+    const loaded = bootstrap?.fresh ? bootstrap : await fetchArchivePage(controller, bypassCache);
     if (!loaded || controller.signal.aborted) return;
     const { payload, cursor } = loaded;
     if (state.cursor !== cursor) {
@@ -448,6 +462,7 @@ async function loadArchive() {
 
     state.archive = withArchiveCatalog(payload);
     state.dataSource = "live";
+    archiveBootstrapSnapshot = null;
 
     if (hasSecretLinkSession()) {
       if (payload.target === FAVORITES_TARGET && favoritesRevision === state.favoritesRevision) {
@@ -484,7 +499,10 @@ async function loadArchive() {
     }
 
     const fallback = window.__TODAY_COMMUNITY_ARCHIVE__;
-    if (state.target !== FAVORITES_TARGET && !error.inputError && fallback && (!fallback.target || fallback.target === state.target)) {
+    if (snapshot && !error.inputError && !archiveCacheBypassActive()) {
+      state.archive = withArchiveCatalog(snapshot.payload);
+      state.dataSource = "stale";
+    } else if (state.target !== FAVORITES_TARGET && !error.inputError && fallback && (!fallback.target || fallback.target === state.target)) {
       state.archive = withArchiveCatalog(fallback);
       state.dataSource = "fallback";
     } else {
@@ -1033,7 +1051,7 @@ function render() {
   applyContentKindMode();
   updatePageMetadata();
   const view = getViewModel();
-  elements.board.setAttribute("aria-busy", "false");
+  elements.board.setAttribute("aria-busy", String(state.dataSource === "refreshing"));
   renderArchiveTabs();
   renderArchiveFilterControls();
   renderSubjectOptions();
@@ -1052,7 +1070,7 @@ function render() {
 }
 
 function getViewModel() {
-  if (state.dataSource !== "live") {
+  if (!["live", "refreshing", "stale"].includes(state.dataSource)) {
     return getLocalViewModel();
   }
 
@@ -1444,6 +1462,22 @@ function syncTopicPanelForViewport() {
 }
 
 function renderNotice() {
+  if (state.dataSource === "refreshing" || state.dataSource === "stale") {
+    elements.dataNotice.textContent = state.dataSource === "refreshing"
+      ? "최신 목록을 확인하는 중입니다. 먼저 불러온 목록을 표시합니다."
+      : "목록을 갱신하지 못해 먼저 불러온 목록을 표시합니다. 최신 상태와 다를 수 있습니다.";
+    elements.dataNotice.hidden = false;
+    if (state.dataSource === "stale") {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "button button-secondary";
+      retry.textContent = "다시 시도";
+      retry.addEventListener("click", () => loadArchive());
+      elements.dataNotice.append(" ", retry);
+    }
+    return;
+  }
+
   if (state.dataSource === "fallback") {
     elements.dataNotice.textContent =
       "라이브 데이터 연결에 실패해 로컬 스냅샷을 표시합니다. 최신 상태와 다를 수 있습니다.";

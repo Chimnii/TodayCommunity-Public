@@ -364,6 +364,7 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         for path in (
             '"dashboard/**"',
             '"functions/**"',
+            '"build/pages.mjs"',
             '"package.json"',
             '"package-lock.json"',
             '".github/workflows/deploy-pages.yml"',
@@ -372,6 +373,7 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertNotRegex(self.deploy_pages, r"(?m)^\s*schedule:\s*$")
         self.assertIn("if: github.ref == 'refs/heads/main'", self.deploy_pages)
         self.assertIn("npm run verify:pages", self.deploy_pages)
+        self.assertIn("wrangler pages deploy .wrangler/pages-assets", self.deploy_pages)
         self.assertLess(
             self.deploy_pages.index("run: npm test"),
             self.deploy_pages.index("wrangler pages deploy"),

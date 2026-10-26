@@ -115,9 +115,8 @@ test("fresh matching public bootstrap renders once without an empty loading stat
   assert.equal(h.calls.length, 1, "subsequent explicit reloads must use the normal API cache");
 });
 
-test("expired, malformed, mismatched and visibility-invalidated bootstrap always uses the live API", async () => {
+test("malformed, mismatched and visibility-invalidated bootstrap always uses the live API without preserving wrong rows", async () => {
   for (const options of [
-    { bootstrap: publicBootstrap({ expires_at: 1000 }) },
     { bootstrap: publicBootstrap({ expires_at: "10000" }) },
     { bootstrap: "not JSON" },
     { bootstrap: publicBootstrap({ version: 2 }) },
@@ -130,6 +129,73 @@ test("expired, malformed, mismatched and visibility-invalidated bootstrap always
     assert.equal(h.calls.length, 1);
     assert.ok(h.events.some(event => event.type === "loading"));
   }
+});
+
+test("delayed hydration keeps the initial list while revalidating expired data and replaces it on success", async () => {
+  let resolveFetch;
+  const h = archiveRequestHarness({ bootstrap: publicBootstrap(), now: () => 20_000,
+    fetchImpl: () => new Promise(resolve => { resolveFetch = resolve; }) });
+  const pending = h.loadArchive();
+  assert.equal(h.calls.length, 1, "expired data must still be fetched");
+  assert.equal(h.calls[0].cache, "default", "normal API cache policy is unchanged");
+  assert.equal(h.state.dataSource, "refreshing");
+  assert.equal(h.state.archive.posts[0].title, "server-rendered post");
+  assert.ok(!h.events.some(event => event.type === "loading"), "do not empty the list");
+  resolveFetch({ ok: true, json: async () => ({ target: "dcinside-singularity", posts: [{title: "updated post"}] }) });
+  await pending;
+  assert.equal(h.state.dataSource, "live");
+  assert.equal(h.state.archive.posts[0].title, "updated post");
+});
+
+test("failed delayed hydration retains a clearly stale snapshot, and retry revalidates then recovers", async () => {
+  let failed = true;
+  const h = archiveRequestHarness({ bootstrap: publicBootstrap({ expires_at: 0 }),
+    fetchImpl: async () => {
+      if (failed) throw new Error("offline");
+      return {ok: true, json: async () => ({target: "dcinside-singularity", posts: []})};
+    } });
+  await h.loadArchive();
+  assert.equal(h.state.dataSource, "stale");
+  assert.equal(h.state.archive.posts[0].title, "server-rendered post");
+  failed = false;
+  await h.loadArchive();
+  assert.equal(h.calls.length, 2, "retry must not treat displayed snapshot as a fresh cache hit");
+  assert.ok(!h.events.some(event => event.type === "loading"));
+  assert.equal(h.state.dataSource, "live");
+  assert.equal(h.state.archive.posts.length, 0, "a valid new empty result replaces old posts");
+});
+
+test("stale snapshot cannot survive navigation, input errors, or visibility invalidation", async () => {
+  for (const change of [h => { h.state.target = "dcinside-agent-stack"; },
+    h => { h.state.search = "different query"; }, h => { h.state.page = 2; }, h => h.markArchiveChanged()]) {
+    const h = archiveRequestHarness({ bootstrap: publicBootstrap({ expires_at: 0 }),
+      fetchImpl: async () => { throw new Error("offline"); } });
+    await h.loadArchive();
+    assert.equal(h.state.dataSource, "stale");
+    change(h);
+    await h.loadArchive();
+    assert.equal(h.state.dataSource, "unavailable");
+    assert.equal(h.state.archive.posts.length, 0);
+  }
+  const h = archiveRequestHarness({ bootstrap: publicBootstrap({ expires_at: 0 }),
+    fetchImpl: async () => ({ok: false, status: 400, json: async () => ({error: "invalid query"})}) });
+  await h.loadArchive();
+  assert.equal(h.state.dataSource, "unavailable");
+});
+
+test("a cancelled stale revalidation cannot overwrite a newly selected tab", async () => {
+  let rejectOld;
+  const h = archiveRequestHarness({ bootstrap: publicBootstrap({ expires_at: 0 }),
+    fetchImpl: url => url.includes("dcinside-singularity")
+      ? new Promise((_resolve, reject) => { rejectOld = reject; })
+      : Promise.resolve({ok: true, json: async () => ({target: "dcinside-agent-stack", posts: [{title: "AI result"}]})}) });
+  const oldRequest = h.loadArchive();
+  h.state.target = "dcinside-agent-stack";
+  await h.loadArchive();
+  rejectOld(new Error("offline"));
+  await oldRequest;
+  assert.equal(h.state.dataSource, "live");
+  assert.equal(h.state.archive.posts[0].title, "AI result");
 });
 
 test("filters, later pages and authenticated all exclusions cannot reuse the public first-page bootstrap", async () => {
