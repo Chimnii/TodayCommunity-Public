@@ -157,14 +157,6 @@ class MockDatabase {
         updated_at: "2026-07-17T01:07:00Z",
       },
       {
-        archive_key: "dcinside-zeus-pride",
-        display_name: "제우스 오만의 신",
-        description: "디시인사이드 제우스 오만의 신 갤러리 인기글",
-        content_kind: "community",
-        display_order: 25,
-        updated_at: "2026-08-28T01:07:00Z",
-      },
-      {
         archive_key: "fmkorea-munich",
         display_name: "뮌헨",
         description: "에펨코리아의 뮌헨 관련 인기글",
@@ -286,7 +278,6 @@ test("defaults to the first 30 globally counted posts and preserves recent runs"
     [
       "dcinside-singularity",
       "dcinside-agent-stack",
-      "dcinside-zeus-pride",
       "fmkorea-munich",
       "game-news",
       "all",
@@ -696,7 +687,7 @@ test("validates well-formed targets against public archives", async () => {
   assert.deepEqual(database.calls[0].values, []);
 });
 
-test("serves the Zeus gallery as its own public community archive", async () => {
+test("rejects the retired Zeus gallery even when its collection source is preserved", async () => {
   const target = "dcinside-zeus-pride";
   const sources = [
     {
@@ -713,12 +704,10 @@ test("serves the Zeus gallery as its own public community archive", async () => 
 
   const { response, body } = await requestArchive(database, `?target=${target}`);
 
-  assert.equal(response.status, 200);
-  assert.equal(body.target, target);
-  assert.equal(body.archive.display_name, "제우스 오만의 신");
-  assert.equal(body.archive.content_kind, "community");
-  assert.deepEqual(body.sources, sources);
-  assert.deepEqual(body.source, sources[0]);
+  assert.equal(response.status, 400);
+  assert.equal(body.error, "Unknown archive target.");
+  assert.equal(database.calls.length, 1);
+  assert.match(database.calls[0].sql, /archive\.is_public = 1/);
 });
 
 test("combines multiple collection sources under one archive", async () => {

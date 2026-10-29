@@ -84,7 +84,6 @@ class MockDatabase {
     this.archives = [
       "dcinside-singularity",
       "dcinside-agent-stack",
-      "dcinside-zeus-pride",
       "fmkorea-munich",
       "game-news",
     ];

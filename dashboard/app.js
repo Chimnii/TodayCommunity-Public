@@ -13,7 +13,6 @@ const LIST_ONLY_DESCRIPTION =
 const ARCHIVE_TAB_LABELS = Object.freeze({
   "dcinside-singularity": "특이점이 온다 갤",
   "dcinside-agent-stack": "AI 활용 갤",
-  "dcinside-zeus-pride": "제우스 오만의 신 갤",
   "fmkorea-munich": "Bayern Munich",
   "game-news": "게임 뉴스",
   all: "모두",
@@ -21,7 +20,6 @@ const ARCHIVE_TAB_LABELS = Object.freeze({
 const ARCHIVE_MASTHEAD_DESCRIPTIONS = Object.freeze({
   "dcinside-singularity": "디시인사이드 특이점이 온다 갤러리 (특갤) 실시간 인기글 모음.",
   "dcinside-agent-stack": "디시인사이드 AI 활용 갤러리 (에활갤) 실시간 인기글 모음.",
-  "dcinside-zeus-pride": "디시인사이드 제우스 오만의 신 갤러리 실시간 인기글 모음.",
   "fmkorea-munich": "에펨코리아 바이에른 뮌헨 관련 실시간 인기글 모음.",
   "game-news": "게임 신작, 인터뷰와 업계 동향을 휴리스틱하게 선별한 기사.",
   all: "모든 공개 아카이브의 글을 최신순으로 모았습니다.",
@@ -29,7 +27,6 @@ const ARCHIVE_MASTHEAD_DESCRIPTIONS = Object.freeze({
 const ARCHIVE_HEADINGS = Object.freeze({
   "dcinside-singularity": "특갤 인기글 모음",
   "dcinside-agent-stack": "AI 활용갤(에활갤) 인기글 모음",
-  "dcinside-zeus-pride": "제우스 오만의 신 인기글 모음",
   "fmkorea-munich": "바이에른 뮌헨 인기글 모음",
   "game-news": "게임 뉴스 모음",
   all: "커뮤니티 인기글·게임 뉴스 모음",
@@ -47,14 +44,12 @@ const ARCHIVE_SELECTIONS = Object.freeze({
 const ARCHIVE_ROW_LABELS = Object.freeze({
   "dcinside-singularity": "특이점",
   "dcinside-agent-stack": "AI활용",
-  "dcinside-zeus-pride": "제우스",
   "fmkorea-munich": "Bayern",
   "game-news": "게임뉴스",
 });
 const ARCHIVE_SITE_LINKS = Object.freeze({
   "dcinside-singularity": "https://gall.dcinside.com/mgallery/board/lists/?id=thesingularity",
   "dcinside-agent-stack": "https://gall.dcinside.com/mgallery/board/lists/?id=ai_utilize",
-  "dcinside-zeus-pride": "https://gall.dcinside.com/mgallery/board/lists/?id=zeusthegodofpride",
   "fmkorea-munich": "https://www.fmkorea.com/index.php?mid=football_world&category=853073246",
 });
 const FALLBACK_ARCHIVES = Object.freeze([
@@ -71,13 +66,6 @@ const FALLBACK_ARCHIVES = Object.freeze([
     description: "디시인사이드 AI 활용 갤러리 인기글",
     content_kind: "community",
     display_order: 20,
-  },
-  {
-    archive_key: "dcinside-zeus-pride",
-    display_name: "제우스 오만의 신",
-    description: "디시인사이드 제우스 오만의 신 갤러리 인기글",
-    content_kind: "community",
-    display_order: 25,
   },
   {
     archive_key: "fmkorea-munich",

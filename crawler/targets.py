@@ -73,6 +73,7 @@ ARCHIVES = {
         display_name="제우스 오만의 신",
         description="디시인사이드 제우스 오만의 신 갤러리 인기글",
         display_order=25,
+        is_public=False,
     ),
     "fmkorea-munich": ArchiveDefinition(
         key="fmkorea-munich",

@@ -3,17 +3,15 @@ const DEFAULT_TARGET = "dcinside-singularity";
 const PUBLIC_ARCHIVES = Object.freeze({
   "dcinside-singularity": ["특이점이 온다", "디시인사이드 특이점이 온다 갤러리 (특갤) 실시간 인기글 모음.", "community"],
   "dcinside-agent-stack": ["AI 활용", "디시인사이드 AI 활용 갤러리 (에활갤) 실시간 인기글 모음.", "community"],
-  "dcinside-zeus-pride": ["제우스 오만의 신", "디시인사이드 제우스 오만의 신 갤러리 실시간 인기글 모음.", "community"],
   "fmkorea-munich": ["뮌헨", "에펨코리아 바이에른 뮌헨 관련 실시간 인기글 모음.", "community"],
   "game-news": ["게임 뉴스", "게임 신작, 인터뷰와 업계 동향을 휴리스틱하게 선별한 기사.", "article"],
   all: ["모두", "모든 공개 아카이브의 글을 최신순으로 모았습니다.", "mixed"],
 });
 const ARCHIVE_LABELS = { "dcinside-singularity": "특이점", "dcinside-agent-stack": "AI활용",
-  "dcinside-zeus-pride": "제우스", "fmkorea-munich": "Bayern", "game-news": "게임뉴스" };
+  "fmkorea-munich": "Bayern", "game-news": "게임뉴스" };
 const ARCHIVE_HEADINGS = Object.freeze({
   "dcinside-singularity": "특갤 인기글 모음",
   "dcinside-agent-stack": "AI 활용갤(에활갤) 인기글 모음",
-  "dcinside-zeus-pride": "제우스 오만의 신 인기글 모음",
   "fmkorea-munich": "바이에른 뮌헨 인기글 모음",
   "game-news": "게임 뉴스 모음",
   all: "커뮤니티 인기글·게임 뉴스 모음",

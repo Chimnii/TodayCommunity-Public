@@ -244,7 +244,7 @@ test("public tab navigation and back navigation keep canonical, title and sharin
   assert.equal(h.document.title, "오늘의 커뮤니티");
   assert.equal(h.canonical(), "https://todaycommunity.pages.dev/");
   for (const target of [
-    "dcinside-singularity", "dcinside-agent-stack", "dcinside-zeus-pride",
+    "dcinside-singularity", "dcinside-agent-stack",
     "fmkorea-munich", "game-news", "all",
   ]) {
     h.state.target = target;

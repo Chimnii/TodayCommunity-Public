@@ -6,7 +6,7 @@ from crawler.targets import ARCHIVES, TARGETS, canonical_post_key, get_target
 
 
 class TargetRegistryTests(unittest.TestCase):
-    def test_six_collection_sources_map_to_four_public_archives(self) -> None:
+    def test_source_registry_retains_retired_archive_identity(self) -> None:
         self.assertEqual(
             set(TARGETS),
             {
@@ -26,6 +26,10 @@ class TargetRegistryTests(unittest.TestCase):
                 "dcinside-zeus-pride",
                 "fmkorea-munich",
             },
+        )
+        self.assertEqual(
+            {key for key, archive in ARCHIVES.items() if archive.is_public},
+            {"dcinside-singularity", "dcinside-agent-stack", "fmkorea-munich"},
         )
         self.assertEqual(
             {
@@ -133,11 +137,12 @@ class TargetRegistryTests(unittest.TestCase):
         self.assertIn("id=ai_utilize", migrated.page_url(2))
         self.assertNotIn("dcinside-agent-stack", TARGETS)
 
-    def test_zeus_gallery_has_an_independent_public_archive(self) -> None:
+    def test_zeus_gallery_retains_an_independent_private_archive(self) -> None:
         target = get_target("dcinside-zeus-pride")
         archive = ARCHIVES["dcinside-zeus-pride"]
 
         self.assertEqual(target.archive_key, archive.key)
+        self.assertFalse(archive.is_public)
         self.assertEqual(archive.display_name, "제우스 오만의 신")
         self.assertEqual(target.board_name, "제우스 오만의 신 마이너 갤러리")
         self.assertEqual(

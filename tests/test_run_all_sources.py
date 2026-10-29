@@ -68,7 +68,7 @@ class RunAllSourcesTests(unittest.TestCase):
             9,
         )
 
-    def test_github_scheduled_sweeps_run_only_dc_targets(self) -> None:
+    def test_github_scheduled_sweeps_exclude_retired_zeus_in_both_modes(self) -> None:
         scheduled_keys = [target.key for target in iter_github_scheduled_targets()]
         self.assertEqual(
             [target.key for target in iter_targets()],
@@ -86,7 +86,6 @@ class RunAllSourcesTests(unittest.TestCase):
             [
                 "dcinside-singularity",
                 "dcinside-ai-utilize",
-                "dcinside-zeus-pride",
             ],
         )
 
@@ -105,7 +104,7 @@ class RunAllSourcesTests(unittest.TestCase):
                     [selected_mode for _, selected_mode, _ in calls],
                     [mode] * len(scheduled_keys),
                 )
-                self.assertEqual(result["target_count"], 3)
+                self.assertEqual(result["target_count"], 2)
                 self.assertEqual(result["failure_count"], 0)
                 self.assertEqual(result["status"], "completed")
 

@@ -77,11 +77,11 @@ test("allows public crawling and advertises the sitemap", () => {
 });
 
 test("lists canonical public archives and information pages without private or filter URLs", () => {
+  assert.doesNotMatch(aboutHtml, /dcinside-zeus-pride|제우스/);
   const locations = [...sitemap.matchAll(/<loc>([^<]+)<\/loc>/gu)].map((match) => match[1]);
   assert.deepEqual(locations, [
     "https://todaycommunity.pages.dev/",
     "https://todaycommunity.pages.dev/?target=dcinside-agent-stack",
-    "https://todaycommunity.pages.dev/?target=dcinside-zeus-pride",
     "https://todaycommunity.pages.dev/?target=fmkorea-munich",
     "https://todaycommunity.pages.dev/?target=game-news",
     "https://todaycommunity.pages.dev/?target=all",

@@ -87,7 +87,7 @@ function bootstrap(html) {
 }
 
 test("public archives share the site title while keeping distinct descriptions and canonical URLs", async () => {
-  const targets = ["dcinside-singularity", "dcinside-agent-stack", "dcinside-zeus-pride", "fmkorea-munich", "game-news", "all"];
+  const targets = ["dcinside-singularity", "dcinside-agent-stack", "fmkorea-munich", "game-news", "all"];
   const titles = new Set();
   const descriptions = new Set();
   for (const target of targets) {
@@ -129,7 +129,7 @@ test("public archives share the site title while keeping distinct descriptions a
     }
   }
   assert.deepEqual([...titles], ["오늘의 커뮤니티"]);
-  assert.equal(descriptions.size, 6);
+  assert.equal(descriptions.size, 5);
   const root = await page();
   assert.equal(bootstrap(root.html).payload.target, targets[0]);
 });
@@ -206,8 +206,8 @@ test("filter/page/search URLs stay noindex and cannot receive mismatched default
   }
 });
 
-test("favorites, unknown targets and preview hosts cannot be indexed", async () => {
-  for (const [query, expectedStatus] of [["favorites", 200], ["private-archive", 404], ["", 404], ["constructor", 404]]) {
+test("favorites, retired or unknown targets and preview hosts cannot be indexed", async () => {
+  for (const [query, expectedStatus] of [["favorites", 200], ["dcinside-zeus-pride", 404], ["private-archive", 404], ["", 404], ["constructor", 404]]) {
     const { response, html } = await page(`/?target=${query}`);
     assert.equal(response.status, expectedStatus);
     assert.equal(response.headers.get("x-test-api-url"), "not-called");

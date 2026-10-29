@@ -72,6 +72,24 @@ test("favorites paginate in both directions without duplication and retain invis
   } finally { data.sqlite.close(); }
 });
 
+test("retiring Zeus preserves shared saves while hiding them from every favorites operation", async () => {
+  const data = await fixture(2);
+  try {
+    data.sqlite.exec(`UPDATE archives SET is_public=1 WHERE archive_key='dcinside-zeus-pride';
+      UPDATE posts SET archive_key='dcinside-zeus-pride' WHERE id=1`);
+    assert.equal((await request(data, { body: { post_id: 1, saved: true } })).status, 200);
+    const migration = await readFile(new URL("../cloudflare/migrations/019_retire_zeus_pride_archive.sql", import.meta.url), "utf8");
+    data.sqlite.exec(migration);
+    const list = (await request(data)).body;
+    assert.deepEqual(list.posts, []);
+    assert.equal(list.summary.total_posts, 0);
+    assert.ok(list.archives.every(row => row.archive_key !== "dcinside-zeus-pride"));
+    assert.deepEqual((await request(data, { query: "ids=1" })).body.post_ids, []);
+    assert.equal((await request(data, { body: { post_id: 1, saved: true } })).status, 404);
+    assert.equal(data.sqlite.prepare("SELECT count(*) AS n FROM shared_favorites WHERE post_id=1").get().n, 1);
+  } finally { data.sqlite.close(); }
+});
+
 test("invisible candidates are bounded and empty pages retain continuation", async () => {
   const data = await fixture(600);
   try {

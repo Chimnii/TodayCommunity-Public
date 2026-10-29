@@ -39,7 +39,7 @@ INSERT OR IGNORE INTO archives (
     '제우스 오만의 신',
     '디시인사이드 제우스 오만의 신 갤러리 인기글',
     25,
-    1,
+    0,
     'community'
   ),
   (

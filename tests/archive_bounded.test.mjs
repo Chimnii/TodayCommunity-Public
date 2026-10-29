@@ -42,6 +42,35 @@ async function request(data, params, headers = {}) {
   return { response, body };
 }
 
+test("retiring Zeus hides its preserved rows and metadata from direct and combined archives", async () => {
+  const data = fixture(3);
+  try {
+    data.sqlite.exec(`UPDATE archives SET is_public=1 WHERE archive_key='dcinside-zeus-pride';
+      INSERT INTO sources(source_key,archive_key,site_name,board_name,board_url)
+        VALUES('dcinside-zeus-pride','dcinside-zeus-pride','dcinside','Zeus','https://example.com');
+      UPDATE posts SET archive_key='dcinside-zeus-pride',source_key='dcinside-zeus-pride' WHERE id=3;
+      UPDATE archive_stats SET active_post_count=2 WHERE archive_key='dcinside-singularity';
+      UPDATE archive_stats SET active_post_count=1 WHERE archive_key='dcinside-zeus-pride'`);
+    assert.equal((await request(data, "target=dcinside-zeus-pride")).body.posts.length, 1);
+    const migration = await readFile(new URL("../cloudflare/migrations/019_retire_zeus_pride_archive.sql", import.meta.url), "utf8");
+    data.sqlite.exec(migration);
+    const retired = await onRequestGet({
+      request: new Request("https://example.com/api/archive?target=dcinside-zeus-pride"),
+      env: { DB: data.db },
+    });
+    assert.equal(retired.status, 400);
+    assert.equal((await retired.json()).error, "Unknown archive target.");
+    for (const params of ["target=all", "target=all&q=post", "target=dcinside-singularity"]) {
+      const { body } = await request(data, params);
+      assert.ok(body.posts.every(row => row.archive_key !== "dcinside-zeus-pride"));
+      assert.ok(body.archives.every(row => row.archive_key !== "dcinside-zeus-pride"));
+      assert.ok(body.sources.every(row => row.archive_key !== "dcinside-zeus-pride"));
+      assert.equal(body.summary.total_posts, 2);
+    }
+    assert.equal(data.sqlite.prepare("SELECT count(*) AS n FROM posts").get().n, 3);
+  } finally { data.sqlite.close(); }
+});
+
 test("real SQL traverses tied keys both ways without gaps or duplicates for every sort", async () => {
   const data = fixture();
   try {

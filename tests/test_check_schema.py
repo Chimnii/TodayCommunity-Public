@@ -50,6 +50,9 @@ ZEUS_ARCHIVE_MIGRATION_PATH = (
     / "010_add_zeus_pride_archive.sql"
 )
 ZEUS_ARCHIVE_MIGRATION = ZEUS_ARCHIVE_MIGRATION_PATH.read_text(encoding="utf-8")
+ZEUS_RETIREMENT_MIGRATION = (
+    SCHEMA_PATH.parent / "migrations" / "019_retire_zeus_pride_archive.sql"
+).read_text(encoding="utf-8")
 UTC_MIGRATION_PATH = (
     Path(__file__).resolve().parents[1]
     / "cloudflare"
@@ -142,14 +145,14 @@ class SchemaPreflightTests(unittest.TestCase):
         self.assertTrue(any("WHERE status = 'active'" in e for e in caught.exception.report["errors"]))
         self.assertEqual(sum("FROM sqlite_schema" in sql for sql in queries), 1)
 
-    def test_zeus_archive_seed_and_migration_are_idempotent(self) -> None:
+    def test_zeus_archive_seed_and_migrations_keep_it_private(self) -> None:
         client = SqliteClient()
         expected = {
             "archive_key": "dcinside-zeus-pride",
             "display_name": "제우스 오만의 신",
             "description": "디시인사이드 제우스 오만의 신 갤러리 인기글",
             "display_order": 25,
-            "is_public": 1,
+            "is_public": 0,
             "content_kind": "community",
         }
 
@@ -173,6 +176,8 @@ class SchemaPreflightTests(unittest.TestCase):
         )
         client.connection.executescript(ZEUS_ARCHIVE_MIGRATION)
         client.connection.executescript(ZEUS_ARCHIVE_MIGRATION)
+        client.connection.executescript(ZEUS_RETIREMENT_MIGRATION)
+        client.connection.executescript(ZEUS_RETIREMENT_MIGRATION)
 
         self.assertEqual(
             client.query(
@@ -184,6 +189,57 @@ class SchemaPreflightTests(unittest.TestCase):
                 """
             ),
             [expected],
+        )
+
+    def test_zeus_retirement_preserves_posts_and_crawl_state(self) -> None:
+        client = SqliteClient()
+        client.connection.executescript(ZEUS_ARCHIVE_MIGRATION)
+        client.connection.executescript("""
+            INSERT INTO sources (source_key, archive_key, site_name, board_name, board_url)
+            VALUES ('dcinside-zeus-pride', 'dcinside-zeus-pride', 'dcinside',
+                    'retired gallery', 'https://example.com/board');
+            INSERT INTO posts (
+              source_key, archive_key, canonical_post_key, external_post_id,
+              post_url, title, created_at, created_at_raw, fetched_at,
+              first_seen_at, last_seen_at, qualifies_by
+            ) VALUES (
+              'dcinside-zeus-pride', 'dcinside-zeus-pride', 'dcinside:zeus:1', '1',
+              'https://example.com/post', 'retained post', '2026-10-01T00:00:00Z',
+              '2026-10-01', '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z',
+              '2026-10-01T00:00:00Z', 'weighted-engagement'
+            );
+            INSERT INTO source_state (source_key, backfill_anchor_post_id, backfill_page_hint)
+            VALUES ('dcinside-zeus-pride', '1', 7);
+            INSERT INTO coverage_intervals (
+              source_key, oldest_post_id, newest_post_id, checked_at, created_at, updated_at
+            ) VALUES ('dcinside-zeus-pride', 1, 20, '2026-10-01T00:00:00Z',
+                      '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z');
+            INSERT INTO shared_favorites (post_id) SELECT id FROM posts;
+        """)
+        retained_tables = (
+            "sources", "posts", "source_state", "coverage_intervals",
+            "shared_favorites", "archive_stats",
+        )
+        before = {table: client.query(f"SELECT * FROM {table}") for table in retained_tables}
+        other_archives = client.query(
+            "SELECT * FROM archives WHERE archive_key <> 'dcinside-zeus-pride'"
+        )
+
+        client.connection.executescript(ZEUS_RETIREMENT_MIGRATION)
+        changes = client.connection.total_changes
+        client.connection.executescript(ZEUS_RETIREMENT_MIGRATION)
+        self.assertEqual(client.connection.total_changes, changes)
+        self.assertEqual(
+            client.query("SELECT is_public FROM archives WHERE archive_key = 'dcinside-zeus-pride'"),
+            [{"is_public": 0}],
+        )
+        self.assertEqual(
+            {table: client.query(f"SELECT * FROM {table}") for table in retained_tables},
+            before,
+        )
+        self.assertEqual(
+            client.query("SELECT * FROM archives WHERE archive_key <> 'dcinside-zeus-pride'"),
+            other_archives,
         )
 
     def test_owner_auth_schema_stores_only_hashed_link_credentials(self) -> None:
