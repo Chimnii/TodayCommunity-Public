@@ -1,4 +1,5 @@
 const DEFAULT_TARGET = "dcinside-singularity";
+const TRACKING_QUERY_KEYS = new Set(["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "utm_id", "gclid", "fbclid", "msclkid"]);
 const ALL_TARGET = "all";
 const FAVORITES_TARGET = "favorites";
 const FAVORITES_ARCHIVE = Object.freeze({
@@ -21,7 +22,7 @@ const ARCHIVE_MASTHEAD_DESCRIPTIONS = Object.freeze({
   "dcinside-singularity": "디시인사이드 특이점이 온다 갤러리 (특갤) 실시간 인기글 모음.",
   "dcinside-agent-stack": "디시인사이드 AI 활용 갤러리 (에활갤) 실시간 인기글 모음.",
   "fmkorea-munich": "에펨코리아 바이에른 뮌헨 관련 실시간 인기글 모음.",
-  "game-news": "게임 신작, 인터뷰와 업계 동향을 휴리스틱하게 선별한 기사.",
+  "game-news": "게임 신작·개발·인터뷰와 업계 동향을 모은 게임 뉴스.",
   all: "모든 공개 아카이브의 글을 최신순으로 모았습니다.",
 });
 const ARCHIVE_HEADINGS = Object.freeze({
@@ -39,6 +40,18 @@ const ARCHIVE_SELECTIONS = Object.freeze({
   "dcinside-agent-stack": {
     description: "AI 도구 활용·바이브 코딩 경험을 찾기 쉽도록 추천·댓글 반응 또는 정보·활용·뉴스·후기 말머리로 선별합니다.",
     url: "/about#ai-selection",
+  },
+  "fmkorea-munich": {
+    description: "포텐의 뮌헨·바이에른 검색 글과 해외축구 바이에른 게시판의 추천·댓글 기준을 통과한 글을 함께 모읍니다.",
+    url: "/about#munich-selection",
+  },
+  "game-news": {
+    description: "신작·개발·인터뷰·업계 소식을 출처와 발행일로 살펴보고, 제목을 눌러 기사 원문을 읽을 수 있습니다.",
+    url: "/about#game-news-selection",
+  },
+  all: {
+    description: "특갤·AI 활용갤·바이에른 뮌헨·게임 뉴스를 출처와 함께 비교하고, 관심 있는 주제의 탭으로 좁혀볼 수 있습니다.",
+    url: "/about#about-archives",
   },
 });
 const ARCHIVE_ROW_LABELS = Object.freeze({
@@ -221,6 +234,7 @@ const elements = {
   topicList: document.querySelector("#topic-list"),
   topicEmpty: document.querySelector("#topic-empty"),
   topicPanelMeta: document.querySelector("#topic-panel-meta"),
+  topicPanelScope: document.querySelector("#topic-panel-scope"),
   gameNewsTools: document.querySelector("#game-news-tools"),
   rulesOpen: document.querySelector("#rules-open"),
   rulesDialog: document.querySelector("#rules-dialog"),
@@ -1365,12 +1379,25 @@ function renderTopicPanel() {
       applyTopicFilter(topicId === state.topicId ? 0 : topicId);
     });
     entry.append(button);
+    const representative = Array.isArray(topic.representative_posts)
+      ? topic.representative_posts.find(post => String(post?.title || "").trim()
+        && /^https?:\/\//i.test(String(post?.post_url || "").trim()) && getSafeHttpUrl(post.post_url)) : null;
+    if (representative) {
+      const source = document.createElement("a");
+      source.className = "topic-source";
+      source.href = getSafeHttpUrl(representative.post_url);
+      source.target = "_blank";
+      source.rel = "noopener noreferrer";
+      source.title = String(representative.title);
+      source.textContent = `대표 글: ${representative.title}`;
+      entry.append(source);
+    }
     elements.topicList.append(entry);
   }
 
   const hasTopics = elements.topicList.childElementCount > 0;
   elements.topicEmpty.hidden = hasTopics;
-  elements.topicEmpty.textContent = trends
+  elements.topicEmpty.textContent = hasTopics ? "" : trends
     ? "반복해서 다뤄진 토픽이 아직 없습니다."
     : state.dataSource === "fallback"
       ? "로컬 스냅샷에는 토픽 정보가 없습니다."
@@ -1381,8 +1408,12 @@ function renderTopicPanel() {
     elements.topicPanelMeta.textContent =
       `${numberFormatter.format(windowHours)}시간 기준 · ` +
       `${formatDateTime(trends.generated_at)} 갱신`;
+    elements.topicPanelScope.textContent =
+      `해당 기간 수집 글 ${numberFormatter.format(normalizeNonNegativeNumber(trends.eligible_post_count, 0))}개 중 ` +
+      `${numberFormatter.format(normalizeNonNegativeNumber(trends.analyzed_post_count, 0))}개의 제목·말머리를 분석했습니다. 전체 게시판의 통계는 아닙니다.`;
   } else {
     elements.topicPanelMeta.textContent = "제목·말머리 기준";
+    elements.topicPanelScope.textContent = "수집한 글의 제목·말머리에서 반복되는 주제를 묶습니다. 전체 게시판의 통계는 아닙니다.";
   }
 
   if (state.topicId > 0 && isCompactTopicPanel()) {
@@ -3229,24 +3260,24 @@ function writeStateToControls() {
 function updatePageMetadata() {
   const archive = findArchive(FALLBACK_ARCHIVES, state.target);
   const isFavorites = state.target === FAVORITES_TARGET;
-  const title = "오늘의 커뮤니티";
+  const title = archive ? `${ARCHIVE_HEADINGS[state.target]} | 오늘의 커뮤니티` : "오늘의 커뮤니티";
   const descriptionLead = archive
     ? ARCHIVE_MASTHEAD_DESCRIPTIONS[state.target]
     : isFavorites ? FAVORITES_ARCHIVE.description : LIST_ONLY_DESCRIPTION;
   const selection = archive ? ARCHIVE_SELECTIONS[state.target] : null;
   const description = selection ? `${descriptionLead} ${selection.description}` : descriptionLead;
-  // Keep browser tabs compact; share metadata describes the selected archive.
-  const shareTitle = archive ? `${ARCHIVE_HEADINGS[state.target]} | ${title}` : title;
+  const shareTitle = title;
   const canonical = new URL("https://todaycommunity.pages.dev/");
   if (archive && state.target !== DEFAULT_TARGET) canonical.searchParams.set("target", state.target);
-  const params = new URL(window.location.href).searchParams;
-  const publicQuery = [...params.keys()].every(key => key === "target")
+  const currentUrl = new URL(window.location.href);
+  const params = currentUrl.searchParams;
+  const publicQuery = [...params.keys()].every(key => key === "target" || TRACKING_QUERY_KEYS.has(key))
     && params.getAll("target").length <= 1
     && (!params.has("target") || params.get("target") === state.target);
   const privateView = document.body?.dataset?.privateRequest === "true"
     || ["authenticated", "admin"].includes(state.feedbackSession?.authentication);
   const robots = !archive ? "noindex,nofollow"
-    : !publicQuery || privateView ? "noindex,follow" : "index,follow";
+    : !publicQuery || privateView || currentUrl.origin !== canonical.origin ? "noindex,follow" : "index,follow";
   document.title = title;
   document.querySelector('link[rel="canonical"]')?.setAttribute("href", canonical.href);
   for (const [selector, value] of [

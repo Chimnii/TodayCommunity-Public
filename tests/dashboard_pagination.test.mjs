@@ -241,7 +241,7 @@ function metadataHarness(href = "https://todaycommunity.pages.dev/") {
 test("public tab navigation and back navigation keep canonical, title and sharing metadata aligned", () => {
   const h = metadataHarness();
   h.hydrateStateFromUrl();
-  assert.equal(h.document.title, "오늘의 커뮤니티");
+  assert.equal(h.document.title, "특갤 인기글 모음 | 오늘의 커뮤니티");
   assert.equal(h.canonical(), "https://todaycommunity.pages.dev/");
   for (const target of [
     "dcinside-singularity", "dcinside-agent-stack",
@@ -249,7 +249,7 @@ test("public tab navigation and back navigation keep canonical, title and sharin
   ]) {
     h.state.target = target;
     h.syncStateToUrl({ replace: false });
-    assert.equal(h.document.title, "오늘의 커뮤니티");
+    assert.equal(h.document.title, `${h.headings[target]} | 오늘의 커뮤니티`);
     const serverPage = publicPageState(new Request(h.window.location.href));
     assert.equal(h.canonical(), target === "dcinside-singularity"
       ? "https://todaycommunity.pages.dev/" : `https://todaycommunity.pages.dev/?target=${target}`);
@@ -263,7 +263,7 @@ test("public tab navigation and back navigation keep canonical, title and sharin
   }
   h.window.location.href = "https://todaycommunity.pages.dev/?target=dcinside-agent-stack";
   h.hydrateStateFromUrl();
-  assert.equal(h.document.title, "오늘의 커뮤니티");
+  assert.equal(h.document.title, "AI 활용갤(에활갤) 인기글 모음 | 오늘의 커뮤니티");
   assert.equal(h.canonical(), h.window.location.href);
 });
 
@@ -291,6 +291,22 @@ test("private, search, cursor and malformed query views remain noindex until nav
   h.document.body.dataset.privateRequest = "true";
   h.updatePageMetadata();
   assert.equal(h.content('meta[name="robots"]'), "noindex,follow");
+});
+
+test("referral and preview metadata retain the same indexing policy as the server", () => {
+  for (const href of [
+    "https://todaycommunity.pages.dev/?utm_source=chatgpt.com",
+    "https://todaycommunity.pages.dev/?target=game-news&utm_source=bing&msclkid=abc",
+    "https://todaycommunity.pages.dev/?utm_source=chatgpt.com&q=AI",
+    "https://preview.todaycommunity.pages.dev/?target=game-news",
+  ]) {
+    const h = metadataHarness(href);
+    h.hydrateStateFromUrl();
+    const serverPage = publicPageState(new Request(href));
+    assert.equal(h.content('meta[name="robots"]'), serverPage.robots.replaceAll(" ", ""));
+    assert.equal(h.document.title, serverPage.title);
+    assert.equal(h.canonical(), serverPage.canonical);
+  }
 });
 
 function filterRequestHarness() {

@@ -22,7 +22,7 @@ const [html, app, css, design, fixtureServer] = await Promise.all([
 ]);
 
 test("ships the compact archive surface and hidden collection dialog", () => {
-  assert.match(html, /<title>오늘의 커뮤니티<\/title>/);
+  assert.match(html, /<title>특갤 인기글 모음 \| 오늘의 커뮤니티<\/title>/);
   assert.match(html, /id="archive-board"[\s\S]*role="table"/);
   assert.match(html, /id="pagination"[\s\S]*aria-label="게시글 페이지"/);
   assert.match(html, /<dialog[^>]*id="runs-drawer"/);
@@ -167,7 +167,7 @@ test("ships a stored hot-topic rail with URL-backed filtering and a compact acco
   assert.match(app, /applyTopicFilter\(topicId === state\.topicId \? 0 : topicId\)/);
   assert.match(app, /elements\.topicPanel\.hidden = !communityArchive/);
   assert.match(app, /`\$\{numberFormatter\.format\(windowHours\)\}시간 기준 · `/);
-  assert.doesNotMatch(app, /getTopicTrendLabel|representative_posts|topic-trend/);
+  assert.doesNotMatch(app, /getTopicTrendLabel|topic-trend/);
   assert.match(app, /const COMPACT_TOPIC_PANEL_QUERY = "\(max-width: 1759px\)"/);
   assert.match(app, /window\.matchMedia\(COMPACT_TOPIC_PANEL_QUERY\)\.matches/);
   assert.match(css, /--layout-max:\s*1184px/);
@@ -308,7 +308,6 @@ test("switches archive targets and pages with history-aware URLs", () => {
   assert.match(app, /state\.page = 1/);
   assert.match(app, /elements\.archiveTitle\.textContent = ARCHIVE_HEADINGS\[archive\.archive_key\]/);
   assert.match(app, /document\.title = title/);
-  assert.match(app, /const title = "오늘의 커뮤니티"/);
 });
 
 test("keeps source provenance when a display archive combines feeds", () => {

@@ -492,7 +492,33 @@ a {
 }
 
 .topic-entry {
+  min-width: 0;
   max-width: 100%;
+}
+
+.topic-entry:has(.topic-source) {
+  flex-basis: 100%;
+  margin-bottom: var(--space-2);
+}
+
+.topic-source {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--color-ink-muted);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  text-underline-offset: 2px;
+}
+
+.topic-source:hover {
+  color: var(--color-primary-hover);
+}
+
+#topic-panel-scope {
+  font-family: var(--font-sans);
 }
 
 .topic-item {

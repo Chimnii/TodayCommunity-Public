@@ -43,9 +43,12 @@ export default {
         runs: [],
         topic_trends: request.headers.has("x-test-no-topics") ? null : {
           window_hours: 24, generated_at: "2026-10-19T02:00:00Z",
+          eligible_post_count: 1800, analyzed_post_count: 1500,
           topics: request.headers.has("x-test-empty-topics") ? [] : [
-            {topic_id: 17, label: '모델 비교 <img src=x onerror="bad()"> & 활용', post_count: 1234},
-            {topic_id: 18, label: "AI 도구", post_count: -2},
+            {topic_id: 17, label: '모델 비교 <img src=x onerror="bad()"> & 활용', post_count: 1234,
+              representative_posts: [{title: '근거 <script>bad()</script>', post_url: 'https://example.com/topic?a=1&b=2'}]},
+            {topic_id: 18, label: "AI 도구", post_count: -2,
+              representative_posts: [{title: 'invalid source', post_url: 'javascript:bad()'}, {title: 'missing URL'}]},
             {topic_id: '19" onclick="bad()', label: "invalid identifier", post_count: 9},
             {topic_id: 0, label: "zero identifier", post_count: 9},
             {topic_id: 20, label: " ", post_count: 9},
@@ -86,7 +89,7 @@ function bootstrap(html) {
   return match ? JSON.parse(match[1]) : null;
 }
 
-test("public archives share the site title while keeping distinct descriptions and canonical URLs", async () => {
+test("public archives have distinct titles, descriptions and canonical URLs", async () => {
   const targets = ["dcinside-singularity", "dcinside-agent-stack", "fmkorea-munich", "game-news", "all"];
   const titles = new Set();
   const descriptions = new Set();
@@ -128,7 +131,7 @@ test("public archives share the site title while keeping distinct descriptions a
       assert.match(html, /data-content-kind="mixed"/);
     }
   }
-  assert.deepEqual([...titles], ["오늘의 커뮤니티"]);
+  assert.equal(titles.size, 5);
   assert.equal(descriptions.size, 5);
   const root = await page();
   assert.equal(bootstrap(root.html).payload.target, targets[0]);
@@ -146,6 +149,11 @@ test("initial community HTML includes escaped topic names and counts from the sa
   assert.match(html, /class="topic-count">\(0개\)<\/span>/);
   assert.doesNotMatch(html, /<img src=x|onclick="bad|data-topic-id="(?:0|19|20)"/);
   assert.match(html, /24시간 기준 · 10\. 19\. 11:00 갱신/);
+  assert.match(html, /수집 글 1,800개 중 1,500개의 제목·말머리/);
+  assert.match(html, /class="topic-source" href="https:\/\/example.com\/topic\?a=1&amp;b=2"/);
+  assert.match(html, /대표 글: 근거 &lt;script&gt;bad\(\)&lt;\/script&gt;/);
+  assert.equal((html.match(/class="topic-source"/g) || []).length, 1);
+  assert.doesNotMatch(html, /반복해서 다뤄진 토픽이 아직 없습니다/);
   assert.equal(bootstrap(html).payload.topic_trends.topics[0].post_count, 1234);
   for (const [headers, message] of [
     [{"x-test-empty-topics": "1"}, "반복해서 다뤄진 토픽이 아직 없습니다."],
@@ -196,7 +204,7 @@ test("private cookie/authorization requests never read or serialize archive data
 test("filter/page/search URLs stay noindex and cannot receive mismatched default rows", async () => {
   for (const query of ["q=secret-search", "subject=private-subject", "min_upvotes=10", "min_comments=5",
     "page=2", "page_size=50", "cursor=private-cursor", "sort=comments", "topic=1",
-    "exclude_archive=game-news", "utm_source=test", "target=all&target=game-news"]) {
+    "exclude_archive=game-news", "unknown_parameter=test", "target=all&target=game-news"]) {
     const { response, html } = await page(`/?${query}`);
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("x-test-api-url"), "not-called");
@@ -250,6 +258,24 @@ test("page policy is independent of user agent and never copies request secrets 
   const filtered = publicPageState(new Request("https://todaycommunity.pages.dev/?target=game-news&q=secret"));
   assert.equal(filtered.canonical, normal.canonical);
   assert.equal(filtered.renderArchive, false);
+});
+
+test("referral parameters preserve the public first HTML and clean canonical without admitting filters", async () => {
+  for (const query of ["utm_source=chatgpt.com", "target=game-news&utm_source=bing&utm_campaign=news&msclkid=abc"]) {
+    const { response, html } = await page(`/?${query}`);
+    assert.equal(response.headers.get("x-robots-tag"), "index, follow");
+    assert.equal(response.headers.get("x-test-api-calls"), "1");
+    assert.ok(bootstrap(html));
+    assert.doesNotMatch(html.match(/rel="canonical" href="([^"]+)"/)[1], /utm_|msclkid/);
+    const tabs = [...html.matchAll(/<a\s[^>]*class="archive-tab"[^>]*>/g)];
+    assert.equal(tabs.length, 5);
+    for (const [tab] of tabs) assert.match(tab, /tabindex="0"/);
+  }
+  for (const query of ["utm_source=chatgpt.com&q=AI", "utm_source=x&target=all&target=all", "utm_source=x&token=private"]) {
+    const { response, html } = await page(`/?${query}`);
+    assert.equal(response.headers.get("x-robots-tag"), "noindex, follow");
+    assert.equal(bootstrap(html), null);
+  }
 });
 
 test("conditional asset and HEAD requests keep the dynamic status and robots policy", async () => {

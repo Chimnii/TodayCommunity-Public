@@ -1,10 +1,12 @@
 const ORIGIN = "https://todaycommunity.pages.dev";
 const DEFAULT_TARGET = "dcinside-singularity";
+// These parameters identify referrals without changing the public document.
+const TRACKING_QUERY_KEYS = new Set(["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "utm_id", "gclid", "fbclid", "msclkid"]);
 const PUBLIC_ARCHIVES = Object.freeze({
   "dcinside-singularity": ["특이점이 온다", "디시인사이드 특이점이 온다 갤러리 (특갤) 실시간 인기글 모음.", "community"],
   "dcinside-agent-stack": ["AI 활용", "디시인사이드 AI 활용 갤러리 (에활갤) 실시간 인기글 모음.", "community"],
   "fmkorea-munich": ["뮌헨", "에펨코리아 바이에른 뮌헨 관련 실시간 인기글 모음.", "community"],
-  "game-news": ["게임 뉴스", "게임 신작, 인터뷰와 업계 동향을 휴리스틱하게 선별한 기사.", "article"],
+  "game-news": ["게임 뉴스", "게임 신작·개발·인터뷰와 업계 동향을 모은 게임 뉴스.", "article"],
   all: ["모두", "모든 공개 아카이브의 글을 최신순으로 모았습니다.", "mixed"],
 });
 const ARCHIVE_LABELS = { "dcinside-singularity": "특이점", "dcinside-agent-stack": "AI활용",
@@ -24,6 +26,18 @@ const ARCHIVE_SELECTIONS = Object.freeze({
   "dcinside-agent-stack": {
     description: "AI 도구 활용·바이브 코딩 경험을 찾기 쉽도록 추천·댓글 반응 또는 정보·활용·뉴스·후기 말머리로 선별합니다.",
     url: "/about#ai-selection",
+  },
+  "fmkorea-munich": {
+    description: "포텐의 뮌헨·바이에른 검색 글과 해외축구 바이에른 게시판의 추천·댓글 기준을 통과한 글을 함께 모읍니다.",
+    url: "/about#munich-selection",
+  },
+  "game-news": {
+    description: "신작·개발·인터뷰·업계 소식을 출처와 발행일로 살펴보고, 제목을 눌러 기사 원문을 읽을 수 있습니다.",
+    url: "/about#game-news-selection",
+  },
+  all: {
+    description: "특갤·AI 활용갤·바이에른 뮌헨·게임 뉴스를 출처와 함께 비교하고, 관심 있는 주제의 탭으로 좁혀볼 수 있습니다.",
+    url: "/about#about-archives",
   },
 });
 const SUBJECT_LABELS = { business: "biz", development: "dev", platform: "store",
@@ -65,7 +79,7 @@ export function publicPageState(request) {
   const known = Object.hasOwn(PUBLIC_ARCHIVES, target);
   const favorites = target === "favorites";
   const privateRequest = AUTH_COOKIE.test(request.headers.get("cookie") || "") || request.headers.has("authorization");
-  const baseQuery = ![...url.searchParams.keys()].some(key => key !== "target") && url.searchParams.getAll("target").length <= 1;
+  const baseQuery = [...url.searchParams.keys()].every(key => key === "target" || TRACKING_QUERY_KEYS.has(key)) && url.searchParams.getAll("target").length <= 1;
   const canonical = known && target !== DEFAULT_TARGET ? `${ORIGIN}/?target=${target}` : `${ORIGIN}/`;
   const [label, lead, kind] = known ? PUBLIC_ARCHIVES[target] : favorites
     ? ["즐겨찾기", "시크릿 사용자들이 함께 저장한 글.", "mixed"]
@@ -75,7 +89,7 @@ export function publicPageState(request) {
   const heading = known ? ARCHIVE_HEADINGS[target] : label;
   return { target, known, favorites, privateRequest, canonical, label, lead, kind, description, selection,
     heading,
-    title: "오늘의 커뮤니티",
+    title: known ? `${heading} | 오늘의 커뮤니티` : "오늘의 커뮤니티",
     shareTitle: known ? `${heading} | 오늘의 커뮤니티` : "오늘의 커뮤니티",
     robots: !known ? "noindex, nofollow" : privateRequest || !baseQuery || url.origin !== ORIGIN ? "noindex, follow" : "index, follow",
     renderArchive: known && baseQuery && !privateRequest,
@@ -119,7 +133,11 @@ function renderTopics(trends) {
     const label = String(topic?.label || "").trim();
     if (id <= 0 || !label) return "";
     const posts = number.format(Math.max(0, count(topic?.post_count)));
-    return `<article class="topic-entry"><button class="topic-item" type="button" data-topic-id="${id}" aria-pressed="false" aria-label="${escapeHtml(`${label}, ${posts}개 글`)}"><span class="topic-label">${escapeHtml(label)}</span><span class="topic-count">(${posts}개)</span></button></article>`;
+    const representative = Array.isArray(topic.representative_posts)
+      ? topic.representative_posts.find(post => String(post?.title || "").trim() && safeUrl(post?.post_url)) : null;
+    const source = representative
+      ? `<a class="topic-source" href="${escapeHtml(safeUrl(representative.post_url))}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(representative.title)}">대표 글: ${escapeHtml(representative.title)}</a>` : "";
+    return `<article class="topic-entry"><button class="topic-item" type="button" data-topic-id="${id}" aria-pressed="false" aria-label="${escapeHtml(`${label}, ${posts}개 글`)}"><span class="topic-label">${escapeHtml(label)}</span><span class="topic-count">(${posts}개)</span></button>${source}</article>`;
   }).join("");
 }
 
@@ -194,7 +212,8 @@ export async function renderPublicPage(context, loadArchive) {
       const target = new URL(element.getAttribute("href") || "/", ORIGIN).searchParams.get("target") || DEFAULT_TARGET;
       const selected = target === page.target;
       element.setAttribute("aria-selected", String(selected));
-      element.setAttribute("tabindex", selected ? "0" : "-1");
+      // All links remain keyboard reachable before the JS tab controls attach.
+      element.setAttribute("tabindex", "0");
     } });
 
   if (payload) {
@@ -206,7 +225,12 @@ export async function renderPublicPage(context, loadArchive) {
         .on("#topic-list", { element(element) { element.setInnerContent(topics, { html: true }); } })
         .on("#topic-empty", { element(element) {
           if (!topics) element.removeAttribute("hidden");
-          element.setInnerContent(trends ? "반복해서 다뤄진 토픽이 아직 없습니다." : "첫 토픽 분석이 완료되면 여기에 표시됩니다.");
+          element.setInnerContent(topics ? "" : trends ? "반복해서 다뤄진 토픽이 아직 없습니다." : "첫 토픽 분석이 완료되면 여기에 표시됩니다.");
+        } })
+        .on("#topic-panel-scope", { element(element) {
+          element.setInnerContent(trends
+            ? `해당 기간 수집 글 ${number.format(Math.max(0, count(trends.eligible_post_count)))}개 중 ${number.format(Math.max(0, count(trends.analyzed_post_count)))}개의 제목·말머리를 분석했습니다. 전체 게시판의 통계는 아닙니다.`
+            : "수집한 글의 제목·말머리에서 반복되는 주제를 묶습니다. 전체 게시판의 통계는 아닙니다.");
         } })
         .on("#topic-panel-meta", { element(element) {
           element.setInnerContent(trends
