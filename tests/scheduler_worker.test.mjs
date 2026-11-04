@@ -140,6 +140,67 @@ test("AI never replaces or cancels its own active or stale queued run", async ()
   }
 });
 
+test("AI dispatches after a recently completed manual validation and leaves due checks to D1", async () => {
+  const calls = [];
+  const result = await dispatchScheduledWorkflow({
+    cron: "43 * * * *",
+    env: { ...ENV, AI_PRACTICE_DISPATCH_ENABLED: "1", AI_PRACTICE_GITHUB_REPOSITORY: "TodayCommunity" },
+    now: () => NOW,
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return calls.length === 1 ? jsonResponse({ workflow_runs: [{
+        id: 204, event: "workflow_dispatch", status: "completed", conclusion: "success", head_branch: "main",
+        path: ".github/workflows/scan-ai-practice.yml", created_at: "2026-07-20T00:15:00Z",
+      }] }) : noContentResponse();
+    },
+  });
+  assert.equal(result.destinations[0].status, "dispatched");
+  assert.equal(calls.length, 2);
+  assert.equal(JSON.parse(calls[1].options.body).inputs.scheduled, "true");
+});
+
+test("AI still protects recent active and queued runs without dispatch or cancellation", async () => {
+  for (const status of ["in_progress", "queued"]) {
+    let calls = 0;
+    const result = await dispatchScheduledWorkflow({
+      cron: "43 * * * *",
+      env: { ...ENV, AI_PRACTICE_DISPATCH_ENABLED: "1", AI_PRACTICE_GITHUB_REPOSITORY: "TodayCommunity" },
+      now: () => NOW,
+      fetchImpl: async (_url, options) => {
+        calls += 1;
+        assert.equal(options.method, "GET");
+        return jsonResponse({ workflow_runs: [{
+          id: 205, event: "workflow_dispatch", status, head_branch: "main",
+          path: ".github/workflows/scan-ai-practice.yml", created_at: "2026-07-20T00:15:00Z",
+        }] });
+      },
+    });
+    assert.equal(calls, 1);
+    assert.equal(result.destinations[0].status, "skipped");
+    assert.equal(result.destinations[0].reason, "recent_same_workflow_dispatch");
+  }
+});
+
+test("recently completed game-news runs retain the existing ten-minute duplicate guard", async () => {
+  let calls = 0;
+  const result = await dispatchScheduledWorkflow({
+    cron: "17 * * * *",
+    env: { ...ENV, GAME_NEWS_DISPATCH_ENABLED: "1", GAME_NEWS_GITHUB_REPOSITORY: "TodayCommunity" },
+    now: () => NOW,
+    fetchImpl: async (_url, options) => {
+      calls += 1;
+      assert.equal(options.method, "GET");
+      return jsonResponse({ workflow_runs: [{
+        id: 206, event: "workflow_dispatch", status: "completed", conclusion: "success", head_branch: "main",
+        path: ".github/workflows/scan-game-news.yml", created_at: "2026-07-20T00:15:00Z",
+      }] });
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.destinations[0].status, "skipped");
+  assert.equal(result.destinations[0].reason, "recent_same_workflow_dispatch");
+});
+
 test("game-news hourly dispatch is preserved while AI owns the shared runner", async () => {
   const calls = [];
   const result = await dispatchScheduledWorkflow({

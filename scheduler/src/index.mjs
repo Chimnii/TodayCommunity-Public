@@ -122,6 +122,10 @@ export function decideDispatch({
   managedWorkflows = PUBLIC_MANAGED_WORKFLOWS,
 }) {
   const recentSameDispatch = runs.find((run) =>
+    // AI manual validation does not advance its persisted collection clock.
+    // A completed validation must not suppress the next real scheduled run;
+    // completed scheduled duplicates are cheap no-ops at the D1 due gate.
+    !(schedule.kind === "ai-practice" && run?.status === "completed") &&
     isRecentSameDispatch(
       run,
       schedule.workflow,
