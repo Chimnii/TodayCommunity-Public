@@ -2,6 +2,8 @@ const DEFAULT_TARGET = "dcinside-singularity";
 const TRACKING_QUERY_KEYS = new Set(["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "utm_id", "gclid", "fbclid", "msclkid"]);
 const ALL_TARGET = "all";
 const FAVORITES_TARGET = "favorites";
+const AI_PRACTICE_TARGET = "ai-practice";
+const AI_PRACTICE_SUBJECTS = Object.freeze(["생활 비서", "프로젝트 운영", "모델 협의"]);
 const FAVORITES_ARCHIVE = Object.freeze({
   archive_key: FAVORITES_TARGET, display_name: "즐겨찾기", content_kind: "mixed",
   description: "시크릿 사용자들이 함께 저장한 글 · 최근 저장순", display_order: 110,
@@ -16,6 +18,7 @@ const ARCHIVE_TAB_LABELS = Object.freeze({
   "dcinside-agent-stack": "AI 활용 갤",
   "fmkorea-munich": "Bayern Munich",
   "game-news": "게임 뉴스",
+  "ai-practice": "AI 실전",
   all: "모두",
 });
 const ARCHIVE_MASTHEAD_DESCRIPTIONS = Object.freeze({
@@ -23,6 +26,7 @@ const ARCHIVE_MASTHEAD_DESCRIPTIONS = Object.freeze({
   "dcinside-agent-stack": "디시인사이드 AI 활용 갤러리 (에활갤) 실시간 인기글 모음.",
   "fmkorea-munich": "에펨코리아 바이에른 뮌헨 관련 실시간 인기글 모음.",
   "game-news": "게임 신작·개발·인터뷰와 업계 동향을 모은 게임 뉴스.",
+  "ai-practice": "AI를 실제 업무와 일상에 적용한 구축·운영 사례 모음.",
   all: "모든 공개 아카이브의 글을 최신순으로 모았습니다.",
 });
 const ARCHIVE_HEADINGS = Object.freeze({
@@ -30,7 +34,8 @@ const ARCHIVE_HEADINGS = Object.freeze({
   "dcinside-agent-stack": "AI 활용갤(에활갤) 인기글 모음",
   "fmkorea-munich": "바이에른 뮌헨 인기글 모음",
   "game-news": "게임 뉴스 모음",
-  all: "커뮤니티 인기글·게임 뉴스 모음",
+  "ai-practice": "AI 실전 사례 모음",
+  all: "커뮤니티 인기글·게임 뉴스·AI 실전 모음",
 });
 const ARCHIVE_SELECTIONS = Object.freeze({
   "dcinside-singularity": {
@@ -49,8 +54,12 @@ const ARCHIVE_SELECTIONS = Object.freeze({
     description: "신작·개발·인터뷰·업계 소식을 출처와 발행일로 살펴보고, 제목을 눌러 기사 원문을 읽을 수 있습니다.",
     url: "/about#game-news-selection",
   },
+  "ai-practice": {
+    description: "생활 비서·프로젝트 운영·모델 협의의 구체적인 방법과 시행착오를 선별합니다. 한국어 요약을 펼쳐 읽고 원문을 확인할 수 있습니다.",
+    url: "/about#ai-practice-selection",
+  },
   all: {
-    description: "특갤·AI 활용갤·바이에른 뮌헨·게임 뉴스를 출처와 함께 비교하고, 관심 있는 주제의 탭으로 좁혀볼 수 있습니다.",
+    description: "특갤·AI 활용갤·바이에른 뮌헨·게임 뉴스·AI 실전을 출처와 함께 비교하고, 관심 있는 주제의 탭으로 좁혀볼 수 있습니다.",
     url: "/about#about-archives",
   },
 });
@@ -59,6 +68,7 @@ const ARCHIVE_ROW_LABELS = Object.freeze({
   "dcinside-agent-stack": "AI활용",
   "fmkorea-munich": "Bayern",
   "game-news": "게임뉴스",
+  "ai-practice": "AI실전",
 });
 const ARCHIVE_SITE_LINKS = Object.freeze({
   "dcinside-singularity": "https://gall.dcinside.com/mgallery/board/lists/?id=thesingularity",
@@ -93,6 +103,13 @@ const FALLBACK_ARCHIVES = Object.freeze([
     description: "게임 신작, 인터뷰와 업계 동향 기사",
     content_kind: "article",
     display_order: 40,
+  },
+  {
+    archive_key: AI_PRACTICE_TARGET,
+    display_name: "AI 실전",
+    description: "AI 생활 비서·프로젝트 운영·모델 협의의 실전 경험과 참고자료",
+    content_kind: "article",
+    display_order: 45,
   },
   {
     archive_key: ALL_TARGET,
@@ -621,6 +638,14 @@ function isGameNewsPost(post) {
   return post?.archive_key === "game-news";
 }
 
+function isAiPracticePost(post) {
+  return post?.archive_key === AI_PRACTICE_TARGET;
+}
+
+function isArticlePost(post) {
+  return isGameNewsPost(post) || isAiPracticePost(post);
+}
+
 function hasActivePostFilters() {
   return Boolean(
     state.search ||
@@ -685,32 +710,40 @@ function applyContentKindMode() {
       ? "article"
       : "community";
   document.body.dataset.authState = authentication;
+  document.body.dataset.archiveKey = state.target;
   elements.board.setAttribute(
     "aria-label",
     mixedMode
       ? "모든 아카이브의 저장 글"
-      : articleMode
-        ? "저장된 게임 기사"
-        : "저장된 커뮤니티 글"
+      : state.target === AI_PRACTICE_TARGET
+        ? "저장된 AI 실전 활용 글"
+        : articleMode
+          ? "저장된 게임 기사"
+          : "저장된 커뮤니티 글"
   );
-  elements.gameNewsTools.hidden = !articleMode || !canUseFeedback;
+  elements.gameNewsTools.hidden = state.target !== "game-news" || !canUseFeedback;
+  elements.searchInput.placeholder = state.target === AI_PRACTICE_TARGET
+    ? "한국어 제목 또는 원제를 입력하세요" : "찾을 제목을 입력하세요";
 
   if (elements.subjectFilterLabel) {
     elements.subjectFilterLabel.textContent = mixedMode
       ? "말머리/주제"
-      : articleMode
+      : articleMode && state.target !== AI_PRACTICE_TARGET
         ? "주제"
         : "말머리";
   }
   if (elements.subjectColumnLabel) {
     elements.subjectColumnLabel.textContent = mixedMode
       ? "분류"
-      : articleMode
+      : articleMode && state.target !== AI_PRACTICE_TARGET
         ? "주제"
         : "말머리";
   }
   if (elements.sourceColumnLabel) {
     elements.sourceColumnLabel.textContent = mixedMode ? "소속" : "출처";
+  }
+  if (elements.dateColumnLabel) {
+    elements.dateColumnLabel.textContent = articleMode ? "발행일" : "작성일";
   }
   for (const option of [elements.sortUpvotesOption, elements.sortCommentsOption]) {
     if (option) {
@@ -1062,7 +1095,7 @@ function render() {
   renderNotice();
   renderRuns();
   renderPosts(view.posts);
-  if (isArticleArchive() && state.feedbackSession?.capabilities?.rate) {
+  if (state.target === "game-news" && state.feedbackSession?.capabilities?.rate) {
     void loadFeedbackState(view.posts);
   }
   renderResultStatus(view);
@@ -1134,7 +1167,9 @@ function getLocalViewModel() {
         return true;
       }
 
-      return String(post.title || "").toLocaleLowerCase("ko-KR").includes(search);
+      return [post.title, post.original_title].some((value) =>
+        String(value || "").toLocaleLowerCase("ko-KR").includes(search)
+      );
     })
     .sort(comparePosts);
 
@@ -1186,7 +1221,7 @@ function renderSubjectOptions() {
   const options = [];
   const seen = new Set();
 
-  for (const rawOption of rawOptions) {
+  for (const rawOption of state.target === AI_PRACTICE_TARGET ? AI_PRACTICE_SUBJECTS : rawOptions) {
     const value = normalizeSubject(rawOption);
     if (!value || seen.has(value)) {
       continue;
@@ -1200,7 +1235,7 @@ function renderSubjectOptions() {
   allOption.value = "";
   allOption.textContent = isMixedArchive()
     ? "전체 말머리/주제"
-    : isArticleArchive()
+    : isArticleArchive() && state.target !== AI_PRACTICE_TARGET
       ? "전체 주제"
       : "전체 말머리";
   const subjectOptions = options.slice(0, 100).map(createSubjectOption);
@@ -1610,6 +1645,7 @@ function renderPosts(posts) {
 
   reserveBoardRows(posts.length);
 
+  let summaryIndex = 0;
   for (const post of posts) {
     const row = document.createElement("article");
     row.className = "board-row post-row";
@@ -1621,17 +1657,22 @@ function renderPosts(posts) {
     );
     const sourceCell = createSourceCell(post);
     const subjectCell = createSubjectCell(post);
-    const titleCell = createTitleCell(post);
+    const summaryId = isAiPracticePost(post) ? `ai-summary-${++summaryIndex}` : "";
+    const titleCell = createTitleCell(post, summaryId);
     const upvotesCell = createCell(
-      isMixedArchive() && isGameNewsPost(post)
+      isMixedArchive() && isArticlePost(post)
         ? "-"
         : numberFormatter.format(normalizeSignedInteger(post.upvotes, 0)),
       "cell-upvotes numeric-cell"
     );
     const dateCell = createCell(
-      formatPostDate(post.created_at),
+      isAiPracticePost(post) ? aiPublicationDate(post, true) : formatPostDate(post.created_at),
       "cell-date numeric-cell"
     );
+    if (isAiPracticePost(post) && post.created_at_basis !== "source") {
+      dateCell.title = "원문 발행일 미확인";
+      dateCell.setAttribute("aria-label", "원문 발행일 미확인");
+    }
     const feedbackCell = createFeedbackCell(post);
     row.append(
       ...(isMixedArchive()
@@ -1657,6 +1698,7 @@ function renderPosts(posts) {
 
     row.append(createFavoriteCell(post));
     elements.posts.append(row);
+    if (summaryId) elements.posts.append(createAiPracticeSummary(post, summaryId));
   }
 }
 
@@ -1719,7 +1761,7 @@ function createFeedbackCell(post) {
   cell.className = "board-cell cell-feedback";
   cell.setAttribute("role", "cell");
 
-  if (!isArticleArchive() || !state.feedbackSession?.capabilities?.rate) {
+  if (state.target !== "game-news" || !isGameNewsPost(post) || !state.feedbackSession?.capabilities?.rate) {
     return cell;
   }
 
@@ -2189,10 +2231,11 @@ function getArticleSourceFullName(post, sources = []) {
   const source = Array.isArray(sources)
     ? sources.find((candidate) => candidate?.source_key === post?.source_key)
     : null;
-  return String(source?.board_name || source?.site_name || "").trim();
+  return String(post?.publisher || source?.board_name || source?.site_name || "").trim();
 }
 
 function getArticleSourceLabel(post, sources = []) {
+  if (isAiPracticePost(post)) return getArticleSourceFullName(post, sources) || "출처 미상";
   const source = Array.isArray(sources)
     ? sources.find((candidate) => candidate?.source_key === post?.source_key)
     : null;
@@ -2296,14 +2339,14 @@ function isUnpairedRegionalIndicator(grapheme) {
   return characters.length % 2 === 1 && characters.every(isRegionalIndicator);
 }
 
-function createTitleCell(post) {
+function createTitleCell(post, summaryId = "") {
   const cell = document.createElement("span");
   cell.className = "board-cell cell-title";
   cell.setAttribute("role", "cell");
 
   const title = String(post.title || "제목 없음");
   const comments = normalizeNonNegativeNumber(post.comments, 0);
-  const articleMode = isArticleArchive() || (isMixedArchive() && isGameNewsPost(post));
+  const articleMode = isArticleArchive() || (isMixedArchive() && isArticlePost(post));
   const safeUrl = getSafeHttpUrl(post.post_url);
   const content = safeUrl
     ? document.createElement("a")
@@ -2341,7 +2384,95 @@ function createTitleCell(post) {
   }
 
   cell.append(content);
+  if (summaryId) {
+    cell.classList.add("cell-title-with-summary");
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.id = `${summaryId}-toggle`;
+    toggle.className = "ai-summary-toggle";
+    toggle.textContent = "요약";
+    toggle.setAttribute("aria-label", `${title}, 요약과 원문 정보`);
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.setAttribute("aria-controls", summaryId);
+    toggle.addEventListener("click", () => {
+      const panel = document.getElementById(summaryId);
+      if (!panel) return;
+      const expanded = toggle.getAttribute("aria-expanded") !== "true";
+      toggle.setAttribute("aria-expanded", String(expanded));
+      panel.hidden = !expanded;
+    });
+    cell.append(toggle);
+  }
   return cell;
+}
+
+function aiPublicationDate(post, compact = false) {
+  if (post.created_at_basis !== "source" || !post.created_at) return compact ? "미확인" : "발행일 미확인";
+  if (post.created_at_precision === "date") {
+    const rawDate = /^\d{4}-\d{2}-\d{2}/.exec(String(post.created_at_raw || ""))
+      || /^\d{4}-\d{2}-\d{2}/.exec(String(post.created_at));
+    if (rawDate) return compact ? rawDate[0].slice(2).replaceAll("-", ".") : rawDate[0];
+  }
+  return compact ? formatPostDate(post.created_at) : formatAiDateTime(post.created_at);
+}
+
+function formatAiDateTime(value) {
+  const parsed = new Date(value);
+  if (!value || Number.isNaN(parsed.getTime())) return "기록 없음";
+  return new Intl.DateTimeFormat("ko-KR", {
+    timeZone: "Asia/Seoul", year: "numeric", month: "numeric", day: "numeric",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).format(parsed);
+}
+
+function createAiPracticeSummary(post, summaryId) {
+  const row = document.createElement("div");
+  row.id = summaryId;
+  row.className = "ai-summary-row";
+  row.setAttribute("role", "row");
+  row.hidden = true;
+  const cell = document.createElement("div");
+  cell.className = "ai-summary-content";
+  cell.setAttribute("role", "cell");
+  cell.setAttribute("aria-labelledby", `${summaryId}-toggle`);
+  const summary = document.createElement("p");
+  summary.className = "ai-summary-text";
+  summary.textContent = String(post.summary || "저장된 요약이 없습니다. 원문에서 내용을 확인해 주세요.");
+  cell.append(summary);
+  const fields = document.createElement("dl");
+  fields.className = "ai-summary-metadata";
+  const kind = { experience: "실전 경험", reference: "참고자료", update: "문서·사례 갱신" }[post.content_kind] || "유형 미확인";
+  const evidence = post.evidence_level === "full_text" ? "본문 확인"
+    : post.evidence_level === "introduction" ? "소개 내용만 확인 · 원문 본문 미확인" : "확인 범위 미상";
+  for (const [label, value] of [
+    [post.evidence_level === "introduction" ? "소개 원제" : "원제", post.original_title || post.title],
+    ["출처", getArticleSourceFullName(post, getCurrentSources()) || "출처 미상"],
+    ["말머리", post.subject || "미분류"],
+    ["자료 유형", kind],
+    ["확인 범위", evidence],
+    ["원문 발행", aiPublicationDate(post)],
+    ["처음 수집", formatAiDateTime(post.first_seen_at || post.fetched_at)],
+  ]) {
+    const group = document.createElement("div");
+    const term = document.createElement("dt");
+    const description = document.createElement("dd");
+    term.textContent = label;
+    description.textContent = String(value || "기록 없음");
+    group.append(term, description);
+    fields.append(group);
+  }
+  cell.append(fields);
+  const safeUrl = getSafeHttpUrl(post.post_url);
+  if (safeUrl) {
+    const link = document.createElement("a");
+    link.href = safeUrl;
+    link.target = "_blank";
+    link.rel = "noreferrer noopener";
+    link.textContent = "원문 읽기 ↗";
+    cell.append(link);
+  }
+  row.append(cell);
+  return row;
 }
 
 function createFavoriteCell(post) {

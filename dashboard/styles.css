@@ -1002,6 +1002,80 @@ body[data-auth-state="authenticated"] .cell-favorite {
   white-space: nowrap;
 }
 
+/* AI summaries expand below the unchanged compact post row. */
+.cell-title-with-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cell-title-with-summary .post-title-content {
+  flex: 1 1 auto;
+}
+
+.ai-summary-toggle {
+  flex: 0 0 auto;
+  min-height: 28px;
+  padding: 0 5px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-control);
+  background: var(--color-surface);
+  color: var(--color-ink-muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.ai-summary-toggle[aria-expanded="true"] {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.ai-summary-toggle:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+.ai-summary-row {
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-subtle);
+}
+
+.ai-summary-row[hidden] { display: none; }
+
+.ai-summary-content {
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--text-sm);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.ai-summary-text { margin: 0 0 var(--space-3); }
+
+.ai-summary-metadata {
+  margin: 0 0 var(--space-3);
+  color: var(--color-ink-muted);
+  font-size: var(--text-xs);
+}
+
+.ai-summary-metadata > div {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+.ai-summary-metadata dt { font-weight: 700; }
+.ai-summary-metadata dd { margin: 0; }
+
+body[data-archive-key="ai-practice"][data-content-kind="article"] .board-head .board-row,
+body[data-archive-key="ai-practice"][data-content-kind="article"] .post-row {
+  grid-template-columns: 94px 100px minmax(0, 1fr) 100px var(--favorite-column,);
+}
+
+body[data-archive-key="ai-practice"][data-content-kind="article"] .cell-feedback {
+  display: none;
+}
+
 .numeric-cell {
   color: var(--color-ink-muted);
   font-family: var(--font-mono);
@@ -1923,6 +1997,23 @@ body[data-auth-state="authenticated"] .cell-favorite {
 
   body[data-content-kind="mixed"] .cell-subject {
     display: none;
+  }
+
+  body[data-archive-key="ai-practice"][data-content-kind="article"] .board-head .board-row,
+  body[data-archive-key="ai-practice"][data-content-kind="article"] .post-row {
+    grid-template-columns: 90px minmax(0, 1fr) var(--favorite-column,);
+  }
+
+  body[data-archive-key="ai-practice"][data-content-kind="article"] .cell-source {
+    display: none;
+  }
+
+  .ai-summary-content {
+    padding: var(--space-3);
+  }
+
+  .ai-summary-metadata > div {
+    grid-template-columns: 66px minmax(0, 1fr);
   }
 
   .game-news-tools {

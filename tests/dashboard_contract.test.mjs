@@ -48,13 +48,14 @@ test("ships the compact archive surface and hidden collection dialog", () => {
   );
 });
 
-test("ships five accessible archive tabs and replaces them from the API catalog", () => {
+test("ships six accessible archive tabs and replaces them from the API catalog", () => {
   assert.match(html, /id="archive-tabs"[^>]*role="tablist"/);
   assert.match(html, /role="tab"[\s\S]*href="\/"/);
   assert.match(html, /href="\/?\?target=dcinside-agent-stack"/);
   assert.doesNotMatch(html, /dcinside-zeus-pride|제우스/);
   assert.match(html, /href="\/?\?target=fmkorea-munich"/);
   assert.match(html, /href="\/?\?target=game-news"/);
+  assert.match(html, /href="\/?\?target=ai-practice"/);
   assert.match(html, /href="\/?\?target=all"/);
   assert.match(html, />특이점이 온다 갤<\/a>/);
   assert.match(html, />AI 활용 갤<\/a>/);
@@ -93,7 +94,7 @@ test("renders the all target as a mixed five-column archive without feedback", (
   assert.match(app, /"dcinside-agent-stack": "AI활용"/);
   assert.match(app, /"game-news": "게임뉴스"/);
   assert.match(app, /elements\.numberColumnLabel,[\s\S]*elements\.sourceColumnLabel,[\s\S]*elements\.subjectColumnLabel/);
-  assert.match(app, /isMixedArchive\(\) && isGameNewsPost\(post\)[\s\S]*\? "-"/);
+  assert.match(app, /isMixedArchive\(\) && isArticlePost\(post\)[\s\S]*\? "-"/);
   assert.match(app, /cell\.textContent = `\$\{sourceLabel\}-\$\{subjectLabel\}`/);
   assert.match(app, /ARCHIVE_ROW_LABELS\[post\?\.archive_key\]/);
   assert.match(app, /const communityArchive = !isArticleArchive\(\) && !isMixedArchive\(\)/);

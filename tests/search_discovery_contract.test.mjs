@@ -84,6 +84,7 @@ test("lists canonical public archives and information pages without private or f
     "https://todaycommunity.pages.dev/?target=dcinside-agent-stack",
     "https://todaycommunity.pages.dev/?target=fmkorea-munich",
     "https://todaycommunity.pages.dev/?target=game-news",
+    "https://todaycommunity.pages.dev/?target=ai-practice",
     "https://todaycommunity.pages.dev/?target=all",
     "https://todaycommunity.pages.dev/about",
     "https://todaycommunity.pages.dev/privacy",

@@ -245,7 +245,7 @@ test("public tab navigation and back navigation keep canonical, title and sharin
   assert.equal(h.canonical(), "https://todaycommunity.pages.dev/");
   for (const target of [
     "dcinside-singularity", "dcinside-agent-stack",
-    "fmkorea-munich", "game-news", "all",
+    "fmkorea-munich", "game-news", "ai-practice", "all",
   ]) {
     h.state.target = target;
     h.syncStateToUrl({ replace: false });

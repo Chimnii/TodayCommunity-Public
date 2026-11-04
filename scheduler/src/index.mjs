@@ -4,8 +4,10 @@ const UNQUEUED_CANCEL_CONFLICT_MESSAGE =
 const PUBLIC_DESTINATION = "dcinside";
 const FMKOREA_DESTINATION = "fmkorea";
 const GAME_NEWS_DESTINATION = "game-news";
+const AI_PRACTICE_DESTINATION = "ai-practice";
 const FMKOREA_WORKFLOW = "scan-fmkorea.yml";
 const GAME_NEWS_WORKFLOW = "scan-game-news.yml";
+const AI_PRACTICE_WORKFLOW = "scan-ai-practice.yml";
 
 export const GITHUB_API_VERSION = "2022-11-28";
 export const RECENT_DISPATCH_WINDOW_MS = 10 * 60 * 1000;
@@ -29,6 +31,13 @@ export const SCHEDULES = Object.freeze({
     workflow: GAME_NEWS_WORKFLOW,
     destinations: Object.freeze([GAME_NEWS_DESTINATION]),
   }),
+  // Retry the scheduling opportunity hourly; the independent D1 due gate
+  // performs collection only six hours after the last successful full run.
+  "43 * * * *": Object.freeze({
+    kind: "ai-practice",
+    workflow: AI_PRACTICE_WORKFLOW,
+    destinations: Object.freeze([AI_PRACTICE_DESTINATION]),
+  }),
 });
 
 const PUBLIC_MANAGED_WORKFLOWS = new Set([
@@ -38,6 +47,7 @@ const PUBLIC_MANAGED_WORKFLOWS = new Set([
 
 const FMKOREA_MANAGED_WORKFLOWS = new Set([FMKOREA_WORKFLOW]);
 const GAME_NEWS_MANAGED_WORKFLOWS = new Set([GAME_NEWS_WORKFLOW]);
+const AI_PRACTICE_MANAGED_WORKFLOWS = new Set([AI_PRACTICE_WORKFLOW]);
 
 export function workflowForCron(cron) {
   const schedule = SCHEDULES[cron];
@@ -139,7 +149,8 @@ export function decideDispatch({
     : activeManagedRuns;
   if (blockingRuns.length > 0) {
     const protectedRun = blockingRuns.find(
-      (run) => !isStaleQueuedRun(run, ref, nowMs, staleQueuedMs),
+      (run) => schedule.kind === "ai-practice" ||
+        !isStaleQueuedRun(run, ref, nowMs, staleQueuedMs),
     );
     if (protectedRun) {
       return {
@@ -238,6 +249,28 @@ function destinationsForSchedule(schedule, env, nowMs) {
       continue;
     }
 
+    if (destination === AI_PRACTICE_DESTINATION) {
+      const config = optionalDispatchConfig(env, "AI_PRACTICE_DISPATCH_ENABLED");
+      if (config.enabled) {
+        destinations.push({
+          destination,
+          repositoryBinding: "AI_PRACTICE_GITHUB_REPOSITORY",
+          schedule: { kind: "ai-practice", workflow: AI_PRACTICE_WORKFLOW },
+          // The one shared Windows runner serializes execution. A game-news
+          // run must not suppress AI queueing or be canceled by this lane.
+          managedWorkflows: AI_PRACTICE_MANAGED_WORKFLOWS,
+          inputs: {
+            dispatched_at: new Date(nowMs).toISOString(),
+            persist: "true",
+            scheduled: "true",
+            max_items: "18",
+          },
+          configurationError: config.error,
+        });
+      }
+      continue;
+    }
+
     throw new Error(`Unsupported scheduler destination: ${destination}`);
   }
   return destinations;
@@ -320,8 +353,13 @@ async function dispatchDestination({
   const ref = requireEnv(env, "GITHUB_REF");
   const repositoryPath = `${encodeURIComponent(owner)}/${encodeURIComponent(repository)}`;
 
+  // AI's workflow-scoped list keeps a long-queued run visible even while
+  // unrelated private workflows fill the repository's recent-run window.
+  const runsPath = schedule.kind === "ai-practice"
+    ? `actions/workflows/${encodeURIComponent(schedule.workflow)}/runs`
+    : "actions/runs";
   const runsUrl =
-    `${GITHUB_API_ROOT}/repos/${repositoryPath}/actions/runs` +
+    `${GITHUB_API_ROOT}/repos/${repositoryPath}/${runsPath}` +
     `?per_page=${RUN_LIST_PAGE_SIZE}` +
     "&event=workflow_dispatch" +
     `&branch=${encodeURIComponent(ref)}`;

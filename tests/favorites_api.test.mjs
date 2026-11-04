@@ -135,3 +135,20 @@ test("migration is additive, repeatable and matches the canonical schema", async
     assert.equal(data.sqlite.prepare("SELECT count(*) AS n FROM posts").get().n, 65);
   } finally { data.sqlite.close(); }
 });
+
+test("favorites preserve AI public summary and publication provenance without private evaluation data", async () => {
+  const data = await fixture(1);
+  try {
+    data.sqlite.exec(`INSERT OR IGNORE INTO archives(archive_key,display_name,content_kind) VALUES('ai-practice','AI 실전','article');
+      UPDATE posts SET archive_key='ai-practice',original_title='Agent operations',summary='실제 운영 방법과 실패를 기록한 사례.',
+        publisher='Hermes',content_kind='reference',evidence_level='introduction',created_at_basis='first_seen' WHERE id=1`);
+    assert.equal((await request(data, {body:{post_id:1,saved:true}})).status, 200);
+    const post = (await request(data)).body.posts[0];
+    assert.equal(post.original_title, 'Agent operations');
+    assert.equal(post.summary, '실제 운영 방법과 실패를 기록한 사례.');
+    assert.equal(post.evidence_level, 'introduction');
+    assert.equal(post.created_at_basis, 'first_seen');
+    assert.equal(post.first_seen_at, '2026-10-15T00:00:00Z');
+    assert.ok(!('preferences' in post) && !('evaluation' in post));
+  } finally { data.sqlite.close(); }
+});

@@ -428,7 +428,7 @@ test("applies escaped title and numeric filters before paginating with a stable 
   assert.equal(database.batchRequests[0].length, 4);
 
   const selectedSubject = "AI 소식' OR 1=1 --";
-  const expectedFilterBindings = [target, 4, 15, selectedSubject, "%100\\%\\_\\\\%"];
+  const expectedFilterBindings = [target, 4, 15, selectedSubject, "%100\\%\\_\\\\%", "%100\\%\\_\\\\%"];
   assert.ok(database.calls.every(({ sql }) => !sql.includes("COUNT(")));
   const postCall = findCall(database, "SELECT archive_key, source_key, external_post_id", "batch");
   assert.match(postCall.sql, /ORDER BY upvotes DESC, created_at DESC, id DESC/);
@@ -1139,6 +1139,7 @@ test("bounds query controls and allowlists every sort expression", async (t) => 
         "dcinside-singularity",
         "dcinside-singularity",
         "😀".repeat(100),
+        `%${"x".repeat(48)}%`,
         `%${"x".repeat(48)}%`,
       ]);
       assert.doesNotMatch(postCall.sql, /OFFSET/i);

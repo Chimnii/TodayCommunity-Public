@@ -58,7 +58,10 @@ export default {
           {post_id: 1, external_post_id: "123", archive_key: target === "all" ? "game-news" : target,
             source_key: "game-news-inven", subject: "release", title: '실제 저장 글 <script>alert("x")</script> & 제목',
             post_url: 'https://example.com/article?id=123&title="hello"', upvotes: 3, comments: 2,
-            created_at: "2026-10-18T22:00:00Z"},
+            created_at: "2026-10-18T22:00:00Z", created_at_basis: "first_seen",
+            first_seen_at: "2026-11-05T00:00:00Z", original_title: 'Original <script>unsafe()</script>',
+            summary: '소개에 따르면 업무를 자동화했다. <img src=x onerror="bad()">',
+            publisher: "Hermes", content_kind: "reference", evidence_level: "introduction"},
           {post_id: 2, archive_key: target, title: '</script><script id="injected">bad()</script>',
             post_url: "javascript:alert(1)", created_at: "invalid"}
         ]
@@ -90,7 +93,7 @@ function bootstrap(html) {
 }
 
 test("public archives have distinct titles, descriptions and canonical URLs", async () => {
-  const targets = ["dcinside-singularity", "dcinside-agent-stack", "fmkorea-munich", "game-news", "all"];
+  const targets = ["dcinside-singularity", "dcinside-agent-stack", "fmkorea-munich", "game-news", "ai-practice", "all"];
   const titles = new Set();
   const descriptions = new Set();
   for (const target of targets) {
@@ -119,7 +122,7 @@ test("public archives have distinct titles, descriptions and canonical URLs", as
     assert.match(html, /class="board-row post-row" role="row"/);
     assert.match(html, /href="https:\/\/example.com\/article\?id=123&amp;title=%22hello%22"/);
     assert.match(html, /aria-busy="false"/);
-    assert.match(html, /26\.10\.19/); // Server dates use the product's Korean timezone.
+    assert.match(html, target === "ai-practice" ? /발행일 미확인/ : /26\.10\.19/); // Server dates use the product's Korean timezone.
     const seed = bootstrap(html);
     assert.equal(seed.version, 1);
     assert.equal(seed.payload.target, target);
@@ -131,8 +134,8 @@ test("public archives have distinct titles, descriptions and canonical URLs", as
       assert.match(html, /data-content-kind="mixed"/);
     }
   }
-  assert.equal(titles.size, 5);
-  assert.equal(descriptions.size, 5);
+  assert.equal(titles.size, targets.length);
+  assert.equal(descriptions.size, targets.length);
   const root = await page();
   assert.equal(bootstrap(root.html).payload.target, targets[0]);
 });
@@ -268,7 +271,7 @@ test("referral parameters preserve the public first HTML and clean canonical wit
     assert.ok(bootstrap(html));
     assert.doesNotMatch(html.match(/rel="canonical" href="([^"]+)"/)[1], /utm_|msclkid/);
     const tabs = [...html.matchAll(/<a\s[^>]*class="archive-tab"[^>]*>/g)];
-    assert.equal(tabs.length, 5);
+    assert.equal(tabs.length, 6);
     for (const [tab] of tabs) assert.match(tab, /tabindex="0"/);
   }
   for (const query of ["utm_source=chatgpt.com&q=AI", "utm_source=x&target=all&target=all", "utm_source=x&token=private"]) {
@@ -324,4 +327,20 @@ test("API expiry is absolute, preserved on cache hits, and absent freshness is n
     sqlite.close();
     if (oldCaches === undefined) delete globalThis.caches; else globalThis.caches = oldCaches;
   }
+});
+
+test("AI practices expose escaped summaries and distinguish an unknown publication date", async () => {
+  const { response, html } = await page("/?target=ai-practice");
+  assert.equal(response.status, 200);
+  assert.match(html, /AI 실전 사례 모음/);
+  assert.match(html, /class="ai-summary-toggle"/);
+  assert.match(html, /aria-controls="ai-summary-ssr-1"/);
+  assert.match(html, /class="ai-summary-row" role="row" id="ai-summary-ssr-1" hidden/);
+  assert.match(html, /발행일 미확인/);
+  assert.match(html, /소개 내용만 확인 · 원문 본문 미확인/);
+  assert.match(html, /참고자료/);
+  assert.match(html, /처음 수집/);
+  assert.match(html, /Original &lt;script&gt;unsafe\(\)&lt;\/script&gt;/);
+  assert.doesNotMatch(html, /<script>unsafe|<img src=x/);
+  assert.equal(bootstrap(html).payload.posts[0].original_title, 'Original <script>unsafe()</script>');
 });

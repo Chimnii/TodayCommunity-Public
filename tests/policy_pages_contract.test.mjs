@@ -32,10 +32,12 @@ test("links the two public policy pages from every public surface", () => {
   assert.match(privacyHtml, /href="\/privacy" aria-current="page"/u);
 });
 
-test("describes the service as a metadata-only bookmark that requires the original page", () => {
+test("distinguishes community metadata from AI summaries and requires the original for the full text", () => {
   assert.match(aboutHtml, /반응이 많은 글과 지정 말머리의 글을 선별해 보여줍니다/u);
   assert.match(aboutHtml, /글의 제목과 원문 링크 등 목록에 필요한 정보만 표시합니다/u);
-  assert.match(aboutHtml, /원문의 본문과 이미지는\s+가져오거나 저장하지 않으며/u);
+  assert.match(aboutHtml, /커뮤니티 글은 본문과 이미지를\s+가져오거나 저장하지 않습니다/u);
+  assert.match(aboutHtml, /AI 실전은 확인한 공개 자료를 한국어로 짧게 요약/u);
+  assert.match(aboutHtml, /원문 전체와 이미지를 서비스에 옮겨 담지 않습니다/u);
   assert.match(aboutHtml, /글을 읽으려면 원문 페이지로 이동해야 합니다/u);
   assert.doesNotMatch(aboutHtml, /개인 운영|제휴|공식적으로 운영|삭제·정정|GitHub/u);
 });

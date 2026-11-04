@@ -87,6 +87,14 @@ const archives = [
     updated_at: "2026-07-17T00:30:00.000Z",
   },
   {
+    archive_key: "ai-practice",
+    display_name: "AI 실전",
+    description: "AI 활용의 실전 경험과 참고자료 (검증용 합성 자료)",
+    content_kind: "article",
+    display_order: 45,
+    updated_at: "2026-11-05T00:30:00.000Z",
+  },
+  {
     archive_key: "all",
     display_name: "모두",
     description: "모든 공개 아카이브의 글",
@@ -97,6 +105,11 @@ const archives = [
 ];
 
 const sourcesByArchive = {
+  "ai-practice": [{
+    source_key: "ai-practice-hermes", archive_key: "ai-practice", site_name: "hermes",
+    board_name: "Hermes", board_url: "https://hermes-agent.nousresearch.com/docs/user-stories",
+    min_upvotes: 0, min_comments: 0,
+  }],
   "dcinside-singularity": [
     {
       source_key: "dcinside-singularity",
@@ -272,15 +285,23 @@ function handleArchive(requestUrl, response) {
     const postSources = sourcesByArchive[postArchive.archive_key];
     const postSource = postSources[index % postSources.length];
     const postIsArticle = postArchive.content_kind === "article";
+    const aiPractice = postArchive.archive_key === "ai-practice";
     return {
       ...post,
       archive_key: postArchive.archive_key,
       source_key: postSource.source_key,
-      subject: postIsArticle
+      subject: aiPractice ? ["생활 비서", "프로젝트 운영", "모델 협의"][index % 3] : postIsArticle
         ? ARTICLE_SUBJECTS[index % ARTICLE_SUBJECTS.length]
         : post.subject,
-      title: postIsArticle ? `게임 뉴스 검증 기사 ${index + 1}` : post.title,
-      post_url: postIsArticle
+      title: aiPractice ? `AI 실전 검증용 합성 사례 ${index + 1}` : postIsArticle ? `게임 뉴스 검증 기사 ${index + 1}` : post.title,
+      original_title: aiPractice ? `Synthetic agent operating experience ${index + 1}` : null,
+      summary: aiPractice ? "화면 검증용으로 만든 합성 요약입니다. 일정 정리와 작업 보고를 에이전트에게 맡기는 구성을 설명하며, 실제 수집 결과가 아닙니다." : null,
+      publisher: aiPractice ? "Hermes" : null,
+      content_kind: aiPractice ? ["experience", "reference", "update"][index % 3] : null,
+      evidence_level: aiPractice ? (index % 2 ? "introduction" : "full_text") : null,
+      created_at_basis: aiPractice && index % 2 ? "first_seen" : "source",
+      created_at_precision: aiPractice ? "date" : "second",
+      post_url: aiPractice ? "https://hermes-agent.nousresearch.com/docs/user-stories" : postIsArticle
         ? index % 2 === 0
           ? `https://www.inven.co.kr/webzine/news/?news=${post.external_post_id}`
           : `https://www.thisisgame.com/webzine/news/nboard/4/?n=${post.external_post_id}`
@@ -288,7 +309,7 @@ function handleArchive(requestUrl, response) {
       upvotes: postIsArticle ? 0 : post.upvotes,
       comments: postIsArticle ? 0 : post.comments,
       qualifies_by: postIsArticle ? "llm-include" : post.qualifies_by,
-      feedback_key: postIsArticle ? feedbackKeyForIndex(index) : undefined,
+      feedback_key: postIsArticle && !aiPractice ? feedbackKeyForIndex(index) : undefined,
       topic_ids: postIsArticle || mixedMode || topicFixtures.length === 0
         ? []
         : [topicFixtures[index % topicFixtures.length].topic_id],
@@ -329,7 +350,7 @@ function handleArchive(requestUrl, response) {
         post.comments >= minComments &&
         (!subject || post.subject === subject) &&
         (!topicId || post.topic_ids.includes(topicId)) &&
-        (!search || post.title.toLocaleLowerCase("ko-KR").includes(search))
+        (!search || [post.title, post.original_title].some(value => String(value || "").toLocaleLowerCase("ko-KR").includes(search)))
       );
     })
     .sort((left, right) => comparePosts(left, right, sortBy));

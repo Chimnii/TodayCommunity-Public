@@ -340,7 +340,7 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertIn("$dispatchBody.inputs", script)
         self.assertIn('ConvertTo-Json -Depth 4 -Compress', script)
         self.assertIn(
-            '"scan-fmkorea.yml", "scan-game-news.yml")]',
+            '"scan-fmkorea.yml", "scan-game-news.yml", "scan-ai-practice.yml")]',
             script,
         )
         self.assertIn(
@@ -356,6 +356,10 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertIn("[switch]$GameNewsPersist", script)
         self.assertIn('$isGameNewsWorkflow = $Workflow -eq "scan-game-news.yml"', script)
         self.assertIn("persist = $GameNewsPersist.IsPresent", script)
+        self.assertIn("[switch]$AiPracticePersist", script)
+        self.assertIn("[int]$AiPracticeMaxItems = 18", script)
+        self.assertIn('scheduled = "false"', script)
+        self.assertIn("persist = $AiPracticePersist.IsPresent", script)
 
     def test_pages_deploys_only_relevant_main_changes_after_verification(self) -> None:
         self.assertIn("workflow_dispatch:", self.deploy_pages)
@@ -425,8 +429,42 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         }
         self.assertEqual(
             workflow_names,
-            {"scan-fmkorea.yml", "scan-game-news.yml"},
+            {"scan-fmkorea.yml", "scan-game-news.yml", "scan-ai-practice.yml"},
         )
+
+    def test_ai_practice_queues_independently_and_uses_bounded_existing_runtime(self) -> None:
+        if not IS_PRIVATE_SOURCE:
+            self.skipTest("AI-practice workflow and operation helper stay private")
+        workflow = (ACTIVE_PRIVATE_WORKFLOWS / "scan-ai-practice.yml").read_text(encoding="utf-8")
+        helper = (ROOT / "scripts" / "run_ai_practice.ps1").read_text(encoding="utf-8")
+        self.assertIn("runs-on: [self-hosted, Windows, X64, todaycommunity-game-news]", workflow)
+        self.assertIn("group: scan-ai-practice", workflow)
+        self.assertIn("cancel-in-progress: false", workflow)
+        self.assertIn("timeout-minutes: 15", workflow)
+        self.assertIn("$maximumAgeMinutes = 90", workflow)
+        self.assertIn(CHECKOUT_PIN, workflow)
+        self.assertIn("persist-credentials: false", workflow)
+        self.assertLess(workflow.index("Validate freshness"), workflow.index(CHECKOUT_PIN))
+        self.assertIn('"Scheduled runs must persist a complete bounded scan."', workflow)
+        self.assertIn("-Scheduled:($env:SCHEDULED_REQUESTED -eq", workflow)
+        self.assertNotIn("pip install", workflow + helper)
+        self.assertNotIn("setup_game_news_runner", workflow + helper)
+        self.assertNotIn("community_topics.runner", workflow)
+        self.assertIn("game-news-venv", helper)
+        self.assertIn("game-news-codex-home", helper)
+        self.assertIn("ai-practice-runs", helper)
+        self.assertIn("ai-practice-logs", helper)
+        self.assertIn('"--scheduled"', helper)
+        self.assertIn("$previousEnvironment", helper)
+        self.assertIn("Remove-ExpiredAiArtifacts", helper)
+        self.assertIn(".todaycommunity-ai-practice-owned", helper)
+        self.assertIn("$NowUtc.AddDays(-30)", helper)
+        self.assertIn("$item.CreationTimeUtc -lt $ownedSince.UtcDateTime", helper)
+        self.assertIn("[IO.FileAttributes]::ReparsePoint", helper)
+        self.assertIn("[IO.FileAttributes]::Hidden", helper)
+        self.assertIn("[IO.FileAttributes]::System", helper)
+        self.assertIn("Remove-Item -LiteralPath $target -Recurse -Force", helper)
+        self.assertIn("[IO.Path]::GetDirectoryName($RunRoot) -ne $runs", helper)
 
     def test_private_fmkorea_workflow_is_hot_only_and_self_hosted(self) -> None:
         if self.fmkorea is None:

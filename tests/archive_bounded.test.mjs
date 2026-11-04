@@ -375,3 +375,29 @@ test("optional cache failures still return the bounded DB result", async () => {
     assert.equal(body.pagination.page, 5);
   } finally { globalThis.caches = original; data.sqlite.close(); }
 });
+
+test("AI Korean and original titles share bounded search and subject/public visibility rules", async () => {
+  const data = fixture(3);
+  try {
+    data.sqlite.exec(`INSERT OR IGNORE INTO archives(archive_key,display_name,content_kind) VALUES('ai-practice','AI 실전','article');
+      INSERT OR IGNORE INTO archive_stats(archive_key) VALUES('ai-practice');
+      UPDATE posts SET archive_key='ai-practice', title='프로젝트 운영 실패와 복구', original_title='Hermes operational recovery',
+        summary='프로젝트 작업을 나누고 실패를 복구한 경험.', publisher='Hermes', subject='프로젝트 운영',
+        content_kind='experience', evidence_level='full_text', created_at_basis='first_seen' WHERE id=3;
+      UPDATE archive_stats SET active_post_count=1,subject_options_json='["프로젝트 운영"]' WHERE archive_key='ai-practice';
+      UPDATE archive_stats SET active_post_count=2 WHERE archive_key='dcinside-singularity';`);
+    for (const q of ['복구', 'Hermes']) {
+      const { body } = await request(data, new URLSearchParams({target:'ai-practice',q,subject:'프로젝트 운영'}));
+      assert.deepEqual(body.posts.map(row => row.post_id), [3]);
+      assert.equal(body.posts[0].original_title, 'Hermes operational recovery');
+      assert.equal(body.posts[0].summary, '프로젝트 작업을 나누고 실패를 복구한 경험.');
+      assert.equal(body.posts[0].created_at_basis, 'first_seen');
+      assert.equal(body.posts[0].content_kind, 'experience');
+    }
+    assert.equal((await request(data, 'target=ai-practice&q=Hermes&subject=생활+비서')).body.posts.length, 0);
+    assert.equal((await request(data, 'target=all&q=Hermes')).body.posts.length, 1);
+    data.sqlite.exec("UPDATE archives SET is_public=0 WHERE archive_key='ai-practice'");
+    assert.equal((await request(data, 'target=all&q=Hermes')).body.posts.length, 0);
+    assert.ok(data.queries.filter(q => q.sql.includes('WITH candidates')).every(q => q.rows <= 512));
+  } finally { data.sqlite.close(); }
+});

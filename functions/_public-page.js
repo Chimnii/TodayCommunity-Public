@@ -7,16 +7,18 @@ const PUBLIC_ARCHIVES = Object.freeze({
   "dcinside-agent-stack": ["AI 활용", "디시인사이드 AI 활용 갤러리 (에활갤) 실시간 인기글 모음.", "community"],
   "fmkorea-munich": ["뮌헨", "에펨코리아 바이에른 뮌헨 관련 실시간 인기글 모음.", "community"],
   "game-news": ["게임 뉴스", "게임 신작·개발·인터뷰와 업계 동향을 모은 게임 뉴스.", "article"],
+  "ai-practice": ["AI 실전", "AI를 실제 업무와 일상에 적용한 구축·운영 사례 모음.", "article"],
   all: ["모두", "모든 공개 아카이브의 글을 최신순으로 모았습니다.", "mixed"],
 });
 const ARCHIVE_LABELS = { "dcinside-singularity": "특이점", "dcinside-agent-stack": "AI활용",
-  "fmkorea-munich": "Bayern", "game-news": "게임뉴스" };
+  "fmkorea-munich": "Bayern", "game-news": "게임뉴스", "ai-practice": "AI실전" };
 const ARCHIVE_HEADINGS = Object.freeze({
   "dcinside-singularity": "특갤 인기글 모음",
   "dcinside-agent-stack": "AI 활용갤(에활갤) 인기글 모음",
   "fmkorea-munich": "바이에른 뮌헨 인기글 모음",
   "game-news": "게임 뉴스 모음",
-  all: "커뮤니티 인기글·게임 뉴스 모음",
+  "ai-practice": "AI 실전 사례 모음",
+  all: "커뮤니티 인기글·게임 뉴스·AI 실전 모음",
 });
 const ARCHIVE_SELECTIONS = Object.freeze({
   "dcinside-singularity": {
@@ -35,8 +37,12 @@ const ARCHIVE_SELECTIONS = Object.freeze({
     description: "신작·개발·인터뷰·업계 소식을 출처와 발행일로 살펴보고, 제목을 눌러 기사 원문을 읽을 수 있습니다.",
     url: "/about#game-news-selection",
   },
+  "ai-practice": {
+    description: "생활 비서·프로젝트 운영·모델 협의의 구체적인 방법과 시행착오를 선별합니다. 한국어 요약을 펼쳐 읽고 원문을 확인할 수 있습니다.",
+    url: "/about#ai-practice-selection",
+  },
   all: {
-    description: "특갤·AI 활용갤·바이에른 뮌헨·게임 뉴스를 출처와 함께 비교하고, 관심 있는 주제의 탭으로 좁혀볼 수 있습니다.",
+    description: "특갤·AI 활용갤·바이에른 뮌헨·게임 뉴스·AI 실전을 출처와 함께 비교하고, 관심 있는 주제의 탭으로 좁혀볼 수 있습니다.",
     url: "/about#about-archives",
   },
 });
@@ -46,6 +52,7 @@ const AUTH_COOKIE = /(?:^|;\s*)(?:__Host-tc_authenticated|__Host-tc_admin)=/;
 const number = new Intl.NumberFormat("ko-KR");
 const date = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Seoul", year: "2-digit", month: "2-digit", day: "2-digit" });
 const time = new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+const aiTime = new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
@@ -101,24 +108,50 @@ function cell(value, className) {
   return `<span class="board-cell ${className}" role="cell">${escapeHtml(value)}</span>`;
 }
 
+function aiPublicationDate(post, compact = false) {
+  if (post.created_at_basis !== "source" || !post.created_at) return compact ? "미확인" : "발행일 미확인";
+  if (post.created_at_precision === "date") {
+    const raw = /^\d{4}-\d{2}-\d{2}/.exec(String(post.created_at_raw || ""))
+      || /^\d{4}-\d{2}-\d{2}/.exec(String(post.created_at));
+    if (raw) return compact ? raw[0].slice(2).replaceAll("-", ".") : raw[0];
+  }
+  return formatDate(post.created_at, compact ? date : aiTime).replaceAll("-", ".");
+}
+
+function renderAiSummary(post, id, source, url) {
+  const kind = { experience: "실전 경험", reference: "참고자료", update: "문서·사례 갱신" }[post.content_kind] || "유형 미확인";
+  const evidence = post.evidence_level === "full_text" ? "본문 확인"
+    : post.evidence_level === "introduction" ? "소개 내용만 확인 · 원문 본문 미확인" : "확인 범위 미상";
+  const fields = [
+    [post.evidence_level === "introduction" ? "소개 원제" : "원제", post.original_title || post.title], ["출처", post.publisher || source?.board_name || "출처 미상"],
+    ["말머리", post.subject || "미분류"], ["자료 유형", kind], ["확인 범위", evidence],
+    ["원문 발행", aiPublicationDate(post)], ["처음 수집", formatDate(post.first_seen_at || post.fetched_at, aiTime)],
+  ].map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("");
+  return `<div class="ai-summary-row" role="row" id="${id}" hidden><div class="ai-summary-content" role="cell" aria-labelledby="${id}-toggle"><p class="ai-summary-text">${escapeHtml(post.summary || "저장된 요약이 없습니다. 원문에서 내용을 확인해 주세요.")}</p><dl class="ai-summary-metadata">${fields}</dl>${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener">원문 읽기 ↗</a>` : ""}</div></div>`;
+}
+
 function renderPosts(payload, page) {
   if (!payload.posts.length) return '<div class="board-state" role="row"><span role="cell">아직 저장된 글이 없습니다.</span></div>';
-  return payload.posts.map(post => {
-    const article = post.archive_key === "game-news" || page.kind === "article";
+  return payload.posts.map((post, index) => {
+    const ai = post.archive_key === "ai-practice";
+    const article = ai || post.archive_key === "game-news" || page.kind === "article";
     const source = payload.sources?.find(source => source.source_key === post.source_key);
-    const sourceKey = String(source?.site_name || post.source_key || "").toLowerCase().replace(/^game-news-/, "");
-    const sourceLabel = ({ inven: "inv", thisisgame: "tig" })[sourceKey] || sourceKey.slice(0, 3) || "-";
+    const sourceKey = String(source?.site_name || post.source_key || "").toLowerCase().replace(/^(?:game-news|ai-practice)-/, "");
+    const sourceLabel = ai ? post.publisher || source?.board_name || "-" : ({ inven: "inv", thisisgame: "tig" })[sourceKey] || sourceKey.slice(0, 3) || "-";
     const subject = article ? SUBJECT_LABELS[post.subject] || post.subject || "-" : String(post.subject || "");
-    const subjectCell = cell(page.kind === "mixed" && article ? `${sourceLabel}-${subject}` : subject, "cell-subject");
+    const subjectCell = cell(page.kind === "mixed" && article && !ai ? `${sourceLabel}-${subject}` : subject, "cell-subject");
     const sourceCell = cell(page.kind === "mixed" ? ARCHIVE_LABELS[post.archive_key] || "-" : sourceLabel, "cell-source");
     const title = String(post.title || "제목 없음");
     const url = safeUrl(post.post_url);
     const comments = Math.max(0, count(post.comments));
     const titleContent = `<span class="post-title-text">${escapeHtml(title)}</span>${!article ? `<span class="post-comment-count" aria-hidden="true">[${number.format(comments)}]</span>` : ""}`;
-    const titleCell = `<span class="board-cell cell-title" role="cell">${url
+    const summaryId = `ai-summary-ssr-${index + 1}`;
+    const toggle = ai ? `<button type="button" id="${summaryId}-toggle" class="ai-summary-toggle" aria-label="${escapeHtml(title)}, 요약과 원문 정보" aria-expanded="false" aria-controls="${summaryId}">요약</button>` : "";
+    const titleCell = `<span class="board-cell cell-title${ai ? " cell-title-with-summary" : ""}" role="cell">${url
       ? `<a class="post-title-content" href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener" title="${escapeHtml(title)}" aria-label="${escapeHtml(article ? `${title}, 원문 열기` : `${title}, 댓글 ${comments}개, 원문 열기`)}">${titleContent}</a>`
-      : `<span class="post-title-content">${titleContent}</span>`}</span>`;
-    return `<article class="board-row post-row" role="row">${cell(post.external_post_id || "-", "cell-number numeric-cell")}${page.kind === "mixed" ? sourceCell + subjectCell : subjectCell + sourceCell}${titleCell}${cell(page.kind === "mixed" && article ? "-" : number.format(count(post.upvotes)), "cell-upvotes numeric-cell")}${cell(formatDate(post.created_at, date).replaceAll("-", "."), "cell-date numeric-cell")}${cell("", "cell-feedback")}${cell("", "cell-favorite")}</article>`;
+      : `<span class="post-title-content">${titleContent}</span>`}${toggle}</span>`;
+    const dateLabel = ai ? aiPublicationDate(post, true) : formatDate(post.created_at, date).replaceAll("-", ".");
+    return `<article class="board-row post-row" role="row">${cell(post.external_post_id || "-", "cell-number numeric-cell")}${page.kind === "mixed" ? sourceCell + subjectCell : subjectCell + sourceCell}${titleCell}${cell(page.kind === "mixed" && article ? "-" : number.format(count(post.upvotes)), "cell-upvotes numeric-cell")}${cell(dateLabel, "cell-date numeric-cell")}${cell("", "cell-feedback")}${cell("", "cell-favorite")}</article>${ai ? renderAiSummary(post, summaryId, source, url) : ""}`;
   }).join("");
 }
 
@@ -199,6 +232,7 @@ export async function renderPublicPage(context, loadArchive) {
     } })
     .on("body", { element(element) {
       element.setAttribute("data-content-kind", page.kind);
+      element.setAttribute("data-archive-key", page.target);
       if (page.privateRequest) element.setAttribute("data-private-request", "true");
     } })
     .on("#archive-title", { element(element) { element.setInnerContent(page.heading); } })
@@ -254,7 +288,7 @@ export async function renderPublicPage(context, loadArchive) {
         element.setInnerContent('<span class="board-cell cell-number" id="number-column-label" role="columnheader">번호</span><span class="board-cell cell-source" id="source-column-label" role="columnheader">소속</span><span class="board-cell cell-subject" id="subject-column-label" role="columnheader">말머리/주제</span><span class="board-cell cell-title" id="title-column-label" role="columnheader">제목</span><span class="board-cell cell-upvotes" id="upvotes-column-label" role="columnheader">추천</span><span class="board-cell cell-date" id="date-column-label" role="columnheader">작성일</span><span class="board-cell cell-feedback" id="feedback-column-label" role="columnheader">평가</span><span class="board-cell cell-favorite" id="favorite-column-label" role="columnheader" aria-label="즐겨찾기"><span aria-hidden="true">☆</span></span>', { html: true });
       } });
     } else if (page.kind === "article") {
-      rewriter.on("#subject-column-label", { element(element) { element.setInnerContent("주제"); } })
+      rewriter.on("#subject-column-label", { element(element) { element.setInnerContent(page.target === "ai-practice" ? "말머리" : "주제"); } })
         .on("#date-column-label", { element(element) { element.setInnerContent("발행일"); } });
     }
   } else if (page.status >= 400) {

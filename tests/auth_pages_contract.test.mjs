@@ -44,9 +44,9 @@ test("keeps authentication entry points off the public page", () => {
 test("gates existing owner controls with guest, authenticated, and admin state", () => {
   assert.match(publicApp, /\["authenticated", "admin"\]\.includes/u);
   assert.match(publicApp, /document\.body\.dataset\.authState = authentication/u);
-  assert.match(publicApp, /!articleMode \|\| !canUseFeedback/u);
-  assert.match(publicApp, /isArticleArchive\(\) && state\.feedbackSession\?\.capabilities\?\.rate/u);
-  assert.match(publicApp, /!isArticleArchive\(\) \|\| !state\.feedbackSession\?\.capabilities\?\.rate/u);
+  assert.match(publicApp, /elements\.gameNewsTools\.hidden = state\.target !== "game-news" \|\| !canUseFeedback/u);
+  assert.match(publicApp, /state\.target === "game-news" && state\.feedbackSession\?\.capabilities\?\.rate/u);
+  assert.match(publicApp, /state\.target !== "game-news" \|\| !isGameNewsPost\(post\) \|\| !state\.feedbackSession\?\.capabilities\?\.rate/u);
   assert.match(
     publicCss,
     /body\[data-content-kind="article"\]\[data-auth-state="guest"\] \.cell-feedback\s*\{[^}]*display:\s*none/su

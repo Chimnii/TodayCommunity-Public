@@ -54,6 +54,11 @@ test("cron strings map to the intended workflows", () => {
     workflow: "scan-game-news.yml",
     destinations: ["game-news"],
   });
+  assert.deepEqual(workflowForCron("43 * * * *"), {
+    kind: "ai-practice",
+    workflow: "scan-ai-practice.yml",
+    destinations: ["ai-practice"],
+  });
   assert.throws(
     () => workflowForCron("0 * * * *"),
     /Unsupported scheduler cron/,
@@ -71,6 +76,99 @@ test("deployed Cron triggers exactly match the supported schedules", () => {
     "TodayCommunity",
   );
   assert.ok(WRANGLER_CONFIG.triggers.crons.includes("17 * * * *"));
+  assert.ok(["0", "1"].includes(WRANGLER_CONFIG.vars.AI_PRACTICE_DISPATCH_ENABLED));
+  assert.equal(WRANGLER_CONFIG.vars.AI_PRACTICE_GITHUB_REPOSITORY, "TodayCommunity");
+  assert.ok(WRANGLER_CONFIG.triggers.crons.includes("43 * * * *"));
+});
+
+test("AI hourly opportunity is disabled until its explicit enable flag is set", async () => {
+  for (const flag of [undefined, "0"]) {
+    const result = await dispatchScheduledWorkflow({
+      cron: "43 * * * *",
+      env: { ...ENV, AI_PRACTICE_DISPATCH_ENABLED: flag },
+      now: () => NOW,
+      fetchImpl: () => { throw new Error("disabled AI must not contact GitHub"); },
+    });
+    assert.deepEqual(result, { status: "completed", kind: "ai-practice", destinations: [] });
+  }
+});
+
+test("AI queues independently behind game news and requests its persisted due gate", async () => {
+  const calls = [];
+  const result = await dispatchScheduledWorkflow({
+    cron: "43 * * * *",
+    env: { ...ENV, AI_PRACTICE_DISPATCH_ENABLED: "1", AI_PRACTICE_GITHUB_REPOSITORY: "TodayCommunity" },
+    now: () => NOW,
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return calls.length === 1 ? jsonResponse({ workflow_runs: [{
+        id: 201, event: "workflow_dispatch", status: "in_progress", head_branch: "main",
+        path: ".github/workflows/scan-game-news.yml", created_at: "2026-07-20T00:17:00Z",
+      }] }) : noContentResponse();
+    },
+  });
+  assert.equal(result.destinations[0].status, "dispatched");
+  assert.equal(calls.length, 2, "do not cancel a game-news run");
+  assert.match(calls[0].url, /\/actions\/workflows\/scan-ai-practice\.yml\/runs\?/);
+  assert.match(calls[1].url, /\/scan-ai-practice\.yml\/dispatches$/);
+  assert.deepEqual(JSON.parse(calls[1].options.body), {
+    ref: "main", inputs: {
+      dispatched_at: new Date(NOW).toISOString(), persist: "true", scheduled: "true", max_items: "18",
+    },
+  });
+});
+
+test("AI never replaces or cancels its own active or stale queued run", async () => {
+  for (const status of ["in_progress", "queued"]) {
+    let calls = 0;
+    const result = await dispatchScheduledWorkflow({
+      cron: "43 * * * *",
+      env: { ...ENV, AI_PRACTICE_DISPATCH_ENABLED: "1", AI_PRACTICE_GITHUB_REPOSITORY: "TodayCommunity" },
+      now: () => NOW,
+      fetchImpl: async (_url, options) => {
+        calls += 1;
+        assert.equal(options.method, "GET");
+        return jsonResponse({ workflow_runs: [{
+          id: 202, event: "workflow_dispatch", status, head_branch: "main",
+          path: ".github/workflows/scan-ai-practice.yml", created_at: "2026-07-19T00:00:00Z",
+        }] });
+      },
+    });
+    assert.equal(calls, 1);
+    assert.equal(result.destinations[0].status, "skipped");
+    assert.equal(result.destinations[0].reason, "managed_workflow_active");
+  }
+});
+
+test("game-news hourly dispatch is preserved while AI owns the shared runner", async () => {
+  const calls = [];
+  const result = await dispatchScheduledWorkflow({
+    cron: "17 * * * *",
+    env: { ...ENV, GAME_NEWS_DISPATCH_ENABLED: "1", GAME_NEWS_GITHUB_REPOSITORY: "TodayCommunity" },
+    now: () => NOW,
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      return calls.length === 1 ? jsonResponse({ workflow_runs: [{
+        id: 203, event: "workflow_dispatch", status: "in_progress", head_branch: "main",
+        path: ".github/workflows/scan-ai-practice.yml", created_at: "2026-07-20T00:10:00Z",
+      }] }) : noContentResponse();
+    },
+  });
+  assert.equal(result.destinations[0].status, "dispatched");
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].url, /scan-game-news\.yml\/dispatches$/);
+});
+
+test("invalid AI enable flags fail closed without GitHub calls", async () => {
+  await assert.rejects(dispatchScheduledWorkflow({
+    cron: "43 * * * *", env: { ...ENV, AI_PRACTICE_DISPATCH_ENABLED: "yes" },
+    now: () => NOW,
+    fetchImpl: () => { throw new Error("invalid configuration must not contact GitHub"); },
+  }), error => {
+    assert.equal(error.kind, "ai-practice");
+    assert.match(error.destinations[0].error, /AI_PRACTICE_DISPATCH_ENABLED must be either 0 or 1/);
+    return true;
+  });
 });
 
 test("Worker exposes only the scheduled handler", () => {

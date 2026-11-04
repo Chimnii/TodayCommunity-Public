@@ -47,6 +47,8 @@ async function list(db, params) {
     )
     SELECT f.id AS favorite_id, f.saved_at, p.id AS post_id,
       p.archive_key, p.source_key, p.external_post_id, p.title, p.post_url,
+      p.original_title, p.summary, p.publisher, p.content_kind, p.evidence_level,
+      p.created_at_raw, p.created_at_basis, p.created_at_precision, p.fetched_at, p.first_seen_at,
       p.subject, p.created_at, p.upvotes, p.comments, p.last_seen_at,
       CASE WHEN ${visible} THEN 1 ELSE 0 END AS visible
     FROM candidates f

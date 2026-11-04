@@ -217,8 +217,8 @@ function buildPostFilter(
   }
 
   if (query) {
-    clauses.push("title LIKE ? ESCAPE '\\'");
-    bindings.push(`%${escapeLike(query)}%`);
+    clauses.push("(title LIKE ? ESCAPE '\\' OR original_title LIKE ? ESCAPE '\\')");
+    bindings.push(`%${escapeLike(query)}%`, `%${escapeLike(query)}%`);
   }
 
   if (topicId > 0) {
@@ -269,7 +269,7 @@ function buildCacheKey(
 ) {
   const cacheUrl = new URL(url.pathname, url.origin);
   const normalized = {
-    format: "quick-pages-v3",
+    format: "quick-pages-v4",
     target,
     page: String(requestedPage),
     page_size: String(pageSize),
@@ -982,6 +982,7 @@ export async function onRequestGet(context) {
       ? `${filter.sql}\n            AND ${cursorBoundary.sql}`
       : filter.sql;
     const columns = `archive_key, source_key, external_post_id, subject, title, post_url,
+      original_title, summary, publisher, content_kind, evidence_level,
       created_at, created_at_raw, created_at_basis, created_at_precision,
       upvotes, comments, qualifies_by, fetched_at, first_seen_at, last_seen_at,
       status, id AS cursor_id`;
