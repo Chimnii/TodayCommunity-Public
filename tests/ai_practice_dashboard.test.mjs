@@ -145,6 +145,38 @@ test("local fallback searches Korean and original titles with the same subject n
   assert.equal(h.getLocalViewModel().posts.length, 0);
 });
 
+test("AI source code literals and hostile markup stay text in titles, attributes and metadata", () => {
+  const h = harness();
+  const post = { ...sample,
+    title: 'h_<hex10> " onmouseover="bad() <script>bad()</script>',
+    summary: '경로 h_<hex10> & </script><script id="ai-summary-injected">bad()</script>',
+    original_title: '<img src=x onerror="bad()"> h_<hex10>',
+    publisher: '<svg onload="bad()">', subject: '<b>프로젝트 운영</b>',
+  };
+  for (const target of ["ai-practice", "all", "favorites"]) {
+    h.state.target = target;
+    h.renderPosts([post]);
+    const [row, panel] = h.elements.posts.children;
+    const titleCell = row.children.find(child => child.className.includes("cell-title"));
+    const [link, toggle] = titleCell.children;
+    assert.equal(link.children[0].textContent, post.title);
+    assert.equal(link.title, post.title);
+    assert.equal(link.getAttribute("aria-label"), `${post.title}, 원문 열기`);
+    assert.equal(toggle.getAttribute("aria-label"), `${post.title}, 요약과 원문 정보`);
+    assert.equal(link.getAttribute("onmouseover"), null);
+    const [summary, metadata] = panel.children[0].children;
+    assert.equal(summary.textContent, post.summary);
+    assert.equal(summary.children.length, 0);
+    const fields = Object.fromEntries(metadata.children.map(group =>
+      [group.children[0].textContent, group.children[1].textContent]));
+    assert.equal(fields["원제"], post.original_title);
+    assert.equal(fields["출처"], post.publisher);
+    assert.equal(fields["말머리"], post.subject);
+    const walk = node => [node, ...node.children.flatMap(walk)];
+    assert.equal(walk(h.elements.posts).some(node => ["SCRIPT", "IMG", "SVG", "B"].includes(node.tagName)), false);
+  }
+});
+
 test("AI summaries survive mixed and favorites rendering while community comments retain their display", () => {
   const h = harness();
   for (const target of ["ai-practice", "all", "favorites"]) {

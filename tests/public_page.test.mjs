@@ -9,6 +9,12 @@ const template = await readFile(new URL("../dashboard/index.html", import.meta.u
 const archiveSource = await readFile(new URL("../functions/api/archive.js", import.meta.url), "utf8");
 const { onRequestGet: loadArchive } = await import(`data:text/javascript;base64,${Buffer.from(archiveSource).toString("base64")}`);
 const { publicPageState } = await import(`data:text/javascript;base64,${Buffer.from(pageSource).toString("base64")}`);
+const literalAiPost = {
+  title: 'h_<hex10> " onmouseover="bad() <script>bad()</script>',
+  summary: '경로 h_<hex10> & </script><script id="ai-summary-injected">bad()</script>',
+  original_title: '<img src=x onerror="bad()"> h_<hex10>',
+  publisher: '<svg onload="bad()">', subject: '<b>프로젝트 운영</b>',
+};
 
 // Exercise the platform HTMLRewriter rather than substituting a regex HTML mock.
 const runtime = new Miniflare(convertV4MiniflareOptions({
@@ -66,6 +72,7 @@ export default {
             post_url: "javascript:alert(1)", created_at: "invalid"}
         ]
       };
+      if (request.headers.has("x-test-ai-literal-markup")) Object.assign(payload.posts[0], ${JSON.stringify(literalAiPost)});
       const headers = {"content-type": "application/json"};
       if (!request.headers.has("x-test-legacy-cache")) headers["x-tc-expires-at"] = String(Date.now() + 4000);
       if (request.headers.has("x-test-expired")) headers["x-tc-expires-at"] = String(Date.now() - 1000);
@@ -343,4 +350,19 @@ test("AI practices expose escaped summaries and distinguish an unknown publicati
   assert.match(html, /Original &lt;script&gt;unsafe\(\)&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<script>unsafe|<img src=x/);
   assert.equal(bootstrap(html).payload.posts[0].original_title, 'Original <script>unsafe()</script>');
+});
+
+test("AI SSR preserves code placeholders while escaping markup and bootstrap script endings", async () => {
+  const { html } = await page("/?target=ai-practice", { "x-test-ai-literal-markup": "1" });
+  assert.ok(html.includes("h_&lt;hex10&gt;"));
+  assert.ok(html.includes('&lt;/script&gt;&lt;script id=&quot;ai-summary-injected&quot;&gt;bad()&lt;/script&gt;'));
+  assert.ok(html.includes('<dd>&lt;img src=x onerror=&quot;bad()&quot;&gt; h_&lt;hex10&gt;</dd>'));
+  assert.ok(html.includes('<dd>&lt;svg onload=&quot;bad()&quot;&gt;</dd>'));
+  assert.ok(html.includes('<dd>&lt;b&gt;프로젝트 운영&lt;/b&gt;</dd>'));
+  assert.ok(html.includes('title="h_&lt;hex10&gt; &quot; onmouseover=&quot;bad() &lt;script&gt;bad()&lt;/script&gt;"'));
+  assert.doesNotMatch(html, /<hex10>|<script id="ai-summary-injected"|<script>bad\(\)|<img src=x|<svg onload=/);
+  const bootstrapText = html.match(/<script id="archive-bootstrap" type="application\/json">([\s\S]*?)<\/script>/)[1];
+  assert.doesNotMatch(bootstrapText, /[<>&]/, "bootstrap cannot create a closing script tag");
+  const stored = bootstrap(html).payload.posts[0];
+  for (const [field, value] of Object.entries(literalAiPost)) assert.equal(stored[field], value, field);
 });
