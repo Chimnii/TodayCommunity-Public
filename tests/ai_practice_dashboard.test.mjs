@@ -41,7 +41,7 @@ function harness() {
   vm.runInContext(`${source}
     globalThis.review = { state, elements, createTitleCell, createAiPracticeSummary,
       createFeedbackCell, applyContentKindMode, normalizeContentState, getLocalViewModel,
-      renderSubjectOptions, renderPosts, aiPublicationDate, hydrateStateFromUrl,
+      renderSubjectOptions, renderPosts, articlePublicationDate, hydrateStateFromUrl,
       getAvailableArchives, getArticleSourceLabel };
   `, context);
   const api = context.review;
@@ -53,7 +53,7 @@ function harness() {
 const sample = {
   post_id: 7, archive_key: "ai-practice", source_key: "ai-practice-hermes",
   title: "에이전트에게 주간 계획을 맡긴 경험", original_title: "Operating a weekly assistant",
-  summary: "주간 계획을 맡긴 구성과 실패 뒤 복구 과정을 소개한다.",
+  summary: "에이전트가 주간 계획을 작성한다.\n일정이 겹치면 후보 시간을 제안한다.\n사용자가 승인한 계획을 달력에 저장한다.",
   subject: "생활 비서", publisher: "Hermes", content_kind: "experience", evidence_level: "full_text",
   post_url: "https://hermes-agent.nousresearch.com/docs/user-stories",
   created_at: "2026-11-04T00:00:00Z", created_at_raw: "2026-11-04", created_at_basis: "source",
@@ -110,8 +110,8 @@ test("AI summary toggle has an independent original link and keyboard-native but
   assert.equal(panel.hidden, true);
   assert.equal(toggle.getAttribute("aria-expanded"), "false");
   assert.match(textOf(panel), /Operating a weekly assistant/);
-  assert.match(textOf(panel), /처음 수집/);
-  assert.match(textOf(panel), /본문 확인/);
+  assert.deepEqual(panel.children[0].children[0].children.map(li => li.textContent), sample.summary.split("\n"));
+  assert.doesNotMatch(textOf(panel), /처음 수집|본문 확인|확인 범위|자료 유형|말머리|출처/);
   assert.doesNotMatch(textOf(title), /\[0\]/);
 });
 
@@ -120,16 +120,20 @@ test("stored summary and original title are literal text; introduction and unkno
   const post = { ...sample, summary: '<img src=x onerror="alert(1)">', original_title: "<script>untrusted</script>",
     evidence_level: "introduction", content_kind: "reference", created_at_basis: "first_seen" };
   const panel = h.createAiPracticeSummary(post, "ai-summary-1");
-  assert.equal(panel.children[0].children[0].textContent, post.summary);
+  assert.equal(panel.children[0].children[0].children[0].textContent, post.summary);
   assert.match(textOf(panel), /<script>untrusted<\/script>/);
-  assert.match(textOf(panel), /소개 내용만 확인 · 원문 본문 미확인/);
   assert.match(textOf(panel), /소개 원제/);
-  assert.match(textOf(panel), /참고자료/);
-  assert.match(textOf(panel), /발행일 미확인/);
-  assert.equal(h.aiPublicationDate(post, true), "미확인");
-  assert.equal(h.aiPublicationDate(sample), "2026-11-04");
-  assert.equal(h.aiPublicationDate({ ...sample, created_at_raw: "November 4, 2026" }), "2026-11-04");
-  assert.equal(h.aiPublicationDate(sample, true), "26.11.04");
+  assert.doesNotMatch(textOf(panel), /참고자료|발행일 미확인|처음 수집|확인 범위/);
+  assert.equal(h.articlePublicationDate(post), "-");
+  assert.equal(h.articlePublicationDate({ ...sample, created_at: "invalid" }), "-");
+  assert.equal(h.articlePublicationDate({ ...sample, created_at_raw: "November 4, 2026" }), "26.11.04");
+  for (const archive_key of ["ai-practice", "game-news"]) {
+    for (const target of [archive_key, "all", "favorites"]) {
+      h.state.target = target;
+      h.renderPosts([{ ...post, archive_key }]);
+      assert.equal(h.elements.posts.children[0].children.find(cell => cell.className.includes("cell-date")).textContent, "-");
+    }
+  }
   assert.equal(h.getArticleSourceLabel(sample), "Hermes");
 });
 
@@ -165,13 +169,9 @@ test("AI source code literals and hostile markup stay text in titles, attributes
     assert.equal(toggle.getAttribute("aria-label"), `${post.title}, 요약과 원문 정보`);
     assert.equal(link.getAttribute("onmouseover"), null);
     const [summary, metadata] = panel.children[0].children;
-    assert.equal(summary.textContent, post.summary);
-    assert.equal(summary.children.length, 0);
-    const fields = Object.fromEntries(metadata.children.map(group =>
-      [group.children[0].textContent, group.children[1].textContent]));
-    assert.equal(fields["원제"], post.original_title);
-    assert.equal(fields["출처"], post.publisher);
-    assert.equal(fields["말머리"], post.subject);
+    assert.equal(summary.children[0].textContent, post.summary);
+    assert.equal(summary.children[0].children.length, 0);
+    assert.deepEqual(metadata.children.map(node => node.textContent), ["원제", post.original_title]);
     const walk = node => [node, ...node.children.flatMap(walk)];
     assert.equal(walk(h.elements.posts).some(node => ["SCRIPT", "IMG", "SVG", "B"].includes(node.tagName)), false);
   }

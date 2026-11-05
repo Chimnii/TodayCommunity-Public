@@ -37,6 +37,8 @@ jobs:
   hot:
     name: DC Hot crawl attempt
     continue-on-error: true
+    outputs:
+      counted_success: ${{ job.status == 'success' && steps.counted_success.outcome == 'success' }}
     runs-on: ubuntu-latest
     environment: collection
     timeout-minutes: 30
@@ -105,6 +107,7 @@ jobs:
         run: python -m crawler.jobs.run_all_sources --mode hot --persist
 
       - name: "Failure streak: counted success"
+        id: counted_success
         run: echo "DC Hot crawl attempt completed successfully."
 
   failure-streak-gate:
@@ -125,4 +128,5 @@ jobs:
           TC_FAILURE_STREAK_ATTEMPT_JOB: DC Hot crawl attempt
           TC_FAILURE_STREAK_GATE_JOB: DC Hot failure streak gate
           TC_FAILURE_STREAK_LANE: DC Hot
+          TC_FAILURE_STREAK_CONFIRMED_SUCCESS: ${{ needs.hot.result == 'success' && needs.hot.outputs.counted_success == 'true' }}
         run: python3 -m crawler.jobs.enforce_failure_streak

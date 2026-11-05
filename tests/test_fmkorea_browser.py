@@ -432,7 +432,8 @@ class ChromeLifecycleTests(unittest.TestCase):
             session.close()
 
         self.assertEqual(events[0], ("send", "Browser.close"))
-        self.assertIn(("browser_close", None), events)
+        self.assertNotIn(("detach", None), events)
+        self.assertNotIn(("browser_close", None), events)
         self.assertIn(("playwright_stop", None), events)
         self.assertIn(("poll", None), events)
         self.assertEqual(session.cleanup_warnings, [])

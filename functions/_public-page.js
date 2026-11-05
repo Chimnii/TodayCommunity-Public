@@ -52,7 +52,6 @@ const AUTH_COOKIE = /(?:^|;\s*)(?:__Host-tc_authenticated|__Host-tc_admin)=/;
 const number = new Intl.NumberFormat("ko-KR");
 const date = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Seoul", year: "2-digit", month: "2-digit", day: "2-digit" });
 const time = new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
-const aiTime = new Intl.DateTimeFormat("ko-KR", { timeZone: "Asia/Seoul", year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
@@ -108,26 +107,21 @@ function cell(value, className) {
   return `<span class="board-cell ${className}" role="cell">${escapeHtml(value)}</span>`;
 }
 
-function aiPublicationDate(post, compact = false) {
-  if (post.created_at_basis !== "source" || !post.created_at) return compact ? "미확인" : "발행일 미확인";
+function articlePublicationDate(post) {
+  if (post.created_at_basis !== "source" || !post.created_at || !Number.isFinite(Date.parse(post.created_at))) return "-";
   if (post.created_at_precision === "date") {
     const raw = /^\d{4}-\d{2}-\d{2}/.exec(String(post.created_at_raw || ""))
       || /^\d{4}-\d{2}-\d{2}/.exec(String(post.created_at));
-    if (raw) return compact ? raw[0].slice(2).replaceAll("-", ".") : raw[0];
+    if (raw) return raw[0].slice(2).replaceAll("-", ".");
   }
-  return formatDate(post.created_at, compact ? date : aiTime).replaceAll("-", ".");
+  return formatDate(post.created_at, date).replaceAll("-", ".");
 }
 
-function renderAiSummary(post, id, source, url) {
-  const kind = { experience: "실전 경험", reference: "참고자료", update: "문서·사례 갱신" }[post.content_kind] || "유형 미확인";
-  const evidence = post.evidence_level === "full_text" ? "본문 확인"
-    : post.evidence_level === "introduction" ? "소개 내용만 확인 · 원문 본문 미확인" : "확인 범위 미상";
-  const fields = [
-    [post.evidence_level === "introduction" ? "소개 원제" : "원제", post.original_title || post.title], ["출처", post.publisher || source?.board_name || "출처 미상"],
-    ["말머리", post.subject || "미분류"], ["자료 유형", kind], ["확인 범위", evidence],
-    ["원문 발행", aiPublicationDate(post)], ["처음 수집", formatDate(post.first_seen_at || post.fetched_at, aiTime)],
-  ].map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("");
-  return `<div class="ai-summary-row" role="row" id="${id}" hidden><div class="ai-summary-content" role="cell" aria-labelledby="${id}-toggle"><p class="ai-summary-text">${escapeHtml(post.summary || "저장된 요약이 없습니다. 원문에서 내용을 확인해 주세요.")}</p><dl class="ai-summary-metadata">${fields}</dl>${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener">원문 읽기 ↗</a>` : ""}</div></div>`;
+function renderAiSummary(post, id, url) {
+  const points = String(post.summary || "").split(/\r?\n/).filter(line => line.trim())
+    .map(line => `<li>${escapeHtml(line.trim())}</li>`).join("");
+  const original = post.original_title ? `<dl class="ai-summary-metadata"><dt>${post.evidence_level === "introduction" ? "소개 원제" : "원제"}</dt><dd>${escapeHtml(post.original_title)}</dd></dl>` : "";
+  return `<div class="ai-summary-row" role="row" id="${id}" hidden><div class="ai-summary-content" role="cell" aria-labelledby="${id}-toggle"><ul class="ai-summary-text">${points}</ul>${original}${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener">원문 읽기 ↗</a>` : ""}</div></div>`;
 }
 
 function renderPosts(payload, page) {
@@ -150,8 +144,8 @@ function renderPosts(payload, page) {
     const titleCell = `<span class="board-cell cell-title${ai ? " cell-title-with-summary" : ""}" role="cell">${url
       ? `<a class="post-title-content" href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener" title="${escapeHtml(title)}" aria-label="${escapeHtml(article ? `${title}, 원문 열기` : `${title}, 댓글 ${comments}개, 원문 열기`)}">${titleContent}</a>`
       : `<span class="post-title-content">${titleContent}</span>`}${toggle}</span>`;
-    const dateLabel = ai ? aiPublicationDate(post, true) : formatDate(post.created_at, date).replaceAll("-", ".");
-    return `<article class="board-row post-row" role="row">${cell(post.external_post_id || "-", "cell-number numeric-cell")}${page.kind === "mixed" ? sourceCell + subjectCell : subjectCell + sourceCell}${titleCell}${cell(page.kind === "mixed" && article ? "-" : number.format(count(post.upvotes)), "cell-upvotes numeric-cell")}${cell(dateLabel, "cell-date numeric-cell")}${cell("", "cell-feedback")}${cell("", "cell-favorite")}</article>${ai ? renderAiSummary(post, summaryId, source, url) : ""}`;
+    const dateLabel = article ? articlePublicationDate(post) : formatDate(post.created_at, date).replaceAll("-", ".");
+    return `<article class="board-row post-row" role="row">${cell(post.external_post_id || "-", "cell-number numeric-cell")}${page.kind === "mixed" ? sourceCell + subjectCell : subjectCell + sourceCell}${titleCell}${cell(page.kind === "mixed" && article ? "-" : number.format(count(post.upvotes)), "cell-upvotes numeric-cell")}${cell(dateLabel, "cell-date numeric-cell")}${cell("", "cell-feedback")}${cell("", "cell-favorite")}</article>${ai ? renderAiSummary(post, summaryId, url) : ""}`;
   }).join("");
 }
 

@@ -1666,13 +1666,9 @@ function renderPosts(posts) {
       "cell-upvotes numeric-cell"
     );
     const dateCell = createCell(
-      isAiPracticePost(post) ? aiPublicationDate(post, true) : formatPostDate(post.created_at),
+      isArticlePost(post) ? articlePublicationDate(post) : formatPostDate(post.created_at),
       "cell-date numeric-cell"
     );
-    if (isAiPracticePost(post) && post.created_at_basis !== "source") {
-      dateCell.title = "원문 발행일 미확인";
-      dateCell.setAttribute("aria-label", "원문 발행일 미확인");
-    }
     const feedbackCell = createFeedbackCell(post);
     row.append(
       ...(isMixedArchive()
@@ -2406,23 +2402,18 @@ function createTitleCell(post, summaryId = "") {
   return cell;
 }
 
-function aiPublicationDate(post, compact = false) {
-  if (post.created_at_basis !== "source" || !post.created_at) return compact ? "미확인" : "발행일 미확인";
+const articleDateFormatter = new Intl.DateTimeFormat("sv-SE", {
+  timeZone: "Asia/Seoul", year: "2-digit", month: "2-digit", day: "2-digit",
+});
+
+function articlePublicationDate(post) {
+  if (post.created_at_basis !== "source" || !post.created_at || !Number.isFinite(Date.parse(post.created_at))) return "-";
   if (post.created_at_precision === "date") {
     const rawDate = /^\d{4}-\d{2}-\d{2}/.exec(String(post.created_at_raw || ""))
       || /^\d{4}-\d{2}-\d{2}/.exec(String(post.created_at));
-    if (rawDate) return compact ? rawDate[0].slice(2).replaceAll("-", ".") : rawDate[0];
+    if (rawDate) return rawDate[0].slice(2).replaceAll("-", ".");
   }
-  return compact ? formatPostDate(post.created_at) : formatAiDateTime(post.created_at);
-}
-
-function formatAiDateTime(value) {
-  const parsed = new Date(value);
-  if (!value || Number.isNaN(parsed.getTime())) return "기록 없음";
-  return new Intl.DateTimeFormat("ko-KR", {
-    timeZone: "Asia/Seoul", year: "numeric", month: "numeric", day: "numeric",
-    hour: "2-digit", minute: "2-digit", hour12: false,
-  }).format(parsed);
+  return articleDateFormatter.format(new Date(post.created_at)).replaceAll("-", ".");
 }
 
 function createAiPracticeSummary(post, summaryId) {
@@ -2435,33 +2426,24 @@ function createAiPracticeSummary(post, summaryId) {
   cell.className = "ai-summary-content";
   cell.setAttribute("role", "cell");
   cell.setAttribute("aria-labelledby", `${summaryId}-toggle`);
-  const summary = document.createElement("p");
+  const summary = document.createElement("ul");
   summary.className = "ai-summary-text";
-  summary.textContent = String(post.summary || "저장된 요약이 없습니다. 원문에서 내용을 확인해 주세요.");
+  for (const line of String(post.summary || "").split(/\r?\n/).filter(line => line.trim())) {
+    const point = document.createElement("li");
+    point.textContent = line.trim();
+    summary.append(point);
+  }
   cell.append(summary);
   const fields = document.createElement("dl");
   fields.className = "ai-summary-metadata";
-  const kind = { experience: "실전 경험", reference: "참고자료", update: "문서·사례 갱신" }[post.content_kind] || "유형 미확인";
-  const evidence = post.evidence_level === "full_text" ? "본문 확인"
-    : post.evidence_level === "introduction" ? "소개 내용만 확인 · 원문 본문 미확인" : "확인 범위 미상";
-  for (const [label, value] of [
-    [post.evidence_level === "introduction" ? "소개 원제" : "원제", post.original_title || post.title],
-    ["출처", getArticleSourceFullName(post, getCurrentSources()) || "출처 미상"],
-    ["말머리", post.subject || "미분류"],
-    ["자료 유형", kind],
-    ["확인 범위", evidence],
-    ["원문 발행", aiPublicationDate(post)],
-    ["처음 수집", formatAiDateTime(post.first_seen_at || post.fetched_at)],
-  ]) {
-    const group = document.createElement("div");
+  if (post.original_title) {
     const term = document.createElement("dt");
     const description = document.createElement("dd");
-    term.textContent = label;
-    description.textContent = String(value || "기록 없음");
-    group.append(term, description);
-    fields.append(group);
+    term.textContent = post.evidence_level === "introduction" ? "소개 원제" : "원제";
+    description.textContent = post.original_title;
+    fields.append(term, description);
+    cell.append(fields);
   }
-  cell.append(fields);
   const safeUrl = getSafeHttpUrl(post.post_url);
   if (safeUrl) {
     const link = document.createElement("a");

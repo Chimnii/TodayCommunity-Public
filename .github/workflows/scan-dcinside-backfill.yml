@@ -21,6 +21,8 @@ jobs:
   backfill:
     name: DC Backfill crawl attempt
     continue-on-error: true
+    outputs:
+      counted_success: ${{ job.status == 'success' && steps.counted_success.outcome == 'success' }}
     runs-on: ubuntu-latest
     environment: collection
     timeout-minutes: 45
@@ -59,6 +61,7 @@ jobs:
         run: python -m crawler.jobs.run_all_sources --mode backfill --persist
 
       - name: "Failure streak: counted success"
+        id: counted_success
         run: echo "DC Backfill crawl attempt completed successfully."
 
   failure-streak-gate:
@@ -79,4 +82,5 @@ jobs:
           TC_FAILURE_STREAK_ATTEMPT_JOB: DC Backfill crawl attempt
           TC_FAILURE_STREAK_GATE_JOB: DC Backfill failure streak gate
           TC_FAILURE_STREAK_LANE: DC Backfill
+          TC_FAILURE_STREAK_CONFIRMED_SUCCESS: ${{ needs.backfill.result == 'success' && needs.backfill.outputs.counted_success == 'true' }}
         run: python3 -m crawler.jobs.enforce_failure_streak

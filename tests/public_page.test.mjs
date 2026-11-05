@@ -129,7 +129,8 @@ test("public archives have distinct titles, descriptions and canonical URLs", as
     assert.match(html, /class="board-row post-row" role="row"/);
     assert.match(html, /href="https:\/\/example.com\/article\?id=123&amp;title=%22hello%22"/);
     assert.match(html, /aria-busy="false"/);
-    assert.match(html, target === "ai-practice" ? /발행일 미확인/ : /26\.10\.19/); // Server dates use the product's Korean timezone.
+    assert.match(html, ["ai-practice", "game-news", "all"].includes(target)
+      ? /class="board-cell cell-date numeric-cell" role="cell">-<\/span>/ : /26\.10\.19/);
     const seed = bootstrap(html);
     assert.equal(seed.version, 1);
     assert.equal(seed.payload.target, target);
@@ -343,10 +344,9 @@ test("AI practices expose escaped summaries and distinguish an unknown publicati
   assert.match(html, /class="ai-summary-toggle"/);
   assert.match(html, /aria-controls="ai-summary-ssr-1"/);
   assert.match(html, /class="ai-summary-row" role="row" id="ai-summary-ssr-1" hidden/);
-  assert.match(html, /발행일 미확인/);
-  assert.match(html, /소개 내용만 확인 · 원문 본문 미확인/);
-  assert.match(html, /참고자료/);
-  assert.match(html, /처음 수집/);
+  assert.match(html, /<dt>소개 원제<\/dt>/);
+  assert.match(html, /class="board-cell cell-date numeric-cell" role="cell">-<\/span>/);
+  assert.doesNotMatch(html, /<dt>(확인 범위|자료 유형|원문 발행|처음 수집|출처|말머리)<\/dt>/);
   assert.match(html, /Original &lt;script&gt;unsafe\(\)&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<script>unsafe|<img src=x/);
   assert.equal(bootstrap(html).payload.posts[0].original_title, 'Original <script>unsafe()</script>');
@@ -357,8 +357,8 @@ test("AI SSR preserves code placeholders while escaping markup and bootstrap scr
   assert.ok(html.includes("h_&lt;hex10&gt;"));
   assert.ok(html.includes('&lt;/script&gt;&lt;script id=&quot;ai-summary-injected&quot;&gt;bad()&lt;/script&gt;'));
   assert.ok(html.includes('<dd>&lt;img src=x onerror=&quot;bad()&quot;&gt; h_&lt;hex10&gt;</dd>'));
-  assert.ok(html.includes('<dd>&lt;svg onload=&quot;bad()&quot;&gt;</dd>'));
-  assert.ok(html.includes('<dd>&lt;b&gt;프로젝트 운영&lt;/b&gt;</dd>'));
+  assert.ok(html.includes('&lt;svg onload=&quot;bad()&quot;&gt;'));
+  assert.ok(html.includes('&lt;b&gt;프로젝트 운영&lt;/b&gt;'));
   assert.ok(html.includes('title="h_&lt;hex10&gt; &quot; onmouseover=&quot;bad() &lt;script&gt;bad()&lt;/script&gt;"'));
   assert.doesNotMatch(html, /<hex10>|<script id="ai-summary-injected"|<script>bad\(\)|<img src=x|<svg onload=/);
   const bootstrapText = html.match(/<script id="archive-bootstrap" type="application\/json">([\s\S]*?)<\/script>/)[1];

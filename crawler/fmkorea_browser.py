@@ -659,14 +659,14 @@ class FmkoreaChromeSession:
         if browser is not None:
             try:
                 cdp_session = browser.new_browser_cdp_session()
+                # Closing Chrome destroys its CDP sessions. A subsequent
+                # detach may wait forever for a reply from the closed browser.
                 cdp_session.send("Browser.close")
-                cdp_session.detach()
             except Exception:
-                pass
-            try:
-                browser.close()
-            except Exception:
-                pass
+                try:
+                    browser.close()
+                except Exception:
+                    pass
         if playwright is not None:
             try:
                 playwright.stop()

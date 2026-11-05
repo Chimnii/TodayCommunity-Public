@@ -437,9 +437,14 @@ def evaluate_failure_streak(
     success_marker: str = DEFAULT_SUCCESS_MARKER,
     ignored_marker: str = DEFAULT_IGNORED_MARKER,
     threshold: int = DEFAULT_THRESHOLD,
+    confirmed_success: bool = False,
 ) -> GateDecision:
     if threshold < 1:
         raise ValueError("threshold must be positive")
+    # The dependency publishes this only after its success marker and job
+    # (including post steps) succeeded. Reruns still need ordered history.
+    if confirmed_success and current_run_attempt == 1:
+        return GateDecision(AttemptKind.SUCCESS, 0, threshold)
 
     current_run = client.get_run(current_run_id)
     reported_run_number = current_run.get("run_number")
@@ -746,6 +751,7 @@ def run_gate(argv: Sequence[str] | None = None) -> int:
             success_marker=args.success_marker,
             ignored_marker=args.ignored_marker,
             threshold=_positive_int(args.threshold, "threshold"),
+            confirmed_success=os.environ.get("TC_FAILURE_STREAK_CONFIRMED_SUCCESS") == "true",
         )
     except (GitHubApiError, OSError) as exc:
         message = f"Failure streak could not be evaluated safely: {exc}"

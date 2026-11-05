@@ -489,6 +489,16 @@ class FailureStreakEvaluationTests(unittest.TestCase):
         self.assertEqual(jobs.call_count, 4)
         self.assertEqual([call.args[0] for call in sleep.call_args_list], [1, 2, 4])
 
+    def test_current_success_output_avoids_delayed_jobs_api_only_on_first_attempt(self):
+        client = FakeActionsClient(jobs_by_run={100: [successful_attempt()]}, previous_run_pages=[])
+        args = dict(current_run_id=100, current_run_number=100, attempt_job_name=ATTEMPT_JOB_NAME,
+                    gate_job_name=GATE_JOB_NAME, confirmed_success=True)
+        with patch.object(client, "get_run", side_effect=GitHubApiError("unavailable")) as read:
+            self.assertEqual(evaluate_failure_streak(client, current_run_attempt=1, **args).current_kind, AttemptKind.SUCCESS)
+            read.assert_not_called()
+            with self.assertRaisesRegex(GitHubApiError, "unavailable"):
+                evaluate_failure_streak(client, current_run_attempt=2, **args)
+
     def test_threshold_applies_to_each_counted_failure(self) -> None:
         for failure_count in range(1, 5):
             with self.subTest(failure_count=failure_count):
