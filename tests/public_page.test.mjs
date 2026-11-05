@@ -348,6 +348,8 @@ test("AI practices expose escaped summaries and distinguish an unknown publicati
   assert.match(html, /aria-controls="ai-summary-ssr-1"/);
   assert.match(html, /class="ai-summary-row" role="row" id="ai-summary-ssr-1" hidden/);
   assert.match(html, /<dt>소개 원제<\/dt>/);
+  assert.match(html, /<p class="ai-summary-text">/);
+  assert.doesNotMatch(html, /<ul class="ai-summary-text">/);
   assert.match(html, /class="board-cell cell-date numeric-cell" role="cell">-<\/span>/);
   assert.doesNotMatch(html, /<dt>(확인 범위|자료 유형|원문 발행|처음 수집|출처|말머리)<\/dt>/);
   assert.match(html, /Original &lt;script&gt;unsafe\(\)&lt;\/script&gt;/);

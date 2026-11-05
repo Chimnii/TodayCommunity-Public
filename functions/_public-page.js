@@ -118,10 +118,9 @@ function articlePublicationDate(post) {
 }
 
 function renderAiSummary(post, id, url) {
-  const points = String(post.summary || "").split(/\r?\n/).filter(line => line.trim())
-    .map(line => `<li>${escapeHtml(line.trim())}</li>`).join("");
+  const summary = escapeHtml(String(post.summary || "").replace(/\s+/g, " ").trim());
   const original = post.original_title ? `<dl class="ai-summary-metadata"><dt>${post.evidence_level === "introduction" ? "소개 원제" : "원제"}</dt><dd>${escapeHtml(post.original_title)}</dd></dl>` : "";
-  return `<div class="ai-summary-row" role="row" id="${id}" hidden><div class="ai-summary-content" role="cell" aria-labelledby="${id}-toggle"><ul class="ai-summary-text">${points}</ul>${original}${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener">원문 읽기 ↗</a>` : ""}</div></div>`;
+  return `<div class="ai-summary-row" role="row" id="${id}" hidden><div class="ai-summary-content" role="cell" aria-labelledby="${id}-toggle"><p class="ai-summary-text">${summary}</p>${original}${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener">원문 읽기 ↗</a>` : ""}</div></div>`;
 }
 
 function renderPosts(payload, page) {

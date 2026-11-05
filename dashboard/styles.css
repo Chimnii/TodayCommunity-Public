@@ -1052,9 +1052,7 @@ body[data-auth-state="authenticated"] .cell-favorite {
 
 .ai-summary-text {
   margin: 0 0 var(--space-3);
-  padding-inline-start: 1.35em;
 }
-.ai-summary-text li + li { margin-top: var(--space-1); }
 
 .ai-summary-metadata {
   display: grid;

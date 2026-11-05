@@ -2444,13 +2444,9 @@ function createAiPracticeSummary(post, summaryId) {
   cell.className = "ai-summary-content";
   cell.setAttribute("role", "cell");
   cell.setAttribute("aria-labelledby", `${summaryId}-toggle`);
-  const summary = document.createElement("ul");
+  const summary = document.createElement("p");
   summary.className = "ai-summary-text";
-  for (const line of String(post.summary || "").split(/\r?\n/).filter(line => line.trim())) {
-    const point = document.createElement("li");
-    point.textContent = line.trim();
-    summary.append(point);
-  }
+  summary.textContent = String(post.summary || "").replace(/\s+/g, " ").trim();
   cell.append(summary);
   const fields = document.createElement("dl");
   fields.className = "ai-summary-metadata";
