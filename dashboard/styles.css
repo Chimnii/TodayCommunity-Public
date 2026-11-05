@@ -2003,7 +2003,7 @@ body[data-archive-key="ai-practice"][data-content-kind="article"] .cell-feedback
 
   body[data-archive-key="ai-practice"][data-content-kind="article"] .board-head .board-row,
   body[data-archive-key="ai-practice"][data-content-kind="article"] .post-row {
-    grid-template-columns: 90px minmax(0, 1fr) var(--favorite-column,);
+    grid-template-columns: 40px minmax(0, 1fr) var(--favorite-column,);
   }
 
   body[data-archive-key="ai-practice"][data-content-kind="article"] .cell-source {
@@ -2012,6 +2012,37 @@ body[data-archive-key="ai-practice"][data-content-kind="article"] .cell-feedback
 
   .ai-summary-content {
     padding: var(--space-3);
+  }
+
+  .cell-title-with-summary {
+    gap: var(--space-1);
+  }
+
+  .ai-summary-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 28px;
+    width: 28px;
+    min-height: 32px;
+    padding: 0;
+  }
+
+  .ai-summary-label {
+    display: none;
+  }
+
+  .ai-summary-toggle::after {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: translateY(-2px) rotate(45deg);
+  }
+
+  .ai-summary-toggle[aria-expanded="true"]::after {
+    transform: translateY(2px) rotate(225deg);
   }
 
   .game-news-tools {

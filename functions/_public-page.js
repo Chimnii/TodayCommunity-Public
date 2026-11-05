@@ -133,14 +133,17 @@ function renderPosts(payload, page) {
     const sourceKey = String(source?.site_name || post.source_key || "").toLowerCase().replace(/^(?:game-news|ai-practice)-/, "");
     const sourceLabel = ai ? post.publisher || source?.board_name || "-" : ({ inven: "inv", thisisgame: "tig" })[sourceKey] || sourceKey.slice(0, 3) || "-";
     const subject = article ? SUBJECT_LABELS[post.subject] || post.subject || "-" : String(post.subject || "");
-    const subjectCell = cell(page.kind === "mixed" && article && !ai ? `${sourceLabel}-${subject}` : subject, "cell-subject");
+    const mobileSubject = ({ "생활 비서": "비서", "프로젝트 운영": "플젝", "모델 협의": "협의" })[subject] || subject;
+    const subjectCell = ai
+      ? `<span class="board-cell cell-subject" role="cell" aria-label="${escapeHtml(subject)}"><span class="subject-preview-desktop">${escapeHtml(subject)}</span><span class="subject-preview-mobile">${escapeHtml(mobileSubject)}</span></span>`
+      : cell(page.kind === "mixed" && article ? `${sourceLabel}-${subject}` : subject, "cell-subject");
     const sourceCell = cell(page.kind === "mixed" ? ARCHIVE_LABELS[post.archive_key] || "-" : sourceLabel, "cell-source");
     const title = String(post.title || "제목 없음");
     const url = safeUrl(post.post_url);
     const comments = Math.max(0, count(post.comments));
     const titleContent = `<span class="post-title-text">${escapeHtml(title)}</span>${!article ? `<span class="post-comment-count" aria-hidden="true">[${number.format(comments)}]</span>` : ""}`;
     const summaryId = `ai-summary-ssr-${index + 1}`;
-    const toggle = ai ? `<button type="button" id="${summaryId}-toggle" class="ai-summary-toggle" aria-label="${escapeHtml(title)}, 요약과 원문 정보" aria-expanded="false" aria-controls="${summaryId}">요약</button>` : "";
+    const toggle = ai ? `<button type="button" id="${summaryId}-toggle" class="ai-summary-toggle" aria-label="${escapeHtml(title)}, 요약과 원문 정보" aria-expanded="false" aria-controls="${summaryId}"><span class="ai-summary-label">요약</span></button>` : "";
     const titleCell = `<span class="board-cell cell-title${ai ? " cell-title-with-summary" : ""}" role="cell">${url
       ? `<a class="post-title-content" href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener" title="${escapeHtml(title)}" aria-label="${escapeHtml(article ? `${title}, 원문 열기` : `${title}, 댓글 ${comments}개, 원문 열기`)}">${titleContent}</a>`
       : `<span class="post-title-content">${titleContent}</span>`}${toggle}</span>`;

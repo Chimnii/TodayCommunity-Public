@@ -39,7 +39,7 @@ function harness() {
   const window = { location: { href: "https://todaycommunity.pages.dev/?target=ai-practice" } };
   const context = vm.createContext({ document, window, URL, URLSearchParams, console });
   vm.runInContext(`${source}
-    globalThis.review = { state, elements, createTitleCell, createAiPracticeSummary,
+    globalThis.review = { state, elements, createTitleCell, createAiPracticeSummary, createSubjectCell,
       createFeedbackCell, applyContentKindMode, normalizeContentState, getLocalViewModel,
       renderSubjectOptions, renderPosts, articlePublicationDate, hydrateStateFromUrl,
       getAvailableArchives, getArticleSourceLabel };
@@ -100,6 +100,9 @@ test("AI summary toggle has an independent original link and keyboard-native but
   assert.match(link.rel, /noopener/);
   assert.equal(toggle.tagName, "BUTTON");
   assert.equal(toggle.type, "button");
+  assert.equal(toggle.getAttribute("aria-label"), `${sample.title}, 요약과 원문 정보`);
+  assert.equal(toggle.children[0].className, "ai-summary-label");
+  assert.equal(toggle.children[0].textContent, "요약");
   assert.equal(toggle.getAttribute("aria-controls"), panel.id);
   assert.equal(toggle.getAttribute("aria-expanded"), "false");
   assert.equal(panel.hidden, true);
@@ -113,6 +116,19 @@ test("AI summary toggle has an independent original link and keyboard-native but
   assert.deepEqual(panel.children[0].children[0].children.map(li => li.textContent), sample.summary.split("\n"));
   assert.doesNotMatch(textOf(panel), /처음 수집|본문 확인|확인 범위|자료 유형|말머리|출처/);
   assert.doesNotMatch(textOf(title), /\[0\]/);
+});
+
+test("AI mobile subject abbreviations preserve full labels across archive views", () => {
+  const h = harness();
+  for (const target of ["ai-practice", "all", "favorites"]) {
+    h.state.target = target;
+    for (const [subject, short] of [["생활 비서", "비서"], ["프로젝트 운영", "플젝"], ["모델 협의", "협의"]]) {
+      const cell = h.createSubjectCell({ ...sample, subject });
+      assert.equal(cell.getAttribute("aria-label"), subject);
+      assert.equal(cell.children[0].textContent, subject);
+      assert.equal(cell.children[1].textContent, short);
+    }
+  }
 });
 
 test("stored summary and original title are literal text; introduction and unknown publication stay explicit", () => {

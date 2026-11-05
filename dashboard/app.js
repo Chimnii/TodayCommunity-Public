@@ -4,6 +4,9 @@ const ALL_TARGET = "all";
 const FAVORITES_TARGET = "favorites";
 const AI_PRACTICE_TARGET = "ai-practice";
 const AI_PRACTICE_SUBJECTS = Object.freeze(["생활 비서", "프로젝트 운영", "모델 협의"]);
+const AI_PRACTICE_MOBILE_SUBJECTS = Object.freeze({
+  "생활 비서": "비서", "프로젝트 운영": "플젝", "모델 협의": "협의",
+});
 const FAVORITES_ARCHIVE = Object.freeze({
   archive_key: FAVORITES_TARGET, display_name: "즐겨찾기", content_kind: "mixed",
   description: "시크릿 사용자들이 함께 저장한 글 · 최근 저장순", display_order: 110,
@@ -1726,6 +1729,18 @@ function createSubjectCell(post) {
     return cell;
   }
 
+  if (isAiPracticePost(post)) {
+    const desktopContent = document.createElement("span");
+    const mobileContent = document.createElement("span");
+    desktopContent.className = "subject-preview-desktop";
+    mobileContent.className = "subject-preview-mobile";
+    desktopContent.textContent = value;
+    mobileContent.textContent = AI_PRACTICE_MOBILE_SUBJECTS[value] || value;
+    cell.setAttribute("aria-label", value);
+    cell.append(desktopContent, mobileContent);
+    return cell;
+  }
+
   if (isArticleArchive()) {
     const label = getArticleSubjectLabel(value);
     cell.textContent = label;
@@ -2386,7 +2401,10 @@ function createTitleCell(post, summaryId = "") {
     toggle.type = "button";
     toggle.id = `${summaryId}-toggle`;
     toggle.className = "ai-summary-toggle";
-    toggle.textContent = "요약";
+    const label = document.createElement("span");
+    label.className = "ai-summary-label";
+    label.textContent = "요약";
+    toggle.append(label);
     toggle.setAttribute("aria-label", `${title}, 요약과 원문 정보`);
     toggle.setAttribute("aria-expanded", "false");
     toggle.setAttribute("aria-controls", summaryId);

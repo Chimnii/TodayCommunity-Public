@@ -62,7 +62,7 @@ export default {
         },
         posts: request.headers.has("x-test-empty") ? [] : [
           {post_id: 1, external_post_id: "123", archive_key: target === "all" ? "game-news" : target,
-            source_key: "game-news-inven", subject: "release", title: '실제 저장 글 <script>alert("x")</script> & 제목',
+            source_key: "game-news-inven", subject: target === "ai-practice" ? "생활 비서" : "release", title: '실제 저장 글 <script>alert("x")</script> & 제목',
             post_url: 'https://example.com/article?id=123&title="hello"', upvotes: 3, comments: 2,
             created_at: "2026-10-18T22:00:00Z", created_at_basis: "first_seen",
             first_seen_at: "2026-11-05T00:00:00Z", original_title: 'Original <script>unsafe()</script>',
@@ -342,6 +342,9 @@ test("AI practices expose escaped summaries and distinguish an unknown publicati
   assert.equal(response.status, 200);
   assert.match(html, /AI 실전 사례 모음/);
   assert.match(html, /class="ai-summary-toggle"/);
+  assert.match(html, /class="ai-summary-label">요약<\/span>/);
+  assert.match(html, /class="subject-preview-desktop">생활 비서<\/span>/);
+  assert.match(html, /class="subject-preview-mobile">비서<\/span>/);
   assert.match(html, /aria-controls="ai-summary-ssr-1"/);
   assert.match(html, /class="ai-summary-row" role="row" id="ai-summary-ssr-1" hidden/);
   assert.match(html, /<dt>소개 원제<\/dt>/);
