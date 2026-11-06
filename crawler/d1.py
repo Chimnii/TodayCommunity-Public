@@ -827,7 +827,9 @@ def split_sql_statements(sql_script: str) -> List[str]:
 
     for line in sql_script.splitlines():
         stripped = line.strip()
-        if not stripped or stripped.startswith("--"):
+        # Blank/comment-looking lines inside an unfinished SQL statement may
+        # be literal text (for example a policy snapshot). Preserve them.
+        if not current and (not stripped or stripped.startswith("--")):
             continue
         current.append(line)
         candidate = "\n".join(current).strip()

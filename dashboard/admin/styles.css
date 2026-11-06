@@ -29,7 +29,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -141,7 +142,8 @@ label {
 }
 
 input,
-select {
+select,
+textarea {
   width: 100%;
   min-height: 44px;
   padding: 9px 12px;
@@ -153,6 +155,7 @@ select {
 
 input:focus,
 select:focus,
+textarea:focus,
 button:focus-visible,
 a:focus-visible {
   outline: 3px solid rgb(31 111 235 / 25%);
@@ -303,6 +306,23 @@ a:focus-visible {
   text-align: center;
 }
 
+.ai-rules-panel h2 { margin-bottom: 0; }
+.ai-rules-panel .links-heading { flex-wrap: wrap; margin-bottom: 16px; }
+#ai-rules-content { resize: vertical; min-height: 300px; line-height: 1.65; font-weight: 400; }
+.ai-rules-toolbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; }
+#ai-rules-count, .help-text { color: var(--muted); font-size: 13px; }
+.help-text { margin-top: 12px; }
+.ai-policy-meta { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; margin: 20px 0 26px; font-size: 13px; }
+.ai-policy-meta dt { color: var(--muted); }
+.ai-policy-meta dd { margin: 0; overflow-wrap: anywhere; }
+.ai-source-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.ai-source-card { min-width: 0; border: 1px solid var(--border); border-radius: 8px; padding: 14px; overflow-wrap: anywhere; }
+.ai-source-card h4 { margin: 0 0 10px; }
+.ai-source-card p { margin-bottom: 8px; font-size: 13px; }
+.ai-source-card details { font-size: 13px; }
+.ai-source-card summary { cursor: pointer; }
+.ai-source-card pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.5; }
+
 [hidden] {
   display: none !important;
 }
@@ -324,6 +344,9 @@ a:focus-visible {
   .create-form {
     grid-template-columns: 1fr;
   }
+
+  .ai-source-list { grid-template-columns: 1fr; }
+  .ai-rules-toolbar .management-actions { flex-wrap: wrap; }
 
   .create-form .button,
   #login-form .button {

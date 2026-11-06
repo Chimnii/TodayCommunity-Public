@@ -460,6 +460,14 @@ class D1ClientResponseTests(unittest.TestCase):
 
 
 class SqlScriptSplittingTests(unittest.TestCase):
+    def test_multiline_literal_preserves_blank_and_comment_looking_lines(self) -> None:
+        content = "first line\n\n-- this is policy text, not a SQL comment\nlast line"
+        script = "CREATE TABLE policies(content TEXT);\nINSERT INTO policies VALUES ('" + content + "');\n"
+        connection = sqlite3.connect(":memory:")
+        for statement in split_sql_statements(script):
+            connection.execute(statement)
+        self.assertEqual(connection.execute("SELECT content FROM policies").fetchone()[0], content)
+
     def test_trigger_body_is_kept_as_one_statement(self) -> None:
         script = """
         CREATE TABLE events (id INTEGER PRIMARY KEY, value TEXT);
