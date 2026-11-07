@@ -1210,6 +1210,24 @@ body[data-archive-key="ai-practice"][data-content-kind="article"] .cell-feedback
   overflow: auto;
 }
 
+.ai-criteria-dialog {
+  max-height: min(760px, calc(100dvh - var(--space-6)));
+}
+
+.ai-criteria-document {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.8;
+  font-size: var(--text-sm);
+}
+
+.ai-criteria-document:empty,
+#ai-criteria-meta:empty,
+#ai-criteria-status:empty {
+  display: none;
+}
+
 .preference-form {
   display: grid;
   gap: var(--space-3);

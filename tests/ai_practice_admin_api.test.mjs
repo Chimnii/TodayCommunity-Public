@@ -78,11 +78,104 @@ function request(db, { method = "GET", identity = "admin", body, headers = {}, p
     "Sec-Fetch-Site": "same-origin", "X-TodayCommunity-Write": "1", ...headers });
   const input = new Request(`https://todaycommunity.example/api/ai-practice/${path}`, { method, headers: allHeaders,
     body: method === "POST" ? JSON.stringify(body) : undefined });
-  return api[method === "GET" ? "onRequestGet" : "onRequestPost"]({ request: input, env: { ...env, DB: db } });
+  return api[`onRequest${method[0]}${method.slice(1).toLowerCase()}`]({ request: input, env: { ...env, DB: db } });
 }
 const saveBody = (event = "test-save-event-0001", content = privateText, base_revision = 1) => ({ event_id: event, content, base_revision });
 const current = db => db.sqlite.prepare("SELECT * FROM ai_practice_policy_state WHERE id=1").get();
 const count = (db, table) => db.sqlite.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
+
+test("criteria returns only the current document fields to valid secret-link and admin sessions", async t => {
+  const db = database(t);
+  const saved = await (await request(db, { method: "POST", body: saveBody() })).json();
+  const expected = { content: privateText, revision: 2, updated_at: saved.document.updated_at };
+  const beforeWrites = db.sqlite.prepare("SELECT total_changes() AS n").get().n;
+  for (const identity of ["link", "admin"]) {
+    db.queries.length = 0;
+    const response = await request(db, { identity, path: "criteria" });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { document: expected });
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+    assert.equal(response.headers.get("vary"), "Cookie");
+    assert.equal(response.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(response.headers.get("x-robots-tag"), "noindex, nofollow");
+    assert.ok(db.queries.every(sql => !/ai_practice_(?:queue|candidates|discovery|source_state)/u.test(sql)), "criteria does not read application status");
+    assert.equal(db.queries.filter(sql => sql.includes("ai_practice_policy_state")).length, 1);
+  }
+  assert.equal(db.sqlite.prepare("SELECT total_changes() AS n").get().n, beforeWrites);
+  const updated = await (await request(db, { method: "POST", body: saveBody("criteria-latest-0001", "최신 선정 기준 전문", 2) })).json();
+  const latest = await (await request(db, { identity: "link", path: "criteria" })).json();
+  assert.deepEqual(latest, { document: { content: "최신 선정 기준 전문", revision: 3, updated_at: updated.document.updated_at } });
+});
+
+test("criteria rejects guests, forged or expired sessions, and revoked or expired secret links before policy access", async t => {
+  const expiredLink = await auth.createSessionToken(env, auth.AUTH_STATE_AUTHENTICATED, 1, Date.now() - 31 * 24 * 60 * 60 * 1000);
+  const expiredAdmin = await auth.createSessionToken(env, auth.AUTH_STATE_ADMIN, null, Date.now() - 2 * 60 * 60 * 1000);
+  const [payload, signature] = link.split(".");
+  const forged = `${payload}.${signature[0] === "A" ? "B" : "A"}${signature.slice(1)}`;
+  const cases = [
+    { name: "guest" },
+    { name: "expired session", cookie: `__Host-tc_authenticated=${expiredLink}` },
+    { name: "forged session", cookie: `__Host-tc_authenticated=${forged}` },
+    { name: "expired admin", cookie: `__Host-tc_admin=${expiredAdmin}` },
+    { name: "revoked link", cookie: `__Host-tc_authenticated=${link}`, sql: "UPDATE auth_secret_links SET revoked_at='2026-01-01T00:00:00Z'" },
+    { name: "expired link", cookie: `__Host-tc_authenticated=${link}`, sql: "UPDATE auth_secret_links SET expires_at='2026-01-01T00:00:00Z'" },
+    { name: "deleted link", cookie: `__Host-tc_authenticated=${link}`, sql: "DELETE FROM auth_secret_links" },
+  ];
+  for (const entry of cases) await t.test(entry.name, async sub => {
+    const db = database(sub);
+    if (entry.sql) db.sqlite.exec(entry.sql);
+    const response = await request(db, { identity: "guest", path: "criteria", headers: entry.cookie ? { Cookie: entry.cookie } : {} });
+    assert.equal(response.status, 401);
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+    assert.equal(response.headers.get("vary"), "Cookie");
+    assert.doesNotMatch(await response.text(), /PRIVATE-AI-POLICY|document|content|application|policy_hash/);
+    assert.ok(db.queries.every(sql => !sql.includes("ai_practice")));
+    if (entry.cookie) assert.match(response.headers.get("set-cookie"), /Max-Age=0/u);
+  });
+});
+
+test("criteria preserves stale-cookie cleanup when a valid secret session still authorizes the read", async t => {
+  const db = database(t);
+  const response = await request(db, { identity: "guest", path: "criteria", headers: {
+    Cookie: `__Host-tc_admin=invalid; __Host-tc_authenticated=${link}`,
+  } });
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("set-cookie"), /__Host-tc_admin=;.*Max-Age=0/u);
+  assert.deepEqual(Object.keys((await response.json()).document).sort(), ["content", "revision", "updated_at"]);
+});
+
+test("criteria is GET-only for both allowed identities and cannot append policy events", async t => {
+  const db = database(t);
+  const before = current(db);
+  const beforeWrites = db.sqlite.prepare("SELECT total_changes() AS n").get().n;
+  for (const identity of ["link", "admin"]) for (const method of ["POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]) {
+    db.queries.length = 0;
+    const response = await request(db, { identity, method, path: "criteria", body: saveBody() });
+    assert.equal(response.status, 405, `${identity} ${method}`);
+    assert.equal(response.headers.get("allow"), "GET");
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+    assert.equal(response.headers.get("vary"), "Cookie");
+    assert.doesNotMatch(await response.text(), /PRIVATE-AI-POLICY|document|content/);
+    assert.ok(db.queries.every(sql => !sql.includes("ai_practice")));
+  }
+  assert.deepEqual(current(db), before);
+  assert.equal(count(db, "ai_practice_manual_rule_events"), 0);
+  assert.equal(db.sqlite.prepare("SELECT total_changes() AS n").get().n, beforeWrites);
+});
+
+test("criteria fails closed on missing or corrupted policy without consulting queue tables", async t => {
+  for (const sql of ["DELETE FROM ai_practice_policy_state", `INSERT INTO ai_practice_policy_snapshots
+    SELECT 2,policy_hash,'corrupted policy',updated_at,'fixture-corruption' FROM ai_practice_policy_state;
+    UPDATE ai_practice_policy_state SET policy_revision=2`]) {
+    const db = database(t);
+    db.sqlite.exec(sql);
+    const response = await request(db, { identity: "link", path: "criteria" });
+    assert.equal(response.status, 503);
+    assert.equal(response.headers.get("cache-control"), "private, no-store");
+    assert.doesNotMatch(await response.text(), /corrupted policy|document|content/);
+    assert.ok(db.queries.every(query => !/ai_practice_(?:queue|candidates|discovery|source_state)/u.test(query)));
+  }
+});
 
 test("AI rules reject guests and secret-link owners before reading private policy or status", async t => {
   const db = database(t);
@@ -290,8 +383,8 @@ test("Cloudflare D1 batch preserves changes() guards for policy writes and idemp
   const runtime = new Miniflare(convertV4MiniflareOptions({
     modulesRoot: fileURLToPath(new URL("../", import.meta.url)),
     modules: [
-      { type: "ESModule", path: "test-ai-admin-worker.mjs", contents: `import { onRequestGet, onRequestPost } from "./test-ai-admin-api.mjs";
-        export default { fetch(request, env) { return (request.method === "POST" ? onRequestPost : onRequestGet)({request, env}); } };` },
+      { type: "ESModule", path: "test-ai-admin-worker.mjs", contents: `import * as api from "./test-ai-admin-api.mjs";
+        export default { fetch(request, env) { return api['onRequest' + request.method[0] + request.method.slice(1).toLowerCase()]({request, env}); } };` },
       { type: "ESModule", path: "test-ai-admin-api.mjs", contents: source.replace(JSON.stringify(authUrl), '"./test-ai-auth.mjs"') },
       { type: "ESModule", path: "test-ai-auth.mjs", contents: authSource },
     ],
@@ -303,7 +396,7 @@ test("Cloudflare D1 batch preserves changes() guards for policy writes and idemp
   const schema = fixture.sqlite.prepare("SELECT sql FROM sqlite_schema WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY rowid").all();
   await db.batch(schema.map(row => db.prepare(row.sql)));
   const inserts = [];
-  for (const table of ["sources", "posts", "ai_practice_candidates", "ai_practice_policy_snapshots", "ai_practice_policy_state", "ai_practice_queue", "ai_practice_discovery_state"]) {
+  for (const table of ["auth_secret_links", "sources", "posts", "ai_practice_candidates", "ai_practice_policy_snapshots", "ai_practice_policy_state", "ai_practice_queue", "ai_practice_discovery_state"]) {
     for (const row of fixture.sqlite.prepare(`SELECT * FROM ${table}`).all()) {
       const fields = Object.keys(row);
       inserts.push(db.prepare(`INSERT INTO ${table} (${fields.join(",")}) VALUES (${fields.map(() => "?").join(",")})`).bind(...Object.values(row)));
@@ -334,4 +427,14 @@ test("Cloudflare D1 batch preserves changes() guards for policy writes and idemp
   assert.equal(unchanged.status, 201);
   assert.equal(third.save.changed, false);
   assert.equal(third.application.pending_count, 0);
+  const criteria = await runtime.dispatchFetch("https://todaycommunity.example/api/ai-practice/criteria", {
+    headers: { Cookie: `__Host-tc_authenticated=${link}` },
+  });
+  assert.equal(criteria.status, 200);
+  assert.deepEqual(await criteria.json(), { document: { content: privateText, revision: 2, updated_at: third.document.updated_at } });
+  const readOnly = await runtime.dispatchFetch("https://todaycommunity.example/api/ai-practice/criteria", {
+    method: "PUT", headers: { Cookie: `__Host-tc_authenticated=${link}` },
+  });
+  assert.equal(readOnly.status, 405);
+  assert.equal(readOnly.headers.get("allow"), "GET");
 });

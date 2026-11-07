@@ -6,7 +6,7 @@ import vm from "node:vm";
 const source = (await readFile(new URL("../dashboard/app.js", import.meta.url), "utf8"))
   .replace(/\binitialize\(\);\s*$/, "");
 
-function harness() {
+function harness(fetchImpl = async () => { throw new Error("Unexpected request"); }) {
   const nodes = new Map();
   class Element {
     constructor(tag = "div") {
@@ -15,14 +15,21 @@ function harness() {
       this.attributes = new Map();
       this.dataset = {};
       this.events = {};
+      this.open = false;
+      this.isConnected = true;
       this.style = { setProperty() {} };
       this.classList = { add: value => { this.className = `${this.className || ""} ${value}`; } };
     }
     append(...children) { this.children.push(...children); }
-    replaceChildren(...children) { this.children = children; }
+    replaceChildren(...children) { this._text = ""; this.children = children; }
+    set textContent(value) { this._text = value; this.children = []; }
+    get textContent() { return this._text || ""; }
     setAttribute(key, value) { this.attributes.set(key, String(value)); }
     getAttribute(key) { return this.attributes.get(key) ?? null; }
     addEventListener(name, callback) { this.events[name] = callback; }
+    focus() { document.activeElement = this; }
+    showModal() { this.open = true; }
+    close() { this.open = false; this.events.close?.(); }
     get options() { return this.children; }
     set id(value) { this._id = value; nodes.set(value, this); }
     get id() { return this._id; }
@@ -36,17 +43,20 @@ function harness() {
       return nodes.get(selector);
     },
   };
-  const window = { location: { href: "https://todaycommunity.pages.dev/?target=ai-practice" } };
-  const context = vm.createContext({ document, window, URL, URLSearchParams, console });
+  const window = { location: { href: "https://todaycommunity.pages.dev/?target=ai-practice" },
+    clearTimeout() {}, setTimeout: () => 1 };
+  const context = vm.createContext({ document, window, URL, URLSearchParams, AbortController, fetch: fetchImpl, console });
   vm.runInContext(`${source}
     globalThis.review = { state, elements, createTitleCell, createAiPracticeSummary, createSubjectCell,
       createFeedbackCell, applyContentKindMode, normalizeContentState, getLocalViewModel,
       renderSubjectOptions, renderPosts, articlePublicationDate, hydrateStateFromUrl,
-      getAvailableArchives, getArticleSourceLabel };
+      getAvailableArchives, getArticleSourceLabel, bindAiCriteriaEvents, openAiCriteriaDialog,
+      closeAiCriteriaDialog, renderPreferenceDocument, savePreferenceDocument, refreshHiddenItems };
   `, context);
   const api = context.review;
   Object.assign(api.state, { target: "ai-practice", dataSource: "live" });
   api.state.archive = { posts: [], sources: [], summary: {}, pagination: {} };
+  api.bindAiCriteriaEvents();
   return { ...api, document, window, nodes };
 }
 
@@ -221,4 +231,198 @@ test("URL restoration keeps the AI target, query, subject and sequential page st
   assert.equal(h.state.page, 2);
   assert.equal(h.state.cursor, "next");
   assert.equal(h.document.title, "AI 실전 사례 모음 | 오늘의 커뮤니티");
+});
+
+const criteriaResponse = (content = "선정 범위\n\n- 첫 번째 기준\n- 두 번째 기준", revision = 3) => ({
+  ok: true,
+  json: async () => ({ document: { content, revision, updated_at: "2026-11-07T16:54:52Z" } }),
+});
+
+test("AI criteria read controls allow only authenticated and admin sessions in the AI tab", async () => {
+  const h = harness();
+  for (const authentication of [undefined, "guest", "authenticated", "admin", "owner"]) {
+    h.state.feedbackSession = { authentication, capabilities: { rate: true, manage_rules: true } };
+    for (const target of ["ai-practice", "game-news", "all", "favorites", "dcinside-singularity"]) {
+      h.state.target = target;
+      h.applyContentKindMode();
+      const allowed = target === "ai-practice" && ["authenticated", "admin"].includes(authentication);
+      assert.equal(h.elements.aiCriteriaTools.hidden, !allowed);
+      assert.equal(h.elements.gameNewsTools.hidden, target !== "game-news");
+      if (!allowed) {
+        await h.openAiCriteriaDialog();
+        assert.equal(h.elements.aiCriteriaDialog.open, false);
+      }
+    }
+  }
+  h.state.target = "ai-practice";
+  h.state.feedbackSession = { authentication: "authenticated", capabilities: {} };
+  h.applyContentKindMode();
+  assert.equal(h.elements.aiCriteriaTools.hidden, false, "read access is independent of game write capabilities");
+});
+
+test("AI criteria load fresh on every opening and render exact literal text with revision and date", async () => {
+  const requests = [];
+  const content = '소제목\n\n- <script>alert(1)</script>\n- <img src=x onerror="bad()"> & h_<hex10>';
+  const h = harness(async (url, options) => {
+    requests.push({ url, options });
+    return criteriaResponse(requests.length === 1 ? content : "새로 저장된 전문", requests.length + 2);
+  });
+  h.state.feedbackSession = { authentication: "admin" };
+  h.applyContentKindMode();
+  const loading = h.openAiCriteriaDialog();
+  assert.equal(h.elements.aiCriteriaDialog.open, true);
+  assert.match(h.elements.aiCriteriaStatus.textContent, /불러오는 중/);
+  assert.equal(h.elements.aiCriteriaDocument.getAttribute("aria-busy"), "true");
+  assert.equal(h.document.activeElement, h.elements.aiCriteriaClose);
+  await loading;
+  assert.equal(h.elements.aiCriteriaDocument.textContent, content);
+  assert.equal(h.elements.aiCriteriaDocument.children.length, 0, "source markup is never parsed");
+  assert.match(h.elements.aiCriteriaMeta.textContent, /2026.*버전 3/);
+  assert.equal(h.elements.aiCriteriaDocument.getAttribute("aria-busy"), "false");
+  assert.equal(h.elements.aiCriteriaOpen.getAttribute("aria-expanded"), "true");
+  h.elements.aiCriteriaClose.events.click();
+  assert.equal(h.elements.aiCriteriaDocument.textContent, "");
+  assert.equal(h.elements.aiCriteriaMeta.textContent, "");
+  assert.equal(h.elements.aiCriteriaOpen.getAttribute("aria-expanded"), "false");
+  assert.equal(h.document.activeElement, h.elements.aiCriteriaOpen);
+  await h.openAiCriteriaDialog();
+  assert.equal(h.elements.aiCriteriaDocument.textContent, "새로 저장된 전문");
+  assert.match(h.elements.aiCriteriaMeta.textContent, /버전 4/);
+  assert.equal(requests.length, 2);
+  for (const { url, options } of requests) {
+    assert.equal(url, "/api/ai-practice/criteria");
+    assert.equal(options.cache, "no-store");
+    assert.equal(options.method, undefined, "read view never sends a write");
+    assert.ok(options.signal instanceof AbortSignal);
+  }
+  let prevented = false;
+  h.elements.aiCriteriaDialog.events.cancel({ preventDefault: () => { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(h.elements.aiCriteriaDialog.open, false);
+  assert.equal(h.document.activeElement, h.elements.aiCriteriaOpen);
+  assert.equal(h.elements.aiCriteriaDocument.textContent, "");
+});
+
+test("closing cancels AI criteria and a late prior response cannot overwrite a reopened dialog", async () => {
+  const pending = [];
+  const h = harness((url, options) => new Promise(resolve => pending.push({ resolve, options })));
+  h.state.feedbackSession = { authentication: "authenticated" };
+  h.applyContentKindMode();
+  const first = h.openAiCriteriaDialog();
+  h.closeAiCriteriaDialog();
+  assert.equal(pending[0].options.signal.aborted, true);
+  const second = h.openAiCriteriaDialog();
+  h.elements.aiCriteriaDialog.events.close(); // delayed native close event from the previous opening
+  assert.equal(pending[1].options.signal.aborted, false);
+  pending[1].resolve(criteriaResponse("현재 전문", 4));
+  await second;
+  pending[0].resolve(criteriaResponse("늦게 도착한 이전 전문", 3));
+  await first;
+  assert.equal(h.elements.aiCriteriaDocument.textContent, "현재 전문");
+  h.elements.aiCriteriaDialog.events.click({ target: h.elements.aiCriteriaDialog });
+  assert.equal(h.elements.aiCriteriaDialog.open, false);
+  assert.equal(h.elements.aiCriteriaDocument.textContent, "");
+});
+
+test("AI criteria preserve all 6000 characters, paragraph breaks and list lines", async () => {
+  const content = "선정 기준\n\n- ".padEnd(6000, "가");
+  const h = harness(async () => criteriaResponse(content));
+  h.state.feedbackSession = { authentication: "authenticated" };
+  h.applyContentKindMode();
+  await h.openAiCriteriaDialog();
+  assert.equal(h.elements.aiCriteriaDocument.textContent, content);
+  assert.equal(h.elements.aiCriteriaDocument.textContent.length, 6000);
+  assert.equal(h.elements.aiCriteriaStatus.textContent, "");
+});
+
+test("AI criteria clear on access loss, actor change or tab navigation and ignore in-flight responses", async () => {
+  for (const change of [
+    h => { h.state.feedbackSession = { authentication: "guest" }; },
+    h => { h.state.feedbackSession = { authentication: "authenticated", actor: "another" }; },
+    h => { h.state.target = "game-news"; },
+  ]) {
+    let finish;
+    const h = harness(() => new Promise(resolve => { finish = resolve; }));
+    h.state.feedbackSession = { authentication: "authenticated", actor: "original" };
+    h.applyContentKindMode();
+    const loading = h.openAiCriteriaDialog();
+    change(h);
+    h.applyContentKindMode();
+    finish(criteriaResponse("이전 사용자에게만 허용된 내용"));
+    await loading;
+    assert.equal(h.elements.aiCriteriaDialog.open, false);
+    assert.equal(h.elements.aiCriteriaDocument.textContent, "");
+    assert.equal(h.elements.aiCriteriaMeta.textContent, "");
+  }
+});
+
+test("AI criteria failures and malformed responses expose no stale content and allow a fresh retry", async () => {
+  for (const response of [
+    { ok: false, status: 500, json: async () => ({ error: "unavailable" }) },
+    { ok: true, json: async () => ({ document: { content: "x".repeat(6001), revision: 3, updated_at: "2026-11-07" } }) },
+    { ok: true, json: async () => ({ document: { content: "bad revision", revision: "3", updated_at: "2026-11-07" } }) },
+  ]) {
+    let count = 0;
+    const h = harness(async () => ++count === 1 ? response : criteriaResponse());
+    h.state.feedbackSession = { authentication: "admin" };
+    h.applyContentKindMode();
+    await h.openAiCriteriaDialog();
+    assert.match(h.elements.aiCriteriaStatus.textContent, /불러오지 못했습니다/);
+    assert.equal(h.elements.aiCriteriaDocument.textContent, "");
+    assert.equal(h.elements.aiCriteriaMeta.textContent, "");
+    h.closeAiCriteriaDialog();
+    await h.openAiCriteriaDialog();
+    assert.match(h.elements.aiCriteriaDocument.textContent, /첫 번째 기준/);
+  }
+  for (const status of [401, 403]) {
+    const h = harness(async () => ({ ok: false, status, json: async () => ({ error: "denied" }) }));
+    h.state.feedbackSession = { authentication: "admin" };
+    h.applyContentKindMode();
+    await h.openAiCriteriaDialog();
+    assert.equal(h.state.feedbackSession.authentication, "guest");
+    assert.equal(h.elements.aiCriteriaTools.hidden, true);
+    assert.equal(h.elements.aiCriteriaDialog.open, false);
+    assert.equal(h.elements.aiCriteriaDocument.textContent, "");
+  }
+});
+
+test("AI read dialog keeps game preference saving and hidden-list restoration controls intact", async () => {
+  const requests = [];
+  const h = harness(async (url, options) => {
+    requests.push({ url, options });
+    if (url === "/api/game-news/preferences") return { ok: true, json: async () => ({ document: {
+      content: "게임 전용 선호", version: 5, updated_at: "2026-11-07T10:00:00Z", max_length: 1000,
+    } }) };
+    return { ok: true, json: async () => ({ items: [{ post_key: "a".repeat(32), title: "숨긴 게임 기사", post_url: "https://example.com/game", subject: "게임" }] }) };
+  });
+  h.state.target = "game-news";
+  h.state.feedbackSession = { authentication: "authenticated", capabilities: { rate: true, hide: true, manage_rules: true } };
+  h.applyContentKindMode();
+  h.renderPreferenceDocument({ content: "이전 선호", version: 4, updated_at: "2026-11-07T09:00:00Z" });
+  h.elements.preferenceDocument.value = "게임 전용 선호";
+  await h.savePreferenceDocument();
+  assert.equal(requests[0].url, "/api/game-news/preferences");
+  assert.equal(requests[0].options.method, "POST");
+  assert.equal(JSON.parse(requests[0].options.body).base_version, 4);
+  assert.equal(JSON.parse(requests[0].options.body).content, "게임 전용 선호");
+  assert.equal(h.state.preferenceDocument.version, 5);
+  await h.refreshHiddenItems();
+  assert.equal(requests[1].url, "/api/game-news/hidden");
+  assert.equal(h.elements.hiddenList.children[0].children[1].textContent, "복구");
+  assert.equal(h.elements.gameNewsTools.hidden, false);
+  assert.equal(h.elements.aiCriteriaTools.hidden, true);
+});
+
+test("AI criteria modal ships empty, read-only and keyboard scrollable with mobile wrapping", async () => {
+  const html = await readFile(new URL("../dashboard/index.html", import.meta.url), "utf8");
+  const css = await readFile(new URL("../dashboard/styles.css", import.meta.url), "utf8");
+  const dialog = /<dialog[^>]*id="ai-criteria-dialog"[\s\S]*?<\/dialog>/.exec(html)?.[0];
+  assert.ok(dialog);
+  assert.match(dialog, /aria-labelledby="ai-criteria-title"/);
+  assert.match(dialog, /id="ai-criteria-close"[^>]*aria-label="선정 기준 닫기"[^>]*autofocus/);
+  assert.match(dialog, /id="ai-criteria-document"[^>]*role="region"[^>]*tabindex="0"><\/div>/);
+  assert.doesNotMatch(dialog, /textarea|<form|type="submit"|저장<|편집</);
+  assert.match(css, /\.ai-criteria-document\s*\{[^}]*white-space:\s*pre-wrap[^}]*overflow-wrap:\s*anywhere/s);
+  assert.match(css, /\.ai-criteria-dialog\s*\{[^}]*100dvh/s);
+  assert.match(css, /\.management-dialog-content\s*\{[^}]*overflow:\s*auto/s);
 });

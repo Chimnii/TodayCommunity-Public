@@ -150,6 +150,16 @@
               aria-controls="hidden-dialog"
             >숨긴 글 <span class="button-count" id="hidden-count">0</span></button>
           </div>
+          <div class="game-news-tools" id="ai-criteria-tools" hidden>
+            <button
+              class="button button-secondary"
+              id="ai-criteria-open"
+              type="button"
+              aria-haspopup="dialog"
+              aria-controls="ai-criteria-dialog"
+              aria-expanded="false"
+            >선정 기준</button>
+          </div>
         </div>
 
         <div class="archive-layout">
@@ -443,6 +453,23 @@
           저장한 전문은 다음 수집부터 적용되며 기존 기사는 다시 분류하지 않습니다. 기사 평가와 숨김은 별도의 약한 참고 신호로 사용됩니다.
         </p>
         <p class="management-status" id="rules-status" role="status" aria-live="polite"></p>
+      </div>
+    </dialog>
+
+    <dialog class="management-dialog ai-criteria-dialog" id="ai-criteria-dialog" aria-labelledby="ai-criteria-title">
+      <div class="management-dialog-content">
+        <header class="drawer-header">
+          <div>
+            <h2 id="ai-criteria-title">AI 실전 선정 기준</h2>
+            <p>현재 저장된 선정 기준 전문입니다.</p>
+          </div>
+          <button class="icon-button" id="ai-criteria-close" type="button" aria-label="선정 기준 닫기" autofocus>
+            <span aria-hidden="true">×</span>
+          </button>
+        </header>
+        <p class="management-status" id="ai-criteria-status" role="status" aria-live="polite"></p>
+        <p class="management-hint" id="ai-criteria-meta"></p>
+        <div class="ai-criteria-document" id="ai-criteria-document" role="region" aria-label="현재 선정 기준 전문" tabindex="0"></div>
       </div>
     </dialog>
 

@@ -183,6 +183,9 @@ const state = {
   favoritesRevision: 0,
   feedbackDialogPost: null,
   feedbackDialogTrigger: null,
+  aiCriteriaRequestId: 0,
+  aiCriteriaController: null,
+  aiCriteriaSession: null,
   preferenceDocument: {
     content: "",
     version: 0,
@@ -256,6 +259,13 @@ const elements = {
   topicPanelMeta: document.querySelector("#topic-panel-meta"),
   topicPanelScope: document.querySelector("#topic-panel-scope"),
   gameNewsTools: document.querySelector("#game-news-tools"),
+  aiCriteriaTools: document.querySelector("#ai-criteria-tools"),
+  aiCriteriaOpen: document.querySelector("#ai-criteria-open"),
+  aiCriteriaDialog: document.querySelector("#ai-criteria-dialog"),
+  aiCriteriaClose: document.querySelector("#ai-criteria-close"),
+  aiCriteriaStatus: document.querySelector("#ai-criteria-status"),
+  aiCriteriaMeta: document.querySelector("#ai-criteria-meta"),
+  aiCriteriaDocument: document.querySelector("#ai-criteria-document"),
   rulesOpen: document.querySelector("#rules-open"),
   rulesDialog: document.querySelector("#rules-dialog"),
   rulesClose: document.querySelector("#rules-close"),
@@ -725,6 +735,11 @@ function applyContentKindMode() {
           : "저장된 커뮤니티 글"
   );
   elements.gameNewsTools.hidden = state.target !== "game-news" || !canUseFeedback;
+  elements.aiCriteriaTools.hidden = !canReadAiCriteria();
+  if (!canReadAiCriteria()
+      || (state.aiCriteriaSession && state.aiCriteriaSession !== state.feedbackSession)) {
+    closeAiCriteriaDialog();
+  }
   elements.searchInput.placeholder = state.target === AI_PRACTICE_TARGET
     ? "한국어 제목 또는 원제를 입력하세요" : "찾을 제목을 입력하세요";
 
@@ -2980,6 +2995,7 @@ function bindEvents() {
     topicPanelMedia.addEventListener?.("change", syncTopicPanelForViewport);
   }
   elements.rulesOpen.addEventListener("click", openRulesDialog);
+  bindAiCriteriaEvents();
   elements.rulesClose.addEventListener("click", requestCloseRulesDialog);
   elements.rulesDialog.addEventListener("click", (event) => {
     if (event.target === elements.rulesDialog) {
@@ -3045,6 +3061,7 @@ function bindEvents() {
         elements.runsDrawer,
         elements.feedbackDialog,
         elements.hiddenDialog,
+        elements.aiCriteriaDialog,
       ]) {
         if (dialog.open) {
           event.preventDefault();
@@ -3139,6 +3156,95 @@ function openRunsDrawer() {
     elements.runsDrawer.showModal();
     elements.runsOpen.setAttribute("aria-expanded", "true");
     elements.runsClose.focus();
+  }
+}
+
+function canReadAiCriteria() {
+  return state.target === AI_PRACTICE_TARGET
+    && ["authenticated", "admin"].includes(state.feedbackSession?.authentication);
+}
+
+function clearAiCriteriaDocument() {
+  state.aiCriteriaRequestId += 1;
+  state.aiCriteriaController?.abort();
+  state.aiCriteriaController = null;
+  state.aiCriteriaSession = null;
+  elements.aiCriteriaDocument.textContent = "";
+  elements.aiCriteriaMeta.textContent = "";
+  elements.aiCriteriaStatus.textContent = "";
+  elements.aiCriteriaDocument.setAttribute("aria-busy", "false");
+  elements.aiCriteriaOpen.setAttribute("aria-expanded", "false");
+}
+
+function closeAiCriteriaDialog() {
+  clearAiCriteriaDocument();
+  if (elements.aiCriteriaDialog.open) elements.aiCriteriaDialog.close();
+}
+
+function bindAiCriteriaEvents() {
+  elements.aiCriteriaOpen.addEventListener("click", () => { void openAiCriteriaDialog(); });
+  elements.aiCriteriaClose.addEventListener("click", closeAiCriteriaDialog);
+  elements.aiCriteriaDialog.addEventListener("click", (event) => {
+    if (event.target === elements.aiCriteriaDialog) closeAiCriteriaDialog();
+  });
+  elements.aiCriteriaDialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeAiCriteriaDialog();
+  });
+  elements.aiCriteriaDialog.addEventListener("close", () => {
+    if (elements.aiCriteriaDialog.open) return;
+    clearAiCriteriaDocument();
+    if (elements.aiCriteriaOpen.isConnected && !elements.aiCriteriaTools.hidden) {
+      elements.aiCriteriaOpen.focus({ preventScroll: true });
+    }
+  });
+}
+
+async function openAiCriteriaDialog() {
+  if (!canReadAiCriteria() || elements.aiCriteriaDialog.open
+      || typeof elements.aiCriteriaDialog.showModal !== "function") return;
+  clearAiCriteriaDocument();
+  const requestId = state.aiCriteriaRequestId;
+  const session = state.feedbackSession;
+  const controller = new AbortController();
+  state.aiCriteriaController = controller;
+  state.aiCriteriaSession = session;
+  const isCurrent = () => requestId === state.aiCriteriaRequestId
+    && elements.aiCriteriaDialog.open && canReadAiCriteria()
+    && state.feedbackSession === session;
+  elements.aiCriteriaDialog.showModal();
+  elements.aiCriteriaOpen.setAttribute("aria-expanded", "true");
+  elements.aiCriteriaDocument.setAttribute("aria-busy", "true");
+  elements.aiCriteriaStatus.textContent = "선정 기준을 불러오는 중입니다.";
+  elements.aiCriteriaClose.focus({ preventScroll: true });
+  try {
+    const payload = await fetchGameNewsJson("/api/ai-practice/criteria", { signal: controller.signal });
+    if (!isCurrent()) return;
+    const criteria = payload?.document;
+    const updatedAt = new Date(criteria?.updated_at);
+    if (typeof criteria?.content !== "string" || !criteria.content.trim()
+        || Array.from(criteria.content).length > 6000
+        || !Number.isSafeInteger(criteria.revision) || criteria.revision < 0
+        || typeof criteria.updated_at !== "string" || !Number.isFinite(updatedAt.getTime())) {
+      throw new Error("선정 기준 응답을 확인할 수 없습니다.");
+    }
+    elements.aiCriteriaDocument.textContent = criteria.content;
+    elements.aiCriteriaMeta.textContent = `수정 ${updatedAt.toLocaleString("ko-KR")} · 버전 ${numberFormatter.format(criteria.revision)}`;
+    elements.aiCriteriaStatus.textContent = "";
+  } catch (error) {
+    if (!isCurrent()) return;
+    if (error.status === 401 || error.status === 403) {
+      state.feedbackSession = { authentication: "guest", capabilities: {} };
+      applyContentKindMode();
+      showFeedbackToast("선정 기준을 볼 수 있는 인증이 만료되었습니다. 다시 접속해 주세요.");
+      return;
+    }
+    elements.aiCriteriaStatus.textContent = "선정 기준을 불러오지 못했습니다. 닫았다가 다시 열어 주세요.";
+  } finally {
+    if (requestId === state.aiCriteriaRequestId) {
+      state.aiCriteriaController = null;
+      elements.aiCriteriaDocument.setAttribute("aria-busy", "false");
+    }
   }
 }
 

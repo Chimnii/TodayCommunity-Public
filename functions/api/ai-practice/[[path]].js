@@ -187,11 +187,24 @@ async function handle(context, write) {
   let identity;
   try {
     const path = new URL(context.request.url).pathname.replace(/\/+$/u, "");
+    if (path === "/api/ai-practice/criteria") {
+      identity = await resolveAuthIdentity(context.request, context.env);
+      if (context.request.method !== "GET") {
+        const response = json({ error: "선정 기준은 조회만 지원합니다." }, 405, identity.cookies_to_clear);
+        response.headers.set("Allow", "GET");
+        return response;
+      }
+      if (!["authenticated", "admin"].includes(identity.state)) throw new RequestError(401, "로그인이 필요합니다.");
+      if (!context.env.DB) throw new Error("D1 binding unavailable");
+      const { content, revision, updated_at } = await loadDocument(context.env.DB);
+      return json({ document: { content, revision, updated_at } }, 200, identity.cookies_to_clear);
+    }
     if (path !== "/api/ai-practice/rules") return json({ error: "지원하지 않는 경로입니다." }, 404);
+    if (!["GET", "POST"].includes(context.request.method)) return json({ error: "지원하지 않는 요청입니다." }, 405);
     if (write && !sameOriginWrite(context.request)) throw new RequestError(403, "허용되지 않은 쓰기 요청입니다.");
     identity = await resolveAuthIdentity(context.request, context.env);
     // Secret-link identities also have manage_rules for legacy game settings.
-    // AI policy text and backlog details are restricted to password admins.
+    // Policy editing and backlog details remain restricted to password admins.
     if (identity.state !== "admin" || !identity.capabilities?.manage_rules) throw new RequestError(401, "관리자 로그인이 필요합니다.");
     if (!context.env.DB) throw new Error("D1 binding unavailable");
     const result = write ? await save(context.request, context.env.DB, identity.actor) : await payload(context.env.DB);
@@ -207,3 +220,8 @@ async function handle(context, write) {
 
 export const onRequestGet = context => handle(context, false);
 export const onRequestPost = context => handle(context, true);
+export const onRequestPut = context => handle(context, false);
+export const onRequestPatch = context => handle(context, false);
+export const onRequestDelete = context => handle(context, false);
+export const onRequestHead = context => handle(context, false);
+export const onRequestOptions = context => handle(context, false);
