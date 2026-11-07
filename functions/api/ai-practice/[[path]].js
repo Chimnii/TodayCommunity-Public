@@ -2,7 +2,7 @@ import { AuthConfigurationError, resolveAuthIdentity } from "../_auth.js";
 
 const MAX_LENGTH = 6000;
 const MAX_BODY_BYTES = 48 * 1024;
-const INSTRUCTION_VERSION = "ai-practice-v7";
+const INSTRUCTION_VERSION = "ai-practice-v8";
 const EVENT_ID = /^[A-Za-z0-9._:-]{16,100}$/;
 const normalizeContent = value => typeof value === "string" ? value.replace(/\r\n?/gu, "\n").trim() : null;
 const rows = result => Array.isArray(result?.results) ? result.results : [];

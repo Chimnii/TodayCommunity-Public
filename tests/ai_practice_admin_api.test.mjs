@@ -42,8 +42,8 @@ function database(t) {
   }
   sqlite.exec(migrations[1].replace(/\r\n/g, "\n"));
   sqlite.exec(`UPDATE ai_practice_queue SET status='processed', processed_policy_revision=1,
-    processed_policy_hash=(SELECT policy_hash FROM ai_practice_policy_state WHERE id=1), processed_instruction_version='ai-practice-v7';
-    UPDATE ai_practice_candidates SET policy_revision=1,instruction_version='ai-practice-v7',
+    processed_policy_hash=(SELECT policy_hash FROM ai_practice_policy_state WHERE id=1), processed_instruction_version='ai-practice-v8';
+    UPDATE ai_practice_candidates SET policy_revision=1,instruction_version='ai-practice-v8',
       policy_hash=(SELECT policy_hash FROM ai_practice_policy_state WHERE id=1);
     INSERT INTO ai_practice_discovery_state(source_key,lane,status,complete,discovered_count,last_discovered_at,cursor_json,scope_json)
       VALUES('ai-practice-hermes','recent','ok',1,3,'2026-11-07T00:00:00Z','{"head":1}','{"kind":"recent"}'),
@@ -180,7 +180,7 @@ test("saving policy stays constant-write with a thousand completed candidates", 
     INSERT INTO ai_practice_queue(item_id,source_key,canonical_url,descriptor_json,status,work_kind,discovered_at,updated_at,
       processed_policy_revision,processed_policy_hash,processed_instruction_version)
     SELECT 'extra-'||n,'ai-practice-hermes','https://example.com/extra-'||n,'{}','processed','backfill','2026-11-07','2026-11-07',
-      1,(SELECT policy_hash FROM ai_practice_policy_state WHERE id=1),'ai-practice-v7' FROM ids;`);
+      1,(SELECT policy_hash FROM ai_practice_policy_state WHERE id=1),'ai-practice-v8' FROM ids;`);
   const writes = db.sqlite.prepare("SELECT total_changes() AS n").get().n;
   const saved = await (await request(db, { method: "POST", body: saveBody() })).json();
   assert.equal(saved.application.total_count, 1003);
