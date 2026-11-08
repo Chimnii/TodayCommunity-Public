@@ -2,8 +2,8 @@ import { AuthConfigurationError, resolveAuthIdentity } from "../_auth.js";
 
 const MAX_LENGTH = 6000;
 const MAX_BODY_BYTES = 48 * 1024;
-const INSTRUCTION_VERSION = "ai-practice-v10";
-const VALIDITY_VERSION = "ai-validity-v1-4b57523f04bcab52";
+const INSTRUCTION_VERSION = "ai-practice-v11";
+const VALIDITY_VERSION = "ai-validity-v1-90e53b6e7dd24e31";
 const EVENT_ID = /^[A-Za-z0-9._:-]{16,100}$/;
 const normalizeContent = value => typeof value === "string" ? value.replace(/\r\n?/gu, "\n").trim() : null;
 const rows = result => Array.isArray(result?.results) ? result.results : [];
