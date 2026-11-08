@@ -45,13 +45,15 @@ function harness(fetchImpl = async () => { throw new Error("Unexpected request")
   };
   const window = { location: { href: "https://todaycommunity.pages.dev/?target=ai-practice" },
     clearTimeout() {}, setTimeout: () => 1 };
+  window.history = { replaceState(_state, _title, url) { window.location.href = String(url); } };
   const context = vm.createContext({ document, window, URL, URLSearchParams, AbortController, fetch: fetchImpl, console });
   vm.runInContext(`${source}
     globalThis.review = { state, elements, createTitleCell, createAiPracticeSummary, createSubjectCell,
       createFeedbackCell, applyContentKindMode, normalizeContentState, getLocalViewModel,
       renderSubjectOptions, renderPosts, articlePublicationDate, hydrateStateFromUrl,
       getAvailableArchives, getArticleSourceLabel, bindAiCriteriaEvents, openAiCriteriaDialog,
-      closeAiCriteriaDialog, renderPreferenceDocument, savePreferenceDocument, refreshHiddenItems };
+      closeAiCriteriaDialog, renderPreferenceDocument, savePreferenceDocument, refreshHiddenItems,
+      buildApiUrl, syncStateToUrl };
   `, context);
   const api = context.review;
   Object.assign(api.state, { target: "ai-practice", dataSource: "live" });
@@ -92,11 +94,17 @@ test("AI archive uses the existing subject filter and never exposes game prefere
   h.normalizeContentState();
   assert.equal(h.state.minUpvotes, 0);
   assert.equal(h.state.minComments, 0);
-  assert.equal(h.state.sortBy, "created_at");
+  assert.equal(h.state.sortBy, "first_published_at");
+  assert.equal(h.elements.sortFirstPublishedOption.hidden, false);
+  assert.equal(h.elements.sortCreatedOption.hidden, true);
   assert.equal(h.createFeedbackCell({ ...sample, feedback_key: "a".repeat(32) }).children.length, 0);
   h.state.target = "game-news";
+  h.normalizeContentState();
   h.applyContentKindMode();
   assert.equal(h.elements.gameNewsTools.hidden, false, "existing game tools remain available");
+  assert.equal(h.state.sortBy, "created_at");
+  assert.equal(h.elements.sortCreatedOption.hidden, false);
+  assert.equal(h.elements.sortFirstPublishedOption.hidden, true);
 });
 
 test("AI summary toggle has an independent original link and keyboard-native button with explicit state", () => {
@@ -231,6 +239,35 @@ test("URL restoration keeps the AI target, query, subject and sequential page st
   assert.equal(h.state.page, 2);
   assert.equal(h.state.cursor, "next");
   assert.equal(h.document.title, "AI 실전 사례 모음 | 오늘의 커뮤니티");
+  assert.equal(h.state.sortBy, "first_published_at");
+});
+
+test("AI default API and history use first-publication sorting without changing displayed source dates", () => {
+  const h = harness();
+  h.window.location.href = "https://todaycommunity.pages.dev/?target=ai-practice&page=6&cursor=ai-next";
+  h.hydrateStateFromUrl();
+  assert.equal(h.state.sortBy, "first_published_at");
+  assert.equal(h.state.cursor, "ai-next", "AI unfiltered continuation survives URL normalization");
+  const api = new URL(h.buildApiUrl(), "https://todaycommunity.pages.dev");
+  assert.equal(api.searchParams.get("sort"), "first_published_at");
+  assert.equal(api.searchParams.get("cursor"), "ai-next");
+  h.syncStateToUrl();
+  assert.equal(new URL(h.window.location.href).searchParams.has("sort"), false, "default AI URL stays canonical");
+  h.state.dataSource = "local";
+  Object.assign(h.state, { page: 1, cursor: "" });
+  h.state.archive.posts = [
+    { ...sample, post_id: 11, first_published_at: "2026-11-09T12:00:00.000Z", created_at: "2020-01-01T00:00:00Z" },
+    { ...sample, post_id: 12, first_published_at: "2026-11-09T12:00:00.000Z", created_at: "2021-01-01T00:00:00Z" },
+    { ...sample, post_id: 99, first_published_at: "2026-11-08T12:00:00.000Z", created_at: "2026-11-09T12:00:00Z" },
+  ];
+  assert.deepEqual(Array.from(h.getLocalViewModel().posts, row => row.post_id), [12, 11, 99]);
+  assert.equal(h.articlePublicationDate({ ...sample, first_published_at: "2026-11-09T12:00:00.000Z" }), "26.11.04");
+  assert.equal(h.articlePublicationDate({ ...sample, created_at_basis: "first_seen", first_published_at: "2026-11-09T12:00:00.000Z" }), "-");
+  for (const target of ["game-news", "all", "dcinside-singularity", "favorites"]) {
+    Object.assign(h.state, { target, sortBy: "first_published_at" });
+    h.normalizeContentState();
+    assert.equal(h.state.sortBy, "created_at", target);
+  }
 });
 
 const criteriaResponse = (content = "선정 범위\n\n- 첫 번째 기준\n- 두 번째 기준", revision = 3) => ({

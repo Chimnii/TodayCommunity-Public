@@ -152,7 +152,7 @@ function renderPosts(payload, page) {
 }
 
 function basicApiUrl(target) {
-  return `/api/archive?${new URLSearchParams({ target, page: "1", page_size: "30", min_upvotes: "0", min_comments: "0", sort: "created_at" })}`;
+  return `/api/archive?${new URLSearchParams({ target, page: "1", page_size: "30", min_upvotes: "0", min_comments: "0", sort: target === "ai-practice" ? "first_published_at" : "created_at" })}`;
 }
 
 function renderTopics(trends) {
@@ -232,6 +232,18 @@ export async function renderPublicPage(context, loadArchive) {
       if (page.privateRequest) element.setAttribute("data-private-request", "true");
     } })
     .on("#archive-title", { element(element) { element.setInnerContent(page.heading); } })
+    .on("#sort-select option", { element(element) {
+      if (page.target !== "ai-practice") return;
+      if (element.getAttribute("value") === "first_published_at") {
+        element.removeAttribute("hidden");
+        element.removeAttribute("disabled");
+        element.setAttribute("selected", "");
+      } else {
+        element.setAttribute("hidden", "");
+        element.setAttribute("disabled", "");
+        element.removeAttribute("selected");
+      }
+    } })
     .on("#source-description", { element(element) {
       const detail = page.selection
         ? `<span>${escapeHtml(page.selection.description)} <a class="selection-guide-link" href="${escapeHtml(page.selection.url)}">선별 기준</a></span>`
@@ -276,7 +288,7 @@ export async function renderPublicPage(context, loadArchive) {
       .on("#archive-board", { element(element) { element.setAttribute("aria-busy", "false"); element.setAttribute("aria-label", `${page.label} 저장 글`); } })
       .on("#summary-total", { element(element) { element.setInnerContent(number.format(total)); } })
       .on("#summary-latest", { element(element) { element.setInnerContent(formatDate(payload.summary?.latest_seen_at, time)); } })
-      .on("#result-count", { element(element) { element.setInnerContent(`${number.format(total)}개 저장 · 최신순`); } })
+      .on("#result-count", { element(element) { element.setInnerContent(`${number.format(total)}개 저장 · ${page.target === "ai-practice" ? "새로 추가된 순" : "최신순"}`); } })
       .on("#range-summary", { element(element) { element.setInnerContent(payload.posts.length ? `최근 글 1–${payload.posts.length}개 표시` : "표시할 글이 없습니다."); } });
     if (page.kind === "mixed") {
       // Match the mixed table's source-before-subject order before JS hydrates.

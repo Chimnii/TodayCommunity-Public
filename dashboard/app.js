@@ -133,7 +133,7 @@ const DEFAULT_STATE = Object.freeze({
   pageSize: 30,
   cursor: "",
 });
-const VALID_SORTS = new Set(["created_at", "upvotes", "comments"]);
+const VALID_SORTS = new Set(["created_at", "first_published_at", "upvotes", "comments"]);
 const VALID_PAGE_SIZES = new Set([20, 30, 50, 100]);
 const DESKTOP_SUBJECT_PREVIEW_LENGTH = 5;
 const MOBILE_SUBJECT_PREVIEW_LENGTH = 5;
@@ -241,6 +241,8 @@ const elements = {
   upvotesInput: document.querySelector("#upvotes-input"),
   commentsInput: document.querySelector("#comments-input"),
   sortSelect: document.querySelector("#sort-select"),
+  sortCreatedOption: document.querySelector('#sort-select option[value="created_at"]'),
+  sortFirstPublishedOption: document.querySelector('#sort-select option[value="first_published_at"]'),
   sortUpvotesOption: document.querySelector('#sort-select option[value="upvotes"]'),
   sortCommentsOption: document.querySelector('#sort-select option[value="comments"]'),
   pageSizeSelect: document.querySelector("#page-size-select"),
@@ -681,7 +683,14 @@ function canUseArchiveFilter() {
   );
 }
 
+function defaultSortForTarget(target = state.target) {
+  return target === AI_PRACTICE_TARGET ? "first_published_at" : "created_at";
+}
+
 function normalizeContentState() {
+  if (state.target !== AI_PRACTICE_TARGET && state.sortBy === "first_published_at") {
+    state.sortBy = "created_at";
+  }
   if (state.target === FAVORITES_TARGET) {
     const { page, cursor } = state;
     Object.assign(state, DEFAULT_STATE, { page, cursor });
@@ -699,9 +708,9 @@ function normalizeContentState() {
   }
   state.minUpvotes = 0;
   state.minComments = 0;
-  state.sortBy = "created_at";
+  state.sortBy = defaultSortForTarget();
   state.topicId = 0;
-  if (!hasActivePostFilters()) {
+  if (state.target !== AI_PRACTICE_TARGET && !hasActivePostFilters()) {
     state.cursor = "";
   }
 }
@@ -769,10 +778,15 @@ function applyContentKindMode() {
       option.disabled = articleMode;
     }
   }
+  const aiPractice = state.target === AI_PRACTICE_TARGET;
+  elements.sortCreatedOption.hidden = aiPractice;
+  elements.sortCreatedOption.disabled = aiPractice;
+  elements.sortFirstPublishedOption.hidden = !aiPractice;
+  elements.sortFirstPublishedOption.disabled = !aiPractice;
   if (articleMode) {
     elements.upvotesInput.value = "0";
     elements.commentsInput.value = "0";
-    elements.sortSelect.value = "created_at";
+    elements.sortSelect.value = defaultSortForTarget();
   }
   renderColumnHeaders(mixedMode);
 }
@@ -1088,6 +1102,7 @@ function selectArchive(target) {
   window.clearTimeout(state.filterTimer);
   Object.assign(state, DEFAULT_STATE);
   state.target = normalizedTarget;
+  state.sortBy = defaultSortForTarget();
   state.feedbackByPost.clear();
   state.feedbackReady = false;
   state.focusPageContentAfterLoad = false;
@@ -1117,6 +1132,7 @@ function render() {
     void loadFeedbackState(view.posts);
   }
   renderResultStatus(view);
+  if (state.target === AI_PRACTICE_TARGET) elements.resultCount.textContent += " · 새로 추가된 순";
   renderPagination(view.pagination);
   restoreArchiveTabFocus();
   restorePageChangeFocus();
@@ -2927,6 +2943,10 @@ function goToCursor(cursor, page) {
 }
 
 function comparePosts(left, right) {
+  if (state.sortBy === "first_published_at") {
+    return compareDate(right.first_published_at, left.first_published_at)
+      || normalizePositiveNumber(right.post_id, 0) - normalizePositiveNumber(left.post_id, 0);
+  }
   if (state.sortBy === "upvotes") {
     return (
       normalizeSignedInteger(right.upvotes, 0) - normalizeSignedInteger(left.upvotes, 0) ||
@@ -3138,6 +3158,7 @@ function resetFilters() {
   const shouldSaveArchiveFilter = canUseArchiveFilter()
     && state.excludedArchiveKeys.size > 0;
   Object.assign(state, DEFAULT_STATE);
+  state.sortBy = defaultSortForTarget();
   if (canUseArchiveFilter()) {
     state.excludedArchiveKeys = new Set();
     state.pendingArchiveFilterSave = false;
@@ -3472,7 +3493,7 @@ function readStateFromControls() {
   state.minComments = normalizeNonNegativeNumber(elements.commentsInput.value, 0);
   state.sortBy = VALID_SORTS.has(elements.sortSelect.value)
     ? elements.sortSelect.value
-    : DEFAULT_STATE.sortBy;
+    : defaultSortForTarget();
 
   const pageSize = normalizePositiveNumber(elements.pageSizeSelect.value, DEFAULT_STATE.pageSize);
   state.pageSize = VALID_PAGE_SIZES.has(pageSize) ? pageSize : DEFAULT_STATE.pageSize;
@@ -3526,12 +3547,12 @@ function updatePageMetadata() {
 
 function hydrateStateFromUrl() {
   const params = new URL(window.location.href).searchParams;
-  const sortBy = params.get("sort") || DEFAULT_STATE.sortBy;
   const pageSize = normalizePositiveNumber(params.get("page_size"), DEFAULT_STATE.pageSize);
   const minUpvotes = params.get("min_upvotes");
   const target = normalizeTarget(params.get("target"));
 
   state.target = target || DEFAULT_TARGET;
+  const sortBy = params.get("sort") || defaultSortForTarget();
   state.search = String(params.get("q") || "").trim();
   state.subject = normalizeSubject(params.get("subject"));
   state.topicId = normalizePositiveNumber(params.get("topic"), 0);
@@ -3540,7 +3561,7 @@ function hydrateStateFromUrl() {
       ? DEFAULT_STATE.minUpvotes
       : normalizeNonNegativeNumber(minUpvotes, DEFAULT_STATE.minUpvotes);
   state.minComments = normalizeNonNegativeNumber(params.get("min_comments"), 0);
-  state.sortBy = VALID_SORTS.has(sortBy) ? sortBy : DEFAULT_STATE.sortBy;
+  state.sortBy = VALID_SORTS.has(sortBy) ? sortBy : defaultSortForTarget();
   state.page = normalizePositiveNumber(params.get("page"), 1);
   state.pageSize = VALID_PAGE_SIZES.has(pageSize) ? pageSize : DEFAULT_STATE.pageSize;
   state.cursor = String(params.get("cursor") || "").trim().slice(0, 8192);
@@ -3558,7 +3579,7 @@ function syncStateToUrl({ replace = true } = {}) {
     min_upvotes:
       state.minUpvotes === DEFAULT_STATE.minUpvotes ? null : state.minUpvotes,
     min_comments: state.minComments || null,
-    sort: state.sortBy === DEFAULT_STATE.sortBy ? null : state.sortBy,
+    sort: state.sortBy === defaultSortForTarget() ? null : state.sortBy,
     page: state.page === 1 ? null : state.page,
     page_size: state.pageSize === DEFAULT_STATE.pageSize ? null : state.pageSize,
     cursor: state.cursor || null,

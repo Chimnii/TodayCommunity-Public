@@ -90,7 +90,7 @@ function archiveRequestHarness({ storage, fetchImpl, bootstrap, now = () => 1000
     syncStateToUrl = () => {};
     writeStateToControls = () => {};
     renderArchiveTabs = () => {};
-    globalThis.archiveReview = {state, loadArchive, selectArchive, markArchiveChanged, archiveCacheBypassActive};
+    globalThis.archiveReview = {state, loadArchive, selectArchive, resetFilters, markArchiveChanged, archiveCacheBypassActive};
   `, runtime);
   return { ...runtime.archiveReview, calls, urls, events, successfulResponse };
 }
@@ -113,6 +113,31 @@ test("fresh matching public bootstrap renders once without an empty loading stat
   assert.deepEqual(h.events.map(event => event.type), ["validity", "render"]);
   await h.loadArchive();
   assert.equal(h.calls.length, 1, "subsequent explicit reloads must use the normal API cache");
+});
+
+test("AI hydration reuses only first-publication bootstrap and selects the same default after tab/reset actions", async () => {
+  const apiUrl = "/api/archive?target=ai-practice&page=1&page_size=30&min_upvotes=0&min_comments=0&sort=first_published_at";
+  for (const old of [false, true]) {
+    const bootstrap = publicBootstrap({ api_url: old ? apiUrl.replace("first_published_at", "created_at") : apiUrl,
+      payload: { target: "ai-practice", posts: [{ title: "AI result" }], pagination: { page: 1 } } });
+    const h = archiveRequestHarness({ bootstrap });
+    Object.assign(h.state, { target: "ai-practice", sortBy: "first_published_at" });
+    await h.loadArchive();
+    assert.equal(h.calls.length, old ? 1 : 0);
+    if (old) assert.equal(h.urls[0], apiUrl);
+  }
+  const h = archiveRequestHarness({ fetchImpl: async url => ({ ok: true,
+    json: async () => ({ target: new URL(url, "https://example.com").searchParams.get("target"), posts: [], pagination: { page: 1 } }),
+  }) });
+  await h.selectArchive("ai-practice");
+  assert.equal(new URL(h.urls.at(-1), "https://example.com").searchParams.get("sort"), "first_published_at");
+  Object.assign(h.state, { page: 4, cursor: "old", sortBy: "comments", search: "old" });
+  h.resetFilters();
+  assert.equal(new URL(h.urls.at(-1), "https://example.com").searchParams.get("sort"), "first_published_at");
+  assert.equal(h.state.page, 1);
+  assert.equal(h.state.cursor, "");
+  await h.selectArchive("game-news");
+  assert.equal(new URL(h.urls.at(-1), "https://example.com").searchParams.get("sort"), "created_at");
 });
 
 test("malformed, mismatched and visibility-invalidated bootstrap always uses the live API without preserving wrong rows", async () => {
@@ -231,7 +256,7 @@ function metadataHarness(href = "https://todaycommunity.pages.dev/") {
   } };
   const runtime = vm.createContext({ document, window, URL });
   vm.runInContext(`${appWithoutInitialization}
-    globalThis.metadataReview = { state, hydrateStateFromUrl, syncStateToUrl, updatePageMetadata, headings: ARCHIVE_HEADINGS };
+    globalThis.metadataReview = { state, hydrateStateFromUrl, syncStateToUrl, normalizeContentState, updatePageMetadata, headings: ARCHIVE_HEADINGS };
   `, runtime);
   return { ...runtime.metadataReview, document, window,
     content: selector => nodes.get(selector)?.content,
@@ -248,6 +273,7 @@ test("public tab navigation and back navigation keep canonical, title and sharin
     "fmkorea-munich", "game-news", "ai-practice", "all",
   ]) {
     h.state.target = target;
+    h.normalizeContentState();
     h.syncStateToUrl({ replace: false });
     assert.equal(h.document.title, `${h.headings[target]} | 오늘의 커뮤니티`);
     const serverPage = publicPageState(new Request(h.window.location.href));

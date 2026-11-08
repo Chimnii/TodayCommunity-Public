@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { fixture, request } from "./helpers/favorites-fixture.mjs";
+import { seedAiInclude } from "./helpers/ai-first-publication.mjs";
 
 test("only active secret-link sessions may read or write shared favorites", async () => {
   const data = await fixture();
@@ -139,9 +140,9 @@ test("migration is additive, repeatable and matches the canonical schema", async
 test("favorites preserve AI public summary and publication provenance without private evaluation data", async () => {
   const data = await fixture(1);
   try {
-    data.sqlite.exec(`INSERT OR IGNORE INTO archives(archive_key,display_name,content_kind) VALUES('ai-practice','AI 실전','article');
-      UPDATE posts SET archive_key='ai-practice',original_title='Agent operations',summary='실제 운영 방법과 실패를 기록한 사례.',
-        publisher='Hermes',content_kind='reference',evidence_level='introduction',created_at_basis='first_seen' WHERE id=1`);
+    const key = seedAiInclude(data.sqlite, { itemId: "favorite-ai", evaluatedAt: "2026-10-15T00:00:00Z" });
+    data.sqlite.prepare(`UPDATE posts SET archive_key='ai-practice',canonical_post_key=?,original_title='Agent operations',summary='실제 운영 방법과 실패를 기록한 사례.',
+        publisher='Hermes',content_kind='reference',evidence_level='introduction',created_at_basis='first_seen' WHERE id=1`).run(key);
     assert.equal((await request(data, {body:{post_id:1,saved:true}})).status, 200);
     const post = (await request(data)).body.posts[0];
     assert.equal(post.original_title, 'Agent operations');

@@ -1,5 +1,7 @@
 const DEFAULT_TARGET = "dcinside-singularity";
 const ALL_TARGET = "all";
+const AI_PRACTICE_TARGET = "ai-practice";
+const AI_ORDERING_VERSION = "ai-first-published-v1";
 const ALL_ARCHIVE = Object.freeze({
   archive_key: ALL_TARGET,
   display_name: "모두",
@@ -25,9 +27,14 @@ const TOPIC_TREND_STATES = new Set(["new", "rising", "active"]);
 
 const SORT_COLUMNS = {
   created_at: "created_at",
+  first_published_at: "first_published_at",
   upvotes: "upvotes",
   comments: "comments",
 };
+
+function isDateSort(sort) {
+  return sort === "created_at" || sort === "first_published_at";
+}
 
 function jsonResponse(body, status = 200, cacheable = true) {
   const cacheControl =
@@ -245,8 +252,8 @@ function buildPostFilter(
 function buildOrderClause(sort, direction = "next") {
   const primaryColumn = SORT_COLUMNS[sort] ?? SORT_COLUMNS.created_at;
   const order = direction === "previous" ? "ASC" : "DESC";
-  if (primaryColumn === "created_at") {
-    return `created_at ${order}, id ${order}`;
+  if (isDateSort(primaryColumn)) {
+    return `${primaryColumn} ${order}, id ${order}`;
   }
   return `${primaryColumn} ${order}, created_at ${order}, id ${order}`;
 }
@@ -270,6 +277,7 @@ function buildCacheKey(
   const cacheUrl = new URL(url.pathname, url.origin);
   const normalized = {
     format: "quick-pages-v4",
+    ...(target === AI_PRACTICE_TARGET ? { ordering: AI_ORDERING_VERSION } : {}),
     target,
     page: String(requestedPage),
     page_size: String(pageSize),
@@ -342,6 +350,7 @@ function cursorFilterSignature({
 }) {
   return JSON.stringify({
     target,
+    ...(target === AI_PRACTICE_TARGET ? { ordering: AI_ORDERING_VERSION } : {}),
     pageSize,
     query,
     minUpvotes,
@@ -380,7 +389,7 @@ function decodeCursor(rawValue, expectedSignature, sort) {
     const binary = atob(padded);
     const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
     const payload = JSON.parse(new TextDecoder().decode(bytes));
-    const expectedKeyLength = sort === "created_at" ? 2 : 3;
+    const expectedKeyLength = isDateSort(sort) ? 2 : 3;
     if (
       payload?.version !== 1 ||
       !["next", "previous"].includes(payload.direction) ||
@@ -397,20 +406,20 @@ function decodeCursor(rawValue, expectedSignature, sort) {
 
     const id = Number(payload.key.at(-1));
     const createdAt = String(payload.key.at(-2) || "");
-    const metric = sort === "created_at" ? null : Number(payload.key[0]);
+    const metric = isDateSort(sort) ? null : Number(payload.key[0]);
     if (
       !Number.isSafeInteger(id) ||
       id < 1 ||
       !createdAt ||
       createdAt.length > 40 ||
-      (sort !== "created_at" && !Number.isSafeInteger(metric))
+      (!isDateSort(sort) && !Number.isSafeInteger(metric))
     ) {
       return false;
     }
     return {
       direction: payload.direction,
       page: payload.page,
-      key: sort === "created_at" ? [createdAt, id] : [metric, createdAt, id],
+      key: isDateSort(sort) ? [createdAt, id] : [metric, createdAt, id],
       inclusive: payload.inclusive === true,
     };
   } catch {
@@ -423,10 +432,10 @@ function buildCursorBoundary(sort, cursor) {
     return { sql: "", bindings: [] };
   }
   const operator = (cursor.direction === "previous" ? ">" : "<") + (cursor.inclusive ? "=" : "");
-  if (sort === "created_at") {
+  if (isDateSort(sort)) {
     const [createdAt, id] = cursor.key;
     return {
-      sql: `(posts.created_at, posts.id) ${operator} (?, ?)`,
+      sql: `(posts.${SORT_COLUMNS[sort]}, posts.id) ${operator} (?, ?)`,
       bindings: [createdAt, id],
     };
   }
@@ -444,8 +453,8 @@ function buildCursorBoundary(sort, cursor) {
 function cursorKeyForRow(row, sort) {
   const id = Number(row.cursor_id);
   const createdAt = String(row.created_at || "");
-  return sort === "created_at"
-    ? [createdAt, id]
+  return isDateSort(sort)
+    ? [String(row[SORT_COLUMNS[sort]] || ""), id]
     : [Number(row[SORT_COLUMNS[sort]]), createdAt, id];
 }
 
@@ -711,8 +720,12 @@ export async function onRequestGet(context) {
     if (allArchives && topicId > 0) {
       return jsonResponse({ error: "Topic filters are unavailable for this archive." }, 400);
     }
-    const requestedSort = url.searchParams.get("sort") || "created_at";
-    const sort = Object.hasOwn(SORT_COLUMNS, requestedSort) ? requestedSort : "created_at";
+    const defaultSort = target === AI_PRACTICE_TARGET ? "first_published_at" : "created_at";
+    const requestedSort = url.searchParams.get("sort") || defaultSort;
+    if (requestedSort === "first_published_at" && target !== AI_PRACTICE_TARGET) {
+      return jsonResponse({ error: "First publication ordering requires the AI practice target." }, 400);
+    }
+    const sort = Object.hasOwn(SORT_COLUMNS, requestedSort) ? requestedSort : defaultSort;
     const filter = buildPostFilter(
       target,
       query,
@@ -983,7 +996,7 @@ export async function onRequestGet(context) {
       : filter.sql;
     const columns = `archive_key, source_key, external_post_id, subject, title, post_url,
       original_title, summary, publisher, content_kind, evidence_level,
-      created_at, created_at_raw, created_at_basis, created_at_precision,
+      created_at, created_at_raw, created_at_basis, created_at_precision, first_published_at,
       upvotes, comments, qualifies_by, fetched_at, first_seen_at, last_seen_at,
       status, id AS cursor_id`;
     if (sequentialMode) {
@@ -1073,8 +1086,9 @@ export async function onRequestGet(context) {
     const hasNext = sequentialMode
       ? direction === "previous" ? !reversePage : canContinue : page < exactTotalPages;
     const exhaustedBoundary = cursor ? {
-      cursor_id: cursor.key.at(-1), created_at: cursor.key.at(-2),
-      ...(sort === "created_at" ? {} : { [sort]: cursor.key[0] }),
+      cursor_id: cursor.key.at(-1),
+      [isDateSort(sort) ? SORT_COLUMNS[sort] : "created_at"]: cursor.key.at(-2),
+      ...(isDateSort(sort) ? {} : { [sort]: cursor.key[0] }),
     } : null;
     const previousBoundary = (direction === "previous" ? scannedThrough : postRows[0]) ?? exhaustedBoundary;
     const nextBoundary = (direction === "previous" ? postRows[0] : scannedThrough) ?? exhaustedBoundary;

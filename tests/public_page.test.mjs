@@ -134,7 +134,13 @@ test("public archives have distinct titles, descriptions and canonical URLs", as
     const seed = bootstrap(html);
     assert.equal(seed.version, 1);
     assert.equal(seed.payload.target, target);
-    assert.equal(seed.api_url, `/api/archive?target=${target}&page=1&page_size=30&min_upvotes=0&min_comments=0&sort=created_at`);
+    const sort = target === "ai-practice" ? "first_published_at" : "created_at";
+    assert.equal(seed.api_url, `/api/archive?target=${target}&page=1&page_size=30&min_upvotes=0&min_comments=0&sort=${sort}`);
+    assert.match(html, target === "ai-practice" ? /개 저장 · 새로 추가된 순/ : /개 저장 · 최신순/);
+    if (target === "ai-practice") {
+      assert.match(html, /<option value="first_published_at" selected="">새로 추가된 순<\/option>/);
+      assert.match(html, /<option value="created_at" hidden="" disabled="">최신순<\/option>/);
+    }
     assert.equal(new URL(response.headers.get("x-test-api-url")).searchParams.get("page_size"), "30");
     assert.equal(response.headers.get("x-test-api-cookie"), "absent");
     if (target === "all") {

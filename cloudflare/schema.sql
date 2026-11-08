@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS posts (
   publisher TEXT,
   content_kind TEXT,
   evidence_level TEXT,
+  first_published_at TEXT,
   created_at TEXT NOT NULL,
   created_at_raw TEXT NOT NULL,
   created_at_basis TEXT NOT NULL DEFAULT 'source'
@@ -733,6 +734,10 @@ CREATE TABLE IF NOT EXISTS ai_practice_candidates (
  canonical_url TEXT NOT NULL UNIQUE,
  content_hash TEXT NOT NULL,
  instruction_version TEXT NOT NULL,
+ validity_json TEXT CHECK(validity_json IS NULL OR json_valid(validity_json)),
+ validity_checked_at TEXT,
+ validity_expires_at TEXT,
+ validity_version TEXT,
  case_key TEXT NOT NULL,
  original_title TEXT NOT NULL,
  title TEXT NOT NULL,
@@ -765,6 +770,10 @@ CREATE TABLE IF NOT EXISTS ai_practice_evaluations (
  collection_model TEXT NOT NULL,
  filter_model TEXT NOT NULL,
  instruction_version TEXT NOT NULL,
+ validity_json TEXT CHECK(validity_json IS NULL OR json_valid(validity_json)),
+ validity_checked_at TEXT,
+ validity_expires_at TEXT,
+ validity_version TEXT,
  evaluated_at TEXT NOT NULL,
  duplicate_of TEXT,
  policy_revision INTEGER NOT NULL DEFAULT 0,
@@ -827,7 +836,7 @@ CREATE TRIGGER IF NOT EXISTS ai_practice_policy_snapshots_no_delete BEFORE DELET
 BEGIN SELECT RAISE(ABORT, 'AI policy snapshots are immutable'); END;
 
 INSERT OR IGNORE INTO ai_practice_policy_snapshots VALUES
- (1, '2fed05b2c5456135ef137491772290feef7cedeb05071bbe0f34bb5ada489dfc', '생활 비서·프로젝트 운영·모델 협의에 AI를 적용할 때 다른 작업에도 쓸 수 있는 구체적인 배움을 선별한다. 운영 경험과 설계 참고자료는 서로 독립적인 포함 경로다. 세 분야나 두 경로의 개수를 맞추지 않으며 좋은 자료가 없으면 포함 0개도 정상이다.
+ (1, 'a06128439f495714c78ef4f992c23b95e5997b4243c044deed4551ae3c23dfde', '생활 비서·프로젝트 운영·모델 협의에 AI를 적용할 때 다른 작업에도 쓸 수 있는 구체적인 배움을 선별한다. 운영 경험과 설계 참고자료는 서로 독립적인 포함 경로다. 세 분야나 두 경로의 개수를 맞추지 않으며 좋은 자료가 없으면 포함 0개도 정상이다.
 
 독립적인 두 포함 경로
 - 운영 경험·실험: 어떤 문제나 업무를 AI에 맡겼는지, 선택한 구성·절차의 이유, 관찰한 현상과 수정·검증 과정에서 재사용할 배움이 드러나면 포함할 수 있다. 실패한 시도와 남은 한계도 중요한 결과이며 성공·장기 운용·정량 수치·공개 코드는 필수가 아니다.
@@ -852,7 +861,14 @@ INSERT OR IGNORE INTO ai_practice_policy_snapshots VALUES
 - exclude: 읽은 자료의 내용이 범위·깊이 기준에 미달하거나 중복이다.
 - review: 포함 여부를 정하는 데 필요한 자료가 부족하거나 사실·번역·분류에 해결되지 않은 의문이 있다. 접근 실패나 미처리를 제외 판정으로 바꾸지 않는다.
 
-선별은 자료 자체의 깊이와 재사용성으로 판단한다. 개인의 비공개 프로젝트나 능력을 추정해 비교하지 않는다.', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), 'bootstrap');
+선별은 자료 자체의 깊이와 재사용성으로 판단한다. 개인의 비공개 프로젝트나 능력을 추정해 비교하지 않는다.
+
+현재도 읽을 가치가 있는지
+- 글이 오래됐거나 GPT-4 같은 이전 모델이 등장한다는 이유만으로 제외하지 않는다. 모델·도구가 달라져도 남는 구조 선택의 이유, 실패 원리, 검증 방법, 대안과 절충이 구체적이면 포함할 수 있다.
+- 핵심이 현재 그대로 적용할 API·서비스·우회법·가격/성능 비교에 달려 있으면 같은 제품·API·버전 범위의 공식 문서·변경 이력·종료 안내로 확인한다. 최신 README나 링크의 생존만으로 모든 주장이 유효하다고 보지 않는다.
+- 핵심 API가 제거됐거나 서비스가 종료됐고, 이미 해결된 제약을 피하는 낡은 우회법이나 더 이상 성립하지 않는 비교가 글의 중심이며 남는 배움도 부족하면 제외한다. 권장 중단이나 향후 종료 예고를 이미 종료된 것으로 바꾸지 않는다. 종료 예고는 판단 기준일과 효력일을 비교한다.
+- 과거 장애가 수정됐어도 원인·설계 회고에서 배울 수 있으면 포함할 수 있다. 일부 설정·방식만 낡았고 핵심 가치는 남는다면 제한을 요약에 정확히 적고 포함한다. 원래의 관찰·주장을 현재 성능이나 독립 검증 결과처럼 표현하지 않는다.
+- 필수 현재 근거를 확보하지 못했거나 제품·버전 범위가 맞지 않으면 검토 대상으로 남긴다. 읽지 못한 자료나 모델의 기억으로 지원·종료·비용·성능을 확정하지 않는다. 시점에 의존하지 않는 설계 참고자료에 불필요한 최신 지원 증명을 요구하지 않는다.', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), 'bootstrap');
 INSERT OR IGNORE INTO ai_practice_policy_state
  SELECT 1, policy_revision, policy_hash, created_at FROM ai_practice_policy_snapshots WHERE policy_revision = 1;
 
@@ -920,3 +936,76 @@ INSERT OR IGNORE INTO ai_practice_queue
   'content_kind',content_kind,'published_at',published_at,'published_at_raw',published_at_raw,
   'published_at_precision',published_at_precision,'introduction_text','','metadata',json('{}')),
  'pending','reassessment',first_seen_at,last_seen_at FROM ai_practice_candidates;
+
+-- AI first-publication invariants (migration 022).
+-- Permanent guards also cover older collectors that omit the new column.
+CREATE TRIGGER ai_first_published_insert_guard
+BEFORE INSERT ON posts
+WHEN NEW.archive_key='ai-practice' AND NEW.first_published_at IS NOT NULL
+BEGIN
+ SELECT RAISE(ABORT,'AI first publication is assigned by the database');
+END;
+
+CREATE TRIGGER ai_first_published_immutable
+BEFORE UPDATE ON posts
+WHEN OLD.archive_key='ai-practice' AND OLD.first_published_at IS NOT NULL
+ AND NEW.first_published_at IS NOT OLD.first_published_at
+BEGIN
+ SELECT RAISE(ABORT,'AI first publication is immutable');
+END;
+
+CREATE TRIGGER ai_first_published_value_guard
+BEFORE UPDATE OF first_published_at ON posts
+WHEN NEW.archive_key='ai-practice'
+BEGIN
+ SELECT CASE WHEN NEW.first_published_at IS NULL
+  THEN RAISE(ABORT,'AI first publication requires valid include evaluation history') END;
+ SELECT CASE WHEN NEW.first_published_at IS NOT strftime('%Y-%m-%dT%H:%M:%fZ',NEW.first_published_at)
+  THEN RAISE(ABORT,'AI first publication must be normalized UTC milliseconds') END;
+ SELECT CASE WHEN OLD.first_published_at IS NULL AND NEW.first_published_at IS NOT strftime('%Y-%m-%dT%H:%M:%fZ','now')
+  THEN RAISE(ABORT,'AI first publication is assigned by the database') END;
+ SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM ai_practice_evaluations e
+  WHERE e.item_id=substr(NEW.canonical_post_key,13) AND 'ai-practice:'||e.item_id=NEW.canonical_post_key
+   AND e.decision='include' AND e.collection_model NOT LIKE 'editorial%' AND e.filter_model NOT LIKE 'editorial%'
+   AND julianday(e.evaluated_at) IS NOT NULL)
+  OR EXISTS(SELECT 1 FROM ai_practice_evaluations e
+  WHERE e.item_id=substr(NEW.canonical_post_key,13) AND 'ai-practice:'||e.item_id=NEW.canonical_post_key
+   AND e.decision='include' AND e.collection_model NOT LIKE 'editorial%' AND e.filter_model NOT LIKE 'editorial%'
+   AND julianday(e.evaluated_at) IS NULL)
+  THEN RAISE(ABORT,'AI first publication requires valid include evaluation history') END;
+END;
+
+CREATE TRIGGER ai_first_published_on_insert
+AFTER INSERT ON posts
+WHEN NEW.archive_key='ai-practice' AND NEW.status='active' AND NEW.first_published_at IS NULL
+BEGIN
+ SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM ai_practice_evaluations e
+  WHERE e.item_id=substr(NEW.canonical_post_key,13) AND 'ai-practice:'||e.item_id=NEW.canonical_post_key
+   AND e.decision='include' AND e.collection_model NOT LIKE 'editorial%' AND e.filter_model NOT LIKE 'editorial%'
+   AND julianday(e.evaluated_at) IS NOT NULL)
+  OR EXISTS(SELECT 1 FROM ai_practice_evaluations e
+  WHERE e.item_id=substr(NEW.canonical_post_key,13) AND 'ai-practice:'||e.item_id=NEW.canonical_post_key
+   AND e.decision='include' AND e.collection_model NOT LIKE 'editorial%' AND e.filter_model NOT LIKE 'editorial%'
+   AND julianday(e.evaluated_at) IS NULL)
+  THEN RAISE(ABORT,'AI first publication requires valid include evaluation history') END;
+ UPDATE posts SET first_published_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=NEW.id;
+END;
+
+CREATE TRIGGER ai_first_published_on_activation
+AFTER UPDATE OF status,archive_key ON posts
+WHEN NEW.archive_key='ai-practice' AND NEW.status='active' AND NEW.first_published_at IS NULL
+BEGIN
+ SELECT CASE WHEN NOT EXISTS(SELECT 1 FROM ai_practice_evaluations e
+  WHERE e.item_id=substr(NEW.canonical_post_key,13) AND 'ai-practice:'||e.item_id=NEW.canonical_post_key
+   AND e.decision='include' AND e.collection_model NOT LIKE 'editorial%' AND e.filter_model NOT LIKE 'editorial%'
+   AND julianday(e.evaluated_at) IS NOT NULL)
+  OR EXISTS(SELECT 1 FROM ai_practice_evaluations e
+  WHERE e.item_id=substr(NEW.canonical_post_key,13) AND 'ai-practice:'||e.item_id=NEW.canonical_post_key
+   AND e.decision='include' AND e.collection_model NOT LIKE 'editorial%' AND e.filter_model NOT LIKE 'editorial%'
+   AND julianday(e.evaluated_at) IS NULL)
+  THEN RAISE(ABORT,'AI first publication requires valid include evaluation history') END;
+ UPDATE posts SET first_published_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=NEW.id;
+END;
+
+CREATE INDEX idx_posts_ai_first_published ON posts(archive_key,first_published_at DESC,id DESC)
+ WHERE archive_key='ai-practice' AND status='active';

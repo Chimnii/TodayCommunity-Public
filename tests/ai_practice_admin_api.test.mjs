@@ -20,6 +20,14 @@ const admin = await auth.createSessionToken(env, auth.AUTH_STATE_ADMIN);
 const link = await auth.createSessionToken(env, auth.AUTH_STATE_AUTHENTICATED, 1);
 const privateText = "PRIVATE-AI-POLICY: 원문 근거와 재사용할 배움을 확인한다. h_<hex10>";
 const hash = value => createHash("sha256").update(value).digest("hex");
+const validityVersion = source.match(/const VALIDITY_VERSION = "([^"]+)"/u)[1];
+
+function validityFixture() {
+  const now = Date.now();
+  return { version: validityVersion, checked_at: new Date(now - 60_000).toISOString(),
+    expires_at: new Date(now + 3600_000).toISOString(), claims: [], documents: [],
+    assessment: { status: "timeless", reason: "The fixture tests a reusable design principle.", citations: [] } };
+}
 
 function database(t) {
   const sqlite = new DatabaseSync(":memory:");
@@ -41,9 +49,16 @@ function database(t) {
       "second", "2026-11-01T00:00:00Z", "2026-11-01T00:00:00Z", decision, index + 1);
   }
   sqlite.exec(migrations[1].replace(/\r\n/g, "\n"));
+  sqlite.exec(`ALTER TABLE ai_practice_candidates ADD COLUMN validity_json TEXT CHECK(validity_json IS NULL OR json_valid(validity_json));
+    ALTER TABLE ai_practice_candidates ADD COLUMN validity_checked_at TEXT;
+    ALTER TABLE ai_practice_candidates ADD COLUMN validity_expires_at TEXT;
+    ALTER TABLE ai_practice_candidates ADD COLUMN validity_version TEXT;`);
+  const validity = validityFixture();
+  sqlite.prepare(`UPDATE ai_practice_candidates SET validity_json=?,validity_checked_at=?,validity_expires_at=?,validity_version=?`)
+    .run(JSON.stringify(validity), validity.checked_at, validity.expires_at, validity.version);
   sqlite.exec(`UPDATE ai_practice_queue SET status='processed', processed_policy_revision=1,
-    processed_policy_hash=(SELECT policy_hash FROM ai_practice_policy_state WHERE id=1), processed_instruction_version='ai-practice-v8';
-    UPDATE ai_practice_candidates SET policy_revision=1,instruction_version='ai-practice-v8',
+    processed_policy_hash=(SELECT policy_hash FROM ai_practice_policy_state WHERE id=1), processed_instruction_version='ai-practice-v9';
+    UPDATE ai_practice_candidates SET policy_revision=1,instruction_version='ai-practice-v9',
       policy_hash=(SELECT policy_hash FROM ai_practice_policy_state WHERE id=1);
     INSERT INTO ai_practice_discovery_state(source_key,lane,status,complete,discovered_count,last_discovered_at,cursor_json,scope_json)
       VALUES('ai-practice-hermes','recent','ok',1,3,'2026-11-07T00:00:00Z','{"head":1}','{"kind":"recent"}'),
@@ -267,13 +282,64 @@ test("logical pending counts stale processed/review once and distinguishes first
   assert.equal(saved.application.stale_count, 4);
 });
 
+test("validity version, evidence and time bounds invalidate completed work without changing its policy or body", async t => {
+  const now = Date.now();
+  const cases = [
+    ["expired", "validity_expires_at", new Date(now - 1).toISOString()],
+    ["future check", "validity_checked_at", new Date(now + 3600_000).toISOString()],
+    ["missing check", "validity_checked_at", null],
+    ["invalid check", "validity_checked_at", "invalid"],
+    ["missing expiry", "validity_expires_at", null],
+    ["invalid expiry", "validity_expires_at", "invalid"],
+    ["missing evidence", "validity_json", null],
+    ["old manifest", "validity_version", "ai-validity-old"],
+    ["old instruction", "instruction_version", "ai-practice-v8"],
+  ];
+  for (const [name, column, value] of cases) await t.test(name, async sub => {
+    const db = database(sub);
+    const fresh = (await (await request(db)).json()).application;
+    assert.equal(fresh.pending_count, 0);
+    db.sqlite.prepare(`UPDATE ai_practice_candidates SET ${column}=? WHERE item_id='item-0'`).run(value);
+    const before = db.sqlite.prepare("SELECT * FROM ai_practice_queue ORDER BY item_id").all();
+    const writes = db.sqlite.prepare("SELECT total_changes() AS n").get().n;
+    const response = await request(db);
+    const result = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(result.document.revision, 1);
+    assert.equal(result.application.total_count, 3);
+    assert.equal(result.application.pending_count, 1);
+    assert.equal(result.application.stale_count, 1);
+    assert.equal(result.application.reassessment_count, 1);
+    assert.equal(result.application.sources.find(row => row.source_key === "ai-practice-hermes").stale_count, 1);
+    assert.deepEqual(db.sqlite.prepare("SELECT * FROM ai_practice_queue ORDER BY item_id").all(), before);
+    assert.equal(db.sqlite.prepare("SELECT total_changes() AS n").get().n, writes);
+    assert.doesNotMatch(JSON.stringify(result), /validity_json|reusable design principle/u);
+  });
+});
+
+test("validity bounds compare actual instants and a stale review joins reassessment only once", async t => {
+  const db = database(t);
+  const validity = validityFixture();
+  const offsetTime = value => `${new Date(Date.parse(value) + 9 * 3600_000).toISOString().slice(0, -1)}+09:00`;
+  db.sqlite.prepare("UPDATE ai_practice_candidates SET validity_checked_at=?,validity_expires_at=? WHERE item_id='item-0'")
+    .run(offsetTime(validity.checked_at), offsetTime(validity.expires_at));
+  assert.equal((await (await request(db)).json()).application.pending_count, 0);
+  db.sqlite.exec("UPDATE ai_practice_queue SET status='review' WHERE item_id='item-0'");
+  db.sqlite.prepare("UPDATE ai_practice_candidates SET validity_expires_at=? WHERE item_id='item-0'").run(new Date().toISOString());
+  const result = (await (await request(db)).json()).application;
+  assert.equal(result.pending_count, 1);
+  assert.equal(result.stale_count, 1);
+  assert.equal(result.reassessment_count, 1);
+  assert.equal(result.review_count, 1);
+});
+
 test("saving policy stays constant-write with a thousand completed candidates", async t => {
   const db = database(t);
   db.sqlite.exec(`WITH RECURSIVE ids(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM ids WHERE n<1000)
     INSERT INTO ai_practice_queue(item_id,source_key,canonical_url,descriptor_json,status,work_kind,discovered_at,updated_at,
       processed_policy_revision,processed_policy_hash,processed_instruction_version)
     SELECT 'extra-'||n,'ai-practice-hermes','https://example.com/extra-'||n,'{}','processed','backfill','2026-11-07','2026-11-07',
-      1,(SELECT policy_hash FROM ai_practice_policy_state WHERE id=1),'ai-practice-v8' FROM ids;`);
+      1,(SELECT policy_hash FROM ai_practice_policy_state WHERE id=1),'ai-practice-v9' FROM ids;`);
   const writes = db.sqlite.prepare("SELECT total_changes() AS n").get().n;
   const saved = await (await request(db, { method: "POST", body: saveBody() })).json();
   assert.equal(saved.application.total_count, 1003);
@@ -437,4 +503,19 @@ test("Cloudflare D1 batch preserves changes() guards for policy writes and idemp
   });
   assert.equal(readOnly.status, 405);
   assert.equal(readOnly.headers.get("allow"), "GET");
+  await db.batch([
+    db.prepare("UPDATE ai_practice_candidates SET validity_expires_at=? WHERE item_id='item-0'").bind(new Date(Date.now() - 1).toISOString()),
+    db.prepare("UPDATE ai_practice_candidates SET instruction_version='ai-practice-v8' WHERE item_id='item-1'"),
+    db.prepare("UPDATE ai_practice_candidates SET validity_version='ai-validity-old' WHERE item_id='item-2'"),
+  ]);
+  const staleResponse = await runtime.dispatchFetch("https://todaycommunity.example/api/ai-practice/rules", {
+    headers: { Cookie: `__Host-tc_admin=${admin}` },
+  });
+  assert.equal(staleResponse.status, 200);
+  const stale = await staleResponse.json();
+  assert.equal(stale.document.revision, 2);
+  assert.equal(stale.application.stale_count, 3);
+  assert.equal(stale.application.pending_count, 3);
+  assert.equal(stale.application.reassessment_count, 3);
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM ai_practice_queue WHERE status='processed'").first()).n, 3);
 });

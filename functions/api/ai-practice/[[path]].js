@@ -2,7 +2,8 @@ import { AuthConfigurationError, resolveAuthIdentity } from "../_auth.js";
 
 const MAX_LENGTH = 6000;
 const MAX_BODY_BYTES = 48 * 1024;
-const INSTRUCTION_VERSION = "ai-practice-v8";
+const INSTRUCTION_VERSION = "ai-practice-v9";
+const VALIDITY_VERSION = "ai-validity-v1-76f899a3e2758527";
 const EVENT_ID = /^[A-Za-z0-9._:-]{16,100}$/;
 const normalizeContent = value => typeof value === "string" ? value.replace(/\r\n?/gu, "\n").trim() : null;
 const rows = result => Array.isArray(result?.results) ? result.results : [];
@@ -59,11 +60,14 @@ async function loadDocument(db) {
 }
 
 async function loadApplication(db, document) {
+  const checkedNow = new Date().toISOString();
   const result = await query(db, `WITH queue_state AS (
       SELECT q.*, (cache_invalidated = 1 OR processed_policy_revision IS NOT ?
         OR processed_policy_hash IS NOT ? OR processed_instruction_version IS NOT ?
         OR (c.item_id IS NOT NULL AND (c.policy_revision IS NOT ? OR c.policy_hash IS NOT ?
-          OR c.instruction_version IS NOT ?))) AS stale,
+          OR c.instruction_version IS NOT ? OR c.validity_version IS NOT ? OR c.validity_json IS NULL
+          OR COALESCE(julianday(c.validity_checked_at) <= julianday(?)
+            AND julianday(c.validity_expires_at) > julianday(?), 0) = 0))) AS stale,
         (processed_instruction_version IS NOT NULL OR c.item_id IS NOT NULL) AS evaluated
       FROM ai_practice_queue q LEFT JOIN ai_practice_candidates c ON c.item_id = q.item_id)
     SELECT s.source_key, s.board_name AS name,
@@ -92,7 +96,8 @@ async function loadApplication(db, document) {
     LEFT JOIN ai_practice_source_state c ON c.source_key = s.source_key
     LEFT JOIN ai_practice_discovery_state d ON d.source_key = s.source_key AND d.lane = 'backfill'
     WHERE s.archive_key = 'ai-practice' ORDER BY s.source_key`,
-    [document.revision, document.hash, INSTRUCTION_VERSION, document.revision, document.hash, INSTRUCTION_VERSION]);
+    [document.revision, document.hash, INSTRUCTION_VERSION, document.revision, document.hash, INSTRUCTION_VERSION,
+      VALIDITY_VERSION, checkedNow, checkedNow]);
   const sources = result.map(row => ({ source_key: row.source_key, name: row.name,
     total_count: Number(row.total_count), pending_count: Number(row.pending_count), stale_count: Number(row.stale_count),
     manifest_pending_count: Number(row.manifest_pending_count),
