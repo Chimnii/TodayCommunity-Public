@@ -18,12 +18,12 @@ export function seedAiInclude(sqlite, { itemId, evaluatedAt, title = "fixture", 
   sqlite.prepare(`INSERT INTO ai_practice_candidates
     (item_id,source_key,canonical_url,content_hash,instruction_version,case_key,original_title,title,
      summary,subject,evidence_url,evidence_level,content_kind,published_at_precision,first_seen_at,last_seen_at,decision)
-    VALUES (?,?,?,'fixture-hash','ai-practice-v9',?,?,?,'fixture summary','프로젝트 운영',?,
+    VALUES (?,?,?,'fixture-hash','ai-practice-v10',?,?,?,'fixture summary','프로젝트 운영',?,
       'full_text','experience','second',?,?,'include')`).run(
     itemId, sourceKey, url, itemId, title, title, url, evaluatedAt, evaluatedAt);
   sqlite.prepare(`INSERT INTO ai_practice_evaluations
     (item_id,run_id,content_hash,decision,reason,evidence_quote,collection_model,filter_model,instruction_version,evaluated_at)
     VALUES (?,'fixture-run','fixture-hash','include','fixture include','fixture quote',
-      'gpt-5.6-sol','gpt-5.6-terra','ai-practice-v9',?)`).run(itemId, evaluatedAt);
+      'gpt-5.6-sol','gpt-5.6-terra','ai-practice-v10',?)`).run(itemId, evaluatedAt);
   return `ai-practice:${itemId}`;
 }
