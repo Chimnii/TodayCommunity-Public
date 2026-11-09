@@ -60,21 +60,17 @@ async function loadDocument(db) {
 }
 
 async function loadApplication(db, document) {
-  const checkedNow = new Date().toISOString();
   const result = await query(db, `WITH queue_state AS (
-      SELECT q.*, (cache_invalidated = 1 OR processed_policy_revision IS NOT ?
-        OR processed_policy_hash IS NOT ? OR processed_instruction_version IS NOT ?
-        OR (c.item_id IS NOT NULL AND (c.policy_revision IS NOT ? OR c.policy_hash IS NOT ?
-          OR c.instruction_version IS NOT ? OR c.validity_version IS NOT ? OR c.validity_json IS NULL
-          OR COALESCE(julianday(c.validity_checked_at) <= julianday(?)
-            AND julianday(c.validity_expires_at) > julianday(?), 0) = 0))) AS stale,
-        (processed_instruction_version IS NOT NULL OR c.item_id IS NOT NULL) AS evaluated
+      SELECT q.*, (processed_instruction_version IS NOT NULL OR c.item_id IS NOT NULL) AS evaluated,
+        ((processed_instruction_version IS NULL AND c.item_id IS NULL)
+          OR COALESCE(json_type(q.descriptor_json,'$.metadata.followup_cursor')='object', 0)) AS automatic
       FROM ai_practice_queue q LEFT JOIN ai_practice_candidates c ON c.item_id = q.item_id)
     SELECT s.source_key, s.board_name AS name,
       COALESCE(q.total_count, 0) AS total_count, COALESCE(q.pending_count, 0) AS pending_count,
       COALESCE(m.manifest_pending_count, 0) AS manifest_pending_count,
       COALESCE(q.stale_count, 0) AS stale_count, COALESCE(q.retry_count, 0) AS retry_count,
       COALESCE(q.reassessment_count, 0) AS reassessment_count,
+      COALESCE(q.preserved_count, 0) AS preserved_count,
       COALESCE(q.blocked_count, 0) AS blocked_count, COALESCE(q.oversized_count, 0) AS oversized_count,
       COALESCE(q.review_count, 0) AS review_count,
       c.last_success_at, c.last_attempt_at, c.last_status,
@@ -82,26 +78,24 @@ async function loadApplication(db, document) {
       d.last_error, d.cursor_json, d.scope_json
     FROM sources s
     LEFT JOIN (SELECT source_key, COUNT(*) AS total_count,
-      SUM(CASE WHEN status IN ('pending','retry','blocked','oversized') OR stale THEN 1 ELSE 0 END) AS pending_count,
-      SUM(CASE WHEN (status IN ('pending','retry','blocked','oversized') OR stale)
-        AND (work_kind = 'reassessment' OR (stale AND evaluated)) THEN 1 ELSE 0 END) AS reassessment_count,
-      SUM(CASE WHEN stale THEN 1 ELSE 0 END) AS stale_count,
-      SUM(CASE WHEN status = 'retry' THEN 1 ELSE 0 END) AS retry_count,
-      SUM(CASE WHEN status = 'blocked' THEN 1 ELSE 0 END) AS blocked_count,
-      SUM(CASE WHEN status = 'oversized' THEN 1 ELSE 0 END) AS oversized_count,
+      SUM(CASE WHEN automatic AND status IN ('pending','retry','blocked','oversized') THEN 1 ELSE 0 END) AS pending_count,
+      0 AS reassessment_count, 0 AS stale_count,
+      SUM(CASE WHEN evaluated AND NOT (automatic AND status IN ('pending','retry','blocked','oversized')) THEN 1 ELSE 0 END) AS preserved_count,
+      SUM(CASE WHEN automatic AND status = 'retry' THEN 1 ELSE 0 END) AS retry_count,
+      SUM(CASE WHEN automatic AND status = 'blocked' THEN 1 ELSE 0 END) AS blocked_count,
+      SUM(CASE WHEN automatic AND status = 'oversized' THEN 1 ELSE 0 END) AS oversized_count,
       SUM(CASE WHEN status = 'review' THEN 1 ELSE 0 END) AS review_count
       FROM queue_state GROUP BY source_key) q ON q.source_key = s.source_key
     LEFT JOIN (SELECT source_key, SUM(MAX(item_count - registration_offset, 0)) AS manifest_pending_count
       FROM ai_practice_discovery_manifests WHERE status = 'pending' GROUP BY source_key) m ON m.source_key = s.source_key
     LEFT JOIN ai_practice_source_state c ON c.source_key = s.source_key
     LEFT JOIN ai_practice_discovery_state d ON d.source_key = s.source_key AND d.lane = 'backfill'
-    WHERE s.archive_key = 'ai-practice' ORDER BY s.source_key`,
-    [document.revision, document.hash, INSTRUCTION_VERSION, document.revision, document.hash, INSTRUCTION_VERSION,
-      VALIDITY_VERSION, checkedNow, checkedNow]);
+    WHERE s.archive_key = 'ai-practice' ORDER BY s.source_key`);
   const sources = result.map(row => ({ source_key: row.source_key, name: row.name,
     total_count: Number(row.total_count), pending_count: Number(row.pending_count), stale_count: Number(row.stale_count),
     manifest_pending_count: Number(row.manifest_pending_count),
     reassessment_count: Number(row.reassessment_count),
+    preserved_count: Number(row.preserved_count),
     failed_count: Number(row.retry_count) + Number(row.blocked_count), oversized_count: Number(row.oversized_count),
     review_count: Number(row.review_count), retry_count: Number(row.retry_count), blocked_count: Number(row.blocked_count),
     last_success_at: row.last_success_at || null, last_attempt_at: row.last_attempt_at || null,
@@ -109,9 +103,9 @@ async function loadApplication(db, document) {
     backfill: { status: row.discovery_status || "not_started", complete: Number(row.complete) === 1,
       discovered_count: Number(row.discovered_count || 0), last_discovered_at: row.last_discovered_at || null,
       last_error: row.last_error || null, cursor_json: row.cursor_json || null, scope_json: row.scope_json || "{}" } }));
-  const counts = Object.fromEntries(["total_count", "manifest_pending_count", "pending_count", "stale_count", "reassessment_count", "failed_count", "oversized_count", "review_count"]
+  const counts = Object.fromEntries(["total_count", "manifest_pending_count", "pending_count", "stale_count", "reassessment_count", "preserved_count", "failed_count", "oversized_count", "review_count"]
     .map(key => [key, sources.reduce((sum, source) => sum + source[key], 0)]));
-  return { ...counts, sources };
+  return { ...counts, refresh_scope: "new_and_unfinished", sources };
 }
 
 async function payload(db) {
@@ -169,8 +163,8 @@ async function save(request, db, actor) {
         (event_id, base_revision, policy_revision, content, content_hash, payload_hash, actor, created_at)
         SELECT ?, ?, ?, ?, ?, ?, ?, ? FROM ai_practice_policy_snapshots WHERE event_id = ?`)
         .bind(eventId, base, revision, content, hash, payloadHash, actor, now, eventId));
-      // A changed revision makes old evaluations logically pending. Saving
-      // remains constant-write work even when discovery found thousands of URLs.
+      // New criteria apply to future work. Historical decisions are preserved;
+      // saving never enrolls them in an automatic full-archive reassessment.
     } else {
       statements.push(db.prepare(`INSERT INTO ai_practice_manual_rule_events
         (event_id, base_revision, policy_revision, content, content_hash, payload_hash, actor, created_at)

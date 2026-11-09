@@ -12,7 +12,7 @@ const privateContent = "PRIVATE-AI-RULES\n\n원문에 없는 성과는 만들지
 const response = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 function payload(content = privateContent, revision = 1, changed = true) {
   return { document: { content, revision, hash: "a".repeat(64), updated_at: "2026-11-07T00:00:00Z", max_length: 6000 },
-    application: { total_count: 12, manifest_pending_count: 300, pending_count: 7, stale_count: 9, reassessment_count: 6,
+    application: { total_count: 12, manifest_pending_count: 300, pending_count: 7, stale_count: 0, reassessment_count: 0, preserved_count: 5,
       failed_count: 2, oversized_count: 1, review_count: 1,
       sources: [{ source_key: "ai-practice-hermes", name: "Hermes", total_count: 12, manifest_pending_count: 300, pending_count: 7, failed_count: 2,
         oversized_count: 1, review_count: 1, last_status: "partial", last_attempt_at: "2026-11-07T00:00:00Z",
@@ -58,8 +58,9 @@ test("admin can load, edit, save, reload and re-edit one complete AI policy with
   await h.loadAiRules(true);
   assert.equal(h.elements.aiContent.value, privateContent);
   assert.equal(h.aiRules.baseRevision, 1);
-  assert.match(h.elements.aiApplication.textContent, /현재 기준 미적용 9개/);
-  assert.match(h.elements.aiApplication.textContent, /기준 재평가 6개/);
+  assert.match(h.elements.aiApplication.textContent, /기존 판정 보존 5개/);
+  assert.match(h.elements.aiApplication.textContent, /신규·미완료 처리 대기 7개/);
+  assert.doesNotMatch(h.elements.aiApplication.textContent, /기준 미적용|기준 재평가/);
   assert.match(h.elements.aiApplication.textContent, /등록된 후보 12개 \(중복 제외\).*등록 전 발견 항목 300개 \(중복 가능\)/);
   assert.match(textOf(h.elements.aiSources), /등록 후보 12 \(중복 제외\).*등록 전 발견 300 \(중복 가능\)/);
   edit(h, "  개정 기준\r\n\r\n검증 근거를 확인한다.  ");
@@ -75,7 +76,7 @@ test("admin can load, edit, save, reload and re-edit one complete AI policy with
   });
   await h.saveAiRules();
   assert.equal(h.aiRules.baseRevision, 2);
-  assert.match(h.elements.aiStatus.textContent, /다음 수집부터.*순차 재평가/);
+  assert.match(h.elements.aiStatus.textContent, /신규·미완료 후보부터 적용하며 기존 글은 유지/);
   assert.doesNotMatch(h.elements.aiStatus.textContent, /전체.*완료/);
   edit(h, "아직 저장하지 않은 내용");
   h.setFetch(async () => response(payload("서버 저장본", 2)));
@@ -173,7 +174,7 @@ test("admin editor is empty in shipped HTML and supplies native controls and mob
   assert.match(html, /<label for="ai-rules-content">선정기준 전문<\/label>/);
   assert.match(html, /id="ai-rules-status"[^>]+role="status"[^>]+aria-live="polite"/);
   assert.match(html, /id="ai-rules-save" type="submit"/);
-  assert.match(html, /기존 포함·제외·검토 글은 순차 재평가/);
+  assert.match(html, /기존 글은 전체 재평가하거나 다시 작성하지 않으며/);
   assert.doesNotMatch(script, /localStorage|sessionStorage|innerHTML|selection_policy\.md/);
   assert.match(css, /\.ai-source-list\s*\{\s*grid-template-columns:\s*1fr/);
   assert.match(css, /textarea:focus/);

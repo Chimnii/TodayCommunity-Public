@@ -214,19 +214,19 @@ test("admin reads the seeded full document and distinct per-source pending/backf
   assert.equal(result.document.hash, hash(result.document.content));
   assert.equal(result.document.max_length, 6000);
   assert.equal(result.application.total_count, 3);
-  assert.equal(result.application.pending_count, 2);
-  assert.equal(result.application.failed_count, 1);
-  assert.equal(result.application.oversized_count, 1);
-  assert.equal(result.application.stale_count, 1);
+  assert.equal(result.application.pending_count, 0);
+  assert.equal(result.application.failed_count, 0);
+  assert.equal(result.application.oversized_count, 0);
+  assert.equal(result.application.stale_count, 0);
   const hermes = result.application.sources.filter(item => item.source_key === "ai-practice-hermes");
   assert.equal(hermes.length, 1, "recent and backfill lanes do not duplicate queue counts");
   assert.equal(hermes[0].backfill.status, "partial");
   assert.equal(hermes[0].backfill.cursor_json, '{"page":2}');
   db.sqlite.exec("UPDATE ai_practice_queue SET cache_invalidated=1,status='pending' WHERE item_id='item-2';");
-  assert.equal((await (await request(db)).json()).application.stale_count, 2, "same-policy duplicate invalidation still needs reassessment");
+  assert.equal((await (await request(db)).json()).application.stale_count, 0, "historical invalidation does not authorize an automatic rewrite");
 });
 
-test("policy change uses three writes and lazily reassesses every decision without rewriting queue or visibility", async t => {
+test("policy change uses three writes and preserves every historical decision and queue row", async t => {
   const db = database(t);
   const beforeQueue = db.sqlite.prepare("SELECT * FROM ai_practice_queue ORDER BY item_id").all();
   const beforeWrites = db.sqlite.prepare("SELECT total_changes() AS n").get().n;
@@ -237,9 +237,9 @@ test("policy change uses three writes and lazily reassesses every decision witho
   assert.equal(result.document.hash, hash(privateText));
   assert.equal(result.document.revision, 2);
   assert.equal(result.save.changed, true);
-  assert.equal(result.application.reassessment_count, 3);
-  assert.equal(result.application.pending_count, 3);
-  assert.equal(result.application.stale_count, 3);
+  assert.equal(result.application.reassessment_count, 0);
+  assert.equal(result.application.pending_count, 0);
+  assert.equal(result.application.stale_count, 0);
   assert.equal(db.sqlite.prepare("SELECT total_changes() AS n").get().n - beforeWrites, 3);
   assert.equal(count(db, "ai_practice_policy_snapshots"), 2);
   assert.equal(count(db, "ai_practice_manual_rule_events"), 1);
@@ -263,7 +263,24 @@ test("normalized same-content save appends only an event and preserves policy ti
   assert.equal(count(db, "ai_practice_manual_rule_events"), 1);
 });
 
-test("logical pending counts stale processed/review once and distinguishes first evaluation from reassessment", async t => {
+test("new retries and unfinished comment pagination stay visible while historical pending rows are preserved", async t => {
+  const db = database(t);
+  db.sqlite.exec(`UPDATE ai_practice_queue SET status='pending',cache_invalidated=1 WHERE item_id='item-0';
+    UPDATE ai_practice_queue SET status='retry',descriptor_json=json_set(descriptor_json,'$.metadata.followup_cursor',json('{"page":2}')) WHERE item_id='item-1';
+    INSERT INTO ai_practice_queue(item_id,source_key,canonical_url,descriptor_json,status,work_kind,discovered_at,updated_at)
+      VALUES('unfinished-new','ai-practice-hermes','https://example.com/unfinished','{}','blocked','recent','2026-11-07','2026-11-07');`);
+  const before = db.sqlite.prepare("SELECT * FROM ai_practice_queue ORDER BY item_id").all();
+  const saved = await (await request(db, { method: "POST", body: saveBody() })).json();
+  assert.equal(saved.application.pending_count, 2);
+  assert.equal(saved.application.failed_count, 2);
+  assert.equal(saved.application.preserved_count, 2);
+  assert.equal(saved.application.stale_count, 0);
+  assert.equal(saved.application.reassessment_count, 0);
+  assert.equal(saved.application.refresh_scope, "new_and_unfinished");
+  assert.deepEqual(db.sqlite.prepare("SELECT * FROM ai_practice_queue ORDER BY item_id").all(), before);
+});
+
+test("pending counts only new and unfinished work despite old policy and instruction versions", async t => {
   const db = database(t);
   db.sqlite.exec(`UPDATE ai_practice_queue SET status='review' WHERE item_id='item-0';
     UPDATE ai_practice_candidates SET instruction_version='ai-practice-v6' WHERE item_id='item-1';
@@ -272,17 +289,17 @@ test("logical pending counts stale processed/review once and distinguishes first
       VALUES('new-discovery','ai-practice-hermes','https://example.com/new','{}','pending','recent','2026-11-07','2026-11-07');`);
   const before = (await (await request(db)).json()).application;
   assert.equal(before.total_count, 4);
-  assert.equal(before.pending_count, 3);
-  assert.equal(before.stale_count, 3);
-  assert.equal(before.reassessment_count, 2, "newly registered URL has no previous evaluation to reassess");
+  assert.equal(before.pending_count, 1);
+  assert.equal(before.stale_count, 0);
+  assert.equal(before.reassessment_count, 0, "newly registered URL has no previous evaluation to reassess");
   assert.equal(before.review_count, 1, "current-policy review is separate from processing backlog");
   const saved = await (await request(db, { method: "POST", body: saveBody() })).json();
-  assert.equal(saved.application.pending_count, 4, "old-policy review joins backlog without a queue UPDATE");
-  assert.equal(saved.application.reassessment_count, 3);
-  assert.equal(saved.application.stale_count, 4);
+  assert.equal(saved.application.pending_count, 1, "only the first evaluation remains pending after a policy change");
+  assert.equal(saved.application.reassessment_count, 0);
+  assert.equal(saved.application.stale_count, 0);
 });
 
-test("validity version, evidence and time bounds invalidate completed work without changing its policy or body", async t => {
+test("validity version, evidence and time bounds never enroll completed work in automatic refresh", async t => {
   const now = Date.now();
   const cases = [
     ["expired", "validity_expires_at", new Date(now - 1).toISOString()],
@@ -307,17 +324,17 @@ test("validity version, evidence and time bounds invalidate completed work witho
     assert.equal(response.status, 200);
     assert.equal(result.document.revision, 1);
     assert.equal(result.application.total_count, 3);
-    assert.equal(result.application.pending_count, 1);
-    assert.equal(result.application.stale_count, 1);
-    assert.equal(result.application.reassessment_count, 1);
-    assert.equal(result.application.sources.find(row => row.source_key === "ai-practice-hermes").stale_count, 1);
+    assert.equal(result.application.pending_count, 0);
+    assert.equal(result.application.stale_count, 0);
+    assert.equal(result.application.reassessment_count, 0);
+    assert.equal(result.application.sources.find(row => row.source_key === "ai-practice-hermes").stale_count, 0);
     assert.deepEqual(db.sqlite.prepare("SELECT * FROM ai_practice_queue ORDER BY item_id").all(), before);
     assert.equal(db.sqlite.prepare("SELECT total_changes() AS n").get().n, writes);
     assert.doesNotMatch(JSON.stringify(result), /validity_json|reusable design principle/u);
   });
 });
 
-test("validity bounds compare actual instants and a stale review joins reassessment only once", async t => {
+test("a review remains preserved when validity expires", async t => {
   const db = database(t);
   const validity = validityFixture();
   const offsetTime = value => `${new Date(Date.parse(value) + 9 * 3600_000).toISOString().slice(0, -1)}+09:00`;
@@ -327,9 +344,9 @@ test("validity bounds compare actual instants and a stale review joins reassessm
   db.sqlite.exec("UPDATE ai_practice_queue SET status='review' WHERE item_id='item-0'");
   db.sqlite.prepare("UPDATE ai_practice_candidates SET validity_expires_at=? WHERE item_id='item-0'").run(new Date().toISOString());
   const result = (await (await request(db)).json()).application;
-  assert.equal(result.pending_count, 1);
-  assert.equal(result.stale_count, 1);
-  assert.equal(result.reassessment_count, 1);
+  assert.equal(result.pending_count, 0);
+  assert.equal(result.stale_count, 0);
+  assert.equal(result.reassessment_count, 0);
   assert.equal(result.review_count, 1);
 });
 
@@ -343,8 +360,10 @@ test("saving policy stays constant-write with a thousand completed candidates", 
   const writes = db.sqlite.prepare("SELECT total_changes() AS n").get().n;
   const saved = await (await request(db, { method: "POST", body: saveBody() })).json();
   assert.equal(saved.application.total_count, 1003);
-  assert.equal(saved.application.pending_count, 1003);
-  assert.equal(saved.application.reassessment_count, 1003);
+  assert.equal(saved.application.preserved_count, 1003);
+  assert.equal(saved.application.refresh_scope, "new_and_unfinished");
+  assert.equal(saved.application.pending_count, 0);
+  assert.equal(saved.application.reassessment_count, 0);
   assert.equal(db.sqlite.prepare("SELECT total_changes() AS n").get().n - writes, 3);
   assert.equal(db.sqlite.prepare("SELECT count(*) AS n FROM ai_practice_queue WHERE status='processed'").get().n, 1003);
 });
@@ -477,7 +496,7 @@ test("Cloudflare D1 batch preserves changes() guards for policy writes and idemp
   assert.equal(saved.status, 201);
   const first = await saved.json();
   assert.equal(first.document.revision, 2);
-  assert.equal(first.application.reassessment_count, 3);
+  assert.equal(first.application.reassessment_count, 0);
   await db.batch([
     db.prepare(`UPDATE ai_practice_queue SET status='processed',processed_policy_revision=2,
       processed_policy_hash=(SELECT policy_hash FROM ai_practice_policy_state WHERE id=1)`),
@@ -514,8 +533,8 @@ test("Cloudflare D1 batch preserves changes() guards for policy writes and idemp
   assert.equal(staleResponse.status, 200);
   const stale = await staleResponse.json();
   assert.equal(stale.document.revision, 2);
-  assert.equal(stale.application.stale_count, 3);
-  assert.equal(stale.application.pending_count, 3);
-  assert.equal(stale.application.reassessment_count, 3);
+  assert.equal(stale.application.stale_count, 0);
+  assert.equal(stale.application.pending_count, 0);
+  assert.equal(stale.application.reassessment_count, 0);
   assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM ai_practice_queue WHERE status='processed'").first()).n, 3);
 });

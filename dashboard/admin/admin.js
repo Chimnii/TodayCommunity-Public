@@ -141,7 +141,7 @@ function renderAiApplication(payload) {
     elements.aiMeta.append(term, description);
   }
   const application = payload.application || {};
-  elements.aiApplication.textContent = `등록된 후보 ${application.total_count || 0}개 (중복 제외) · 등록 전 발견 항목 ${application.manifest_pending_count || 0}개 (중복 가능) · 현재 기준 미적용 ${application.stale_count || 0}개 · 처리 대기 ${application.pending_count || 0}개 (기준 재평가 ${application.reassessment_count || 0}개) · 실패·재시도 ${application.failed_count || 0}개 · 크기 초과 ${application.oversized_count || 0}개 · 검토 ${application.review_count || 0}개`;
+  elements.aiApplication.textContent = `등록된 후보 ${application.total_count || 0}개 (중복 제외) · 등록 전 발견 항목 ${application.manifest_pending_count || 0}개 (중복 가능) · 기존 판정 보존 ${application.preserved_count || 0}개 · 신규·미완료 처리 대기 ${application.pending_count || 0}개 · 실패·재시도 ${application.failed_count || 0}개 · 크기 초과 ${application.oversized_count || 0}개 · 검토 ${application.review_count || 0}개`;
   elements.aiSources.replaceChildren();
   const labels = { ok: "정상", success: "정상", processed: "처리됨", pending: "대기", retry: "재시도",
     failed: "실패", partial: "일부 처리", blocked: "접근 차단", not_started: "시작 전", complete: "범위 완료", running: "진행 중" };
@@ -225,7 +225,7 @@ async function saveAiRules() {
     adoptAiDocument(payload.document);
     setStatus(elements.aiStatus, payload.save?.revision !== payload.document.revision
       ? "저장은 확인됐고, 이후 변경된 최신 저장본을 불러왔습니다."
-      : payload.save?.changed ? "선정기준을 저장했습니다. 다음 수집부터 기존 후보를 순차 재평가합니다."
+      : payload.save?.changed ? "선정기준을 저장했습니다. 다음 신규·미완료 후보부터 적용하며 기존 글은 유지합니다."
       : "내용이 같아 기준 버전을 유지했습니다. 재평가를 다시 시작하지 않습니다.", "success");
   } catch (error) {
     if (epoch !== aiRules.epoch) return;
