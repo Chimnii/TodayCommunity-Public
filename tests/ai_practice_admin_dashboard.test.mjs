@@ -166,7 +166,7 @@ test("same-content save explains no requeue and blank/overlong input is rejected
   edit(h, privateContent);
   h.setFetch(async () => response(payload(privateContent, 1, false)));
   await h.saveAiRules();
-  assert.match(h.elements.aiStatus.textContent, /재평가를 다시 시작하지 않습니다/);
+  assert.match(h.elements.aiStatus.textContent, /기존 글도 그대로 유지합니다/);
 });
 
 test("admin editor is empty in shipped HTML and supplies native controls and mobile layout", () => {

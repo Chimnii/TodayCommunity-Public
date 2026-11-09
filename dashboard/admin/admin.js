@@ -226,7 +226,7 @@ async function saveAiRules() {
     setStatus(elements.aiStatus, payload.save?.revision !== payload.document.revision
       ? "저장은 확인됐고, 이후 변경된 최신 저장본을 불러왔습니다."
       : payload.save?.changed ? "선정기준을 저장했습니다. 다음 신규·미완료 후보부터 적용하며 기존 글은 유지합니다."
-      : "내용이 같아 기준 버전을 유지했습니다. 재평가를 다시 시작하지 않습니다.", "success");
+      : "내용이 같아 기준 버전을 유지했습니다. 기존 글도 그대로 유지합니다.", "success");
   } catch (error) {
     if (epoch !== aiRules.epoch) return;
     if (error instanceof ApiError && error.status === 401) { showLogin("관리자 세션이 만료되었습니다. 다시 로그인해 주세요."); return; }
