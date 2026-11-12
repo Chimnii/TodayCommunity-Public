@@ -337,11 +337,17 @@ def describe_tcp_port(port: int) -> str:
     try:
         result = subprocess.run(
             ["netstat.exe", "-ano", "-p", "tcp"], capture_output=True,
-            text=True, timeout=3.0, check=False,
+            timeout=3.0, check=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
+        if result.returncode != 0 or not isinstance(result.stdout, bytes):
+            return "unavailable"
+        # Windows console output need not use Python's UTF-8 mode/code page.
+        # Endpoint/state/PID tokens are ASCII; localized headings are ignored.
+        # Decode here so a reader-thread Unicode error cannot mask bind failure.
+        output = result.stdout.decode("ascii", errors="replace")
         matches = []
-        for line in result.stdout.splitlines():
+        for line in output.splitlines():
             fields = line.split()
             if len(fields) == 5 and fields[0] == "TCP" and fields[1].endswith(f":{port}"):
                 matches.append(f"local={fields[1]} state={fields[3]} pid={fields[4]}")

@@ -218,6 +218,9 @@ class GitHubActionsClient:
     def get_run(self, run_id: int) -> Mapping[str, object]:
         return self._get_json(f"/actions/runs/{run_id}")
 
+    def get_attempt_run(self, run_id: int, attempt_number: int) -> Mapping[str, object]:
+        return self._get_json(f"/actions/runs/{run_id}/attempts/{attempt_number}")
+
     def get_jobs(self, run_id: int) -> list[Mapping[str, object]]:
         return list(
             self._iter_paginated(

@@ -37,12 +37,13 @@ jobs:
   hot:
     name: DC Hot crawl attempt
     continue-on-error: true
-    outputs:
-      counted_success: ${{ job.status == 'success' && steps.counted_success.outcome == 'success' }}
     runs-on: ubuntu-latest
     environment: collection
     timeout-minutes: 30
     steps:
+      - name: Collection health contract v1
+        run: echo "Collection result and notification policy are separate."
+
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -93,6 +94,7 @@ jobs:
         run: python -m crawler.jobs.check_schema
 
       - name: Run scheduled DC Hot crawl
+        id: collection_result
         env:
           TC_CF_ACCOUNT_ID: ${{ secrets.TC_CF_ACCOUNT_ID }}
           TC_CF_DATABASE_ID: ${{ secrets.TC_CF_DATABASE_ID }}
@@ -110,23 +112,14 @@ jobs:
         id: counted_success
         run: echo "DC Hot crawl attempt completed successfully."
 
-  failure-streak-gate:
-    name: DC Hot failure streak gate
-    if: always()
-    needs: hot
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Checkout failure streak helper
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
+      - name: 'Collection health v1: pipeline=${{ fromJSON(steps.collection_result.outputs.collection_health || ''{}'')[''pipeline''] || ''failure'' }}'
+        if: always()
+        run: echo "Collection component evidence recorded."
 
-      - name: Enforce DC Hot failure streak
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          TC_FAILURE_STREAK_ATTEMPT_JOB: DC Hot crawl attempt
-          TC_FAILURE_STREAK_GATE_JOB: DC Hot failure streak gate
-          TC_FAILURE_STREAK_LANE: DC Hot
-          TC_FAILURE_STREAK_CONFIRMED_SUCCESS: ${{ needs.hot.result == 'success' && needs.hot.outputs.counted_success == 'true' }}
-        run: python3 -m crawler.jobs.enforce_failure_streak
+      - name: 'Collection health v1: source:dcinside-singularity=${{ fromJSON(steps.collection_result.outputs.collection_health || ''{}'')[''source:dcinside-singularity''] || ''deferred'' }}'
+        if: always()
+        run: echo "Collection component evidence recorded."
+
+      - name: 'Collection health v1: source:dcinside-ai-utilize=${{ fromJSON(steps.collection_result.outputs.collection_health || ''{}'')[''source:dcinside-ai-utilize''] || ''deferred'' }}'
+        if: always()
+        run: echo "Collection component evidence recorded."

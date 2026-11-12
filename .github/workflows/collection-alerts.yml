@@ -1,0 +1,43 @@
+name: Collection alerts
+run-name: Collection alert / ${{ github.event.workflow_run.id }} / ${{ github.event.workflow_run.run_attempt }}
+
+on:
+  workflow_run:
+    workflows: [Run DC Hot crawl]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+# Serialize duplicate events for one upstream run without dropping other lanes.
+# Never execute code,
+# commands or artifacts supplied by the triggering run. No collection secrets.
+concurrency:
+  group: collection-alerts-${{ github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  assess:
+    if: >-
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted default-branch monitor
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Evaluate collection evidence
+        id: decision
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -m crawler.jobs.collection_alerts
+      - name: Notify collection incident
+        if: steps.decision.outputs.notify == 'true'
+        run: |
+          echo "::error title=Collection needs attention::See the collection alert decision and original run."
+          exit 1

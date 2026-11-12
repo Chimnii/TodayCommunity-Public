@@ -20,6 +20,7 @@ from crawler.fmkorea_browser import (
     FmkoreaChromeSession,
     HostSessionLock,
     assert_cdp_port_available,
+    describe_tcp_port,
     is_loopback_port_listening,
     is_cdp_endpoint_ready,
     prepare_dedicated_profile,
@@ -252,6 +253,30 @@ class DedicatedProfileTests(unittest.TestCase):
         try:
             with self.assertRaisesRegex(FmkoreaBrowserStartupError, "cannot bind.*errno="):
                 assert_cdp_port_available(port)
+        finally:
+            listener.close()
+
+    def test_tcp_snapshot_handles_localized_non_utf8_headers(self) -> None:
+        heading = "활성 연결".encode("cp949")
+        output = heading + b"\r\n  TCP  127.0.0.1:39225  0.0.0.0:0  LISTENING  1234\r\n"
+        output += b"  TCP  127.0.0.1:39226  0.0.0.0:0  LISTENING  9999\r\n"
+        with patch("crawler.fmkorea_browser.os.name", "nt"), patch(
+            "crawler.fmkorea_browser.subprocess.run",
+            return_value=Mock(returncode=0, stdout=output),
+        ) as process:
+            self.assertEqual(describe_tcp_port(39225), "local=127.0.0.1:39225 state=LISTENING pid=1234")
+            self.assertNotIn("text", process.call_args.kwargs)
+
+    def test_tcp_diagnostic_failure_never_replaces_original_bind_error(self) -> None:
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+        try:
+            with patch("crawler.fmkorea_browser.os.name", "nt"), patch(
+                "crawler.fmkorea_browser.subprocess.run", return_value=Mock(returncode=1, stdout=None)
+            ), self.assertRaisesRegex(FmkoreaBrowserStartupError, "cannot bind.*unavailable") as raised:
+                assert_cdp_port_available(port)
+            self.assertIsInstance(raised.exception.__cause__, OSError)
         finally:
             listener.close()
 

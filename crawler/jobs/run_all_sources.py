@@ -382,6 +382,8 @@ def main() -> None:
         )
 
     result = run_all_targets(mode=args.mode, client=client)
+    from crawler.collection_health import publish_health
+    publish_health(result, "dc")
     print(json.dumps(result, ensure_ascii=False, indent=2))
     if result["status"] != "completed":
         raise SystemExit(1)

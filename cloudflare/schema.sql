@@ -939,14 +939,14 @@ INSERT OR IGNORE INTO ai_practice_queue
 
 -- AI first-publication invariants (migration 022).
 -- Permanent guards also cover older collectors that omit the new column.
-CREATE TRIGGER ai_first_published_insert_guard
+CREATE TRIGGER IF NOT EXISTS ai_first_published_insert_guard
 BEFORE INSERT ON posts
 WHEN NEW.archive_key='ai-practice' AND NEW.first_published_at IS NOT NULL
 BEGIN
  SELECT RAISE(ABORT,'AI first publication is assigned by the database');
 END;
 
-CREATE TRIGGER ai_first_published_immutable
+CREATE TRIGGER IF NOT EXISTS ai_first_published_immutable
 BEFORE UPDATE ON posts
 WHEN OLD.archive_key='ai-practice' AND OLD.first_published_at IS NOT NULL
  AND NEW.first_published_at IS NOT OLD.first_published_at
@@ -954,7 +954,7 @@ BEGIN
  SELECT RAISE(ABORT,'AI first publication is immutable');
 END;
 
-CREATE TRIGGER ai_first_published_value_guard
+CREATE TRIGGER IF NOT EXISTS ai_first_published_value_guard
 BEFORE UPDATE OF first_published_at ON posts
 WHEN NEW.archive_key='ai-practice'
 BEGIN
@@ -975,7 +975,7 @@ BEGIN
   THEN RAISE(ABORT,'AI first publication requires valid include evaluation history') END;
 END;
 
-CREATE TRIGGER ai_first_published_on_insert
+CREATE TRIGGER IF NOT EXISTS ai_first_published_on_insert
 AFTER INSERT ON posts
 WHEN NEW.archive_key='ai-practice' AND NEW.status='active' AND NEW.first_published_at IS NULL
 BEGIN
@@ -991,7 +991,7 @@ BEGIN
  UPDATE posts SET first_published_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=NEW.id;
 END;
 
-CREATE TRIGGER ai_first_published_on_activation
+CREATE TRIGGER IF NOT EXISTS ai_first_published_on_activation
 AFTER UPDATE OF status,archive_key ON posts
 WHEN NEW.archive_key='ai-practice' AND NEW.status='active' AND NEW.first_published_at IS NULL
 BEGIN
@@ -1007,5 +1007,5 @@ BEGIN
  UPDATE posts SET first_published_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=NEW.id;
 END;
 
-CREATE INDEX idx_posts_ai_first_published ON posts(archive_key,first_published_at DESC,id DESC)
+CREATE INDEX IF NOT EXISTS idx_posts_ai_first_published ON posts(archive_key,first_published_at DESC,id DESC)
  WHERE archive_key='ai-practice' AND status='active';

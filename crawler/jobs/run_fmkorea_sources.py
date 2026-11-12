@@ -157,6 +157,8 @@ def main() -> None:
         max_pages_per_target=args.max_pages_per_target,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
+    from crawler.collection_health import publish_health
+    publish_health(result, "fm")
     if result["status"] != "completed":
         raise SystemExit(1)
 

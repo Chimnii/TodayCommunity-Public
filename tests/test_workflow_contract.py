@@ -154,13 +154,6 @@ class CrawlWorkflowContractTests(unittest.TestCase):
     def test_collection_workflows_use_independent_three_failure_gates(self) -> None:
         expected = (
             (
-                self.hot,
-                "hot",
-                "DC Hot crawl attempt",
-                "DC Hot failure streak gate",
-                "DC Hot",
-            ),
-            (
                 self.backfill,
                 "backfill",
                 "DC Backfill crawl attempt",
@@ -429,7 +422,7 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         }
         self.assertEqual(
             workflow_names,
-            {"scan-fmkorea.yml", "scan-game-news.yml", "scan-ai-practice.yml"},
+            {"scan-fmkorea.yml", "scan-game-news.yml", "scan-ai-practice.yml", "collection-alerts.yml"},
         )
 
     def test_ai_practice_queues_independently_and_uses_bounded_existing_runtime(self) -> None:
@@ -505,82 +498,15 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertIn('"--persist"', workflow)
         self.assertNotIn("playwright install", workflow)
 
-    def test_private_fmkorea_failure_gate_uses_the_same_free_runner(self) -> None:
+    def test_private_fmkorea_preserves_raw_result_for_shared_observer(self) -> None:
         if self.fmkorea is None:
             self.skipTest("running in the public mirror")
-
-        workflow = self.fmkorea
-        self.assertRegex(
-            workflow,
-            r"(?m)^\s{4}name: FM Hot crawl attempt\s*$",
-        )
-        self.assertRegex(
-            workflow,
-            r"(?m)^\s{4}continue-on-error: true\s*$",
-        )
-        self.assertEqual(
-            workflow.count(
-                "runs-on: [self-hosted, Windows, X64, todaycommunity-fm]"
-            ),
-            2,
-        )
-        self.assertEqual(
-            workflow.count(f'- name: "{FAILURE_STREAK_SUCCESS_MARKER}"'),
-            1,
-        )
-        self.assertEqual(
-            workflow.count(f'- name: "{FAILURE_STREAK_IGNORED_MARKER}"'),
-            1,
-        )
-        self.assertIn(
-            "steps.freshness.outcome == 'success' &&",
-            workflow,
-        )
-        self.assertIn(
-            "steps.freshness.outputs.should_run != 'true'",
-            workflow,
-        )
-        self.assertRegex(
-            workflow,
-            r"(?m)^\s{2}failure-streak-gate:\s*$",
-        )
-        gate = workflow.split("  failure-streak-gate:", maxsplit=1)[1]
-        self.assertIn("name: FM Hot failure streak gate", gate)
-        self.assertIn("if: always()", gate)
-        self.assertIn("needs: hot", gate)
-        self.assertIn(GITHUB_SCRIPT_PIN, gate)
-        self.assertEqual(
-            re.findall(r"(?m)^\s{6}- name:", gate),
-            ["      - name:"],
-        )
-        self.assertEqual(
-            re.findall(r"(?m)^\s+uses:\s*([^\s]+)", gate),
-            [GITHUB_SCRIPT_PIN.split(" ", maxsplit=1)[0]],
-        )
-        self.assertIn("github-token: ${{ github.token }}", gate)
-        self.assertIn("retries: 3", gate)
-        self.assertIn("listJobsForWorkflowRunAttempt", gate)
-        self.assertIn("completeJobPage", gate)
-        self.assertIn("jobs.length !== totalCount", gate)
-        self.assertNotIn("github.paginate(", gate)
-        self.assertIn("listWorkflowRuns", gate)
-        self.assertIn("GITHUB_RUN_ATTEMPT", gate)
-        self.assertIn("currentIsOutOfOrderRerun", gate)
-        self.assertIn("Ignoring out-of-order rerun", gate)
-        self.assertIn("attemptNumber > 1 &&", gate)
-        self.assertIn('attempts[0].status !== "completed"', gate)
-        self.assertNotIn('status: "completed"', gate)
-        self.assertIn("started_at", gate)
-        self.assertIn("created_at", gate)
-        self.assertIn('const attemptJobName = "FM Hot crawl attempt";', gate)
-        self.assertIn('const gateJobName = "FM Hot failure streak gate";', gate)
-        self.assertNotIn("actions/checkout", gate)
-        self.assertNotIn("actions/setup-python", gate)
-        self.assertNotIn("TC_FMKOREA_PYTHON", gate)
-        self.assertNotIn("crawler.jobs.enforce_failure_streak", gate)
-        self.assertNotIn("TC_CF_ACCOUNT_ID", gate)
-        self.assertNotIn("TC_CF_DATABASE_ID", gate)
-        self.assertNotIn("TC_CF_API_TOKEN", gate)
+        self.assertIn("name: FM Hot crawl attempt", self.fmkorea)
+        self.assertIn("continue-on-error: true", self.fmkorea)
+        self.assertNotIn("failure-streak-gate:", self.fmkorea)
+        self.assertIn("Collection health v1:", self.fmkorea)
+        self.assertIn("Failure streak: ignored run", self.fmkorea)
+        self.assertEqual(self.fmkorea.count("runs-on: [self-hosted, Windows, X64, todaycommunity-fm]"), 1)
 
     def test_private_fmkorea_workflow_fails_safe_before_checkout(self) -> None:
         if self.fmkorea is None:
