@@ -207,9 +207,34 @@ class CollectionDecisionTests(unittest.TestCase):
     def test_event_security_scope_and_no_observer_recursion(self):
         event=self.event(run(1));validate_event(event,"owner/repo")
         for key,value in [("path",".github/workflows/collection-alerts.yml"),("head_branch","evil"),
-                          ("event","pull_request"),("name","evil"),("head_repository",{"full_name":"attacker/repo"})]:
+                          ("event","pull_request"),("path","scan-ai-practice.yml"),
+                          ("status","in_progress"),("repository",{"full_name":"attacker/repo"}),
+                          ("head_repository",{"full_name":"attacker/repo"})]:
             bad=copy.deepcopy(event);bad['workflow_run'][key]=value
             with self.assertRaises(ValueError):validate_event(bad,"owner/repo")
+
+    def test_live_run_names_are_display_titles_not_workflow_identity(self):
+        # Shapes observed from the GitHub run API on 2026-11-12. Private lanes
+        # have dynamic run-name values; DC retains the static workflow title.
+        from collection_history_fixture import LIVE_RUN_EVENTS
+        for live_event in LIVE_RUN_EVENTS:
+            live_run = live_event['workflow_run']
+            repository = live_run['repository']['full_name']
+            filename = live_run['path'].split('/')[-1]
+            with self.subTest(filename=filename):
+                # All scope fields are the actual API values, not rewritten to
+                # our assumptions; only the completion envelope is synthesized.
+                validated, lane = validate_event(live_event, repository)
+                self.assertEqual(validated, live_run)
+                self.assertEqual(lane, LANES[filename])
+                client = Client([S])
+                client.jobs[(1, 1)][0]['name'] = LANES[filename][2]
+                event = self.event(client.runs[0])
+                event['workflow_run'].update(path=live_run['path'], name=live_run['name'])
+                result = run_gate(client, event, 'owner/repo', 90)
+                self.assertEqual(result.lane, LANES[filename][0])
+                self.assertEqual(result.health, S)
+                self.assertFalse(result.notify)
 
     def test_bad_history_is_monitor_error_not_a_false_recovery(self):
         client=Client([F,F,F]);client.jobs[(2,1)]=[]

@@ -44,7 +44,11 @@ def validate_event(event: dict, repository: str) -> tuple[dict, tuple[str, str, 
     run = event.get("workflow_run", {})
     filename = str(run.get("path", "")).removeprefix(".github/workflows/")
     lane = LANES.get(filename)
-    if (event.get("action") != "completed" or lane is None or run.get("name") != lane[1]
+    # GitHub's run.name can be the dynamic run-name (including dispatch time),
+    # not the workflow's static name. Trust its exact path and repository scope;
+    # the workflow_run subscription separately selects static workflow names.
+    if (event.get("action") != "completed" or lane is None
+            or run.get("path") != f".github/workflows/{filename}"
             or run.get("head_branch") != "main" or run.get("event") != "workflow_dispatch"
             or run.get("status") != "completed"
             or run.get("repository", {}).get("full_name") != repository
