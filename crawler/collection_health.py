@@ -36,21 +36,27 @@ def result_health(result: Mapping, lane: str) -> dict[str, str]:
                 raise ValueError("Unrecognized AI health source")
             pages = source.get("pages", [])
             fetches = [f for f in discovery.get("fetches", []) if f.get("source") == name]
-            failed = any(p.get("status") in {"failed", "blocked", "partial", "oversized"} for p in pages)
-            failed |= any(f.get("status") not in {"ok", "cached", "deferred_budget", "budget"}
+            def content_hold(fetch):
+                evidence = fetch.get("content_evidence") or {}
+                return (fetch.get("status") == "insufficient_content" and isinstance(evidence, dict)
+                    and evidence.get("reason") == "observed_public_text_too_short"
+                    and evidence.get("http_status") == 200 and type(evidence.get("text_chars")) is int
+                    and 0 <= evidence["text_chars"] < 20 and evidence.get("rendered_bodies", 0) >= 1)
+            failed = any(p.get("attempt_status", p.get("status")) in {"failed", "blocked", "partial", "oversized"} for p in pages)
+            failed |= any(f.get("status") not in {"ok", "cached", "deferred_budget", "budget"} and not content_hold(f)
                           and (f.get("status") != "partial" or f.get("error") not in NORMAL_BUDGET_ERRORS)
                           for f in fetches)
             # A retained source failure on cooldown must not masquerade as
             # recovery, nor add another failed *attempt* on every hourly tick.
-            unresolved = any(p.get("scope", {}).get("failures") for p in pages)
+            unresolved = any(p.get("scope", {}).get("failures") for p in pages) or bool(source.get("unresolved_acquisition"))
             budget = (source.get("model_input_status") == "deferred"
                       or any(p.get("status") in {"budget", "deferred_budget"} for p in pages)
                       or any(f.get("status") in {"budget", "deferred_budget"}
                              or (f.get("status") == "partial" and f.get("error") in NORMAL_BUDGET_ERRORS)
                              for f in fetches))
-            attempted = any(p.get("status") in {"ok", "empty"} for p in pages) or any(
-                f.get("status") in {"ok", "cached"} for f in fetches)
-            if source.get("status") == "failed":
+            attempted = any(p.get("attempt_status", p.get("status")) in {"ok", "empty"} for p in pages) or any(
+                f.get("status") in {"ok", "cached"} or content_hold(f) for f in fetches)
+            if source.get("status") == "failed" and not any("attempt_status" in p for p in pages):
                 failed = True
             health["source:" + name] = "failure" if failed else (
                 "deferred" if unresolved or budget or not attempted else "success")

@@ -526,5 +526,40 @@ class CliHealthTests(unittest.TestCase):
                 self.assertIn('"source:source":"deferred"',(Path(td)/'out').read_text())
 
 
+class AIAcquisitionRecoveryHealthTests(unittest.TestCase):
+    def test_unresolved_candidate_survives_other_success_without_new_failure(self):
+        result = {'status': 'partial', 'discovery': {'sources': [{'source': 'gastown', 'status': 'ok',
+            'pages': [{'status': 'ok', 'attempt_status': 'ok'}], 'unresolved_acquisition': {'items': 1}}],
+            'fetches': [{'source': 'gastown', 'status': 'ok'}]}}
+        health = result_health(result, 'ai')
+        self.assertEqual(health['source:gastown'], 'deferred')
+        failure = {'pipeline': 'success', 'source:gastown': 'failure'}
+        client = Client([failure, failure, health, failure])
+        decision = evaluate(client, client.runs[0], LANE)
+        self.assertTrue(decision.notify)
+        self.assertEqual(decision.streaks['source:gastown'], 3)
+        result['discovery']['sources'][0].pop('unresolved_acquisition')
+        recovery = result_health(result, 'ai')
+        self.assertEqual(recovery['source:gastown'], 'success')
+        client = Client([failure, failure, health, recovery, failure])
+        self.assertEqual(evaluate(client, client.runs[0], LANE).streaks['source:gastown'], 1)
+
+    def test_retained_coverage_does_not_repeat_failed_attempt_or_recover(self):
+        page = {'status': 'partial', 'attempt_status': 'ok', 'scope': {'failures': [{'error': 'HTTP404'}]}}
+        result = {'status': 'partial', 'discovery': {'sources': [{'source': 'gpters', 'status': 'failed', 'pages': [page]}]}}
+        self.assertEqual(result_health(result, 'ai')['source:gpters'], 'deferred')
+        page['attempt_status'] = 'failed'
+        self.assertEqual(result_health(result, 'ai')['source:gpters'], 'failure')
+
+    def test_content_hold_requires_http_and_rendered_text_evidence(self):
+        fetch = {'source': 'paperclip', 'status': 'insufficient_content'}
+        result = {'status': 'partial', 'discovery': {'sources': [{'source': 'paperclip', 'status': 'partial', 'pages': []}], 'fetches': [fetch]}}
+        self.assertEqual(result_health(result, 'ai')['source:paperclip'], 'failure')
+        fetch['content_evidence'] = {'reason': 'observed_public_text_too_short', 'http_status': 200, 'text_chars': 1, 'rendered_bodies': 1}
+        self.assertEqual(result_health(result, 'ai')['source:paperclip'], 'success')
+        fetch['content_evidence']['http_status'] = 206
+        self.assertEqual(result_health(result, 'ai')['source:paperclip'], 'failure')
+
+
 if __name__ == '__main__':
     unittest.main()
