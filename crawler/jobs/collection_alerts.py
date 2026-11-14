@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from crawler.collection_health import CONTRACT, PREFIX, validate_health
+from crawler.collection_health import COMMUNITY_BUDGET_CONTRACT, CONTRACT, PREFIX, validate_health
 from crawler.jobs.enforce_failure_streak import GitHubActionsClient, GitHubApiError
 
 LANES = {
@@ -34,6 +34,7 @@ class Decision:
     alert_components: list[str] = field(default_factory=list)
     reason: str = "observed"
     suppression: str = ""
+    history_boundary: str = ""
 
     @property
     def notify(self):
@@ -134,7 +135,13 @@ def evaluate(client, current: dict, lane: tuple[str, str, str]) -> Decision:
     if latest.get("run_attempt") != current.get("run_attempt") or latest.get("status") != "completed":
         decision.reason = "superseded_attempt"
         return decision
-    decision.health = classify(latest, client.get_attempt_jobs(current["id"], current["run_attempt"]), lane[2])
+    current_jobs = client.get_attempt_jobs(current["id"], current["run_attempt"])
+    decision.health = classify(latest, current_jobs, lane[2])
+    def budget_v2(rows):
+        return any(j.get("name") == lane[2] and any(
+            s.get("name") == COMMUNITY_BUDGET_CONTRACT and s.get("conclusion") == "success"
+            for s in j.get("steps", [])) for j in rows)
+    corrected_community = lane[0] in {"fm", "dc"} and budget_v2(current_jobs)
     active = {k for k, v in decision.health.items() if v in {"failure", "critical"}}
     if not active:
         decision.reason = "healthy_or_deferred"
@@ -172,7 +179,16 @@ def evaluate(client, current: dict, lane: tuple[str, str, str]) -> Decision:
                 and not any(s.get("name") == CONTRACT or s.get("name", "").startswith(PREFIX)
                             for s in j.get("steps", [])) for j in prior_jobs))
             for key in list(unresolved):
-                if key.startswith("source:") and legacy:
+                if (key.startswith("source:") and corrected_community
+                        and run["id"] != current["id"] and key in health
+                        and not budget_v2(prior_jobs)):
+                    # Old source markers conflate ordinary runtime exhaustion
+                    # with real failures. Do not carry that ambiguous count
+                    # into the corrected contract or call it source recovery.
+                    decision.history_boundary = "community_budget_v2"
+                    unresolved.remove(key)
+                    continue
+                if key.startswith("source:") and legacy and not corrected_community:
                     # Source-level observations start at the v1 contract. Do
                     # not scan thousands of unobservable pre-deployment runs.
                     unresolved.remove(key)

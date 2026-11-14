@@ -44,6 +44,9 @@ jobs:
       - name: Collection health contract v1
         run: echo "Collection result and notification policy are separate."
 
+      - name: Collection health community budget v2
+        run: echo "Source incident counts use corrected runtime-budget semantics."
+
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:

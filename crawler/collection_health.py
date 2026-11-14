@@ -11,6 +11,7 @@ from collections.abc import Mapping
 
 PREFIX = "Collection health v1: "
 CONTRACT = "Collection health contract v1"
+COMMUNITY_BUDGET_CONTRACT = "Collection health community budget v2"
 STATES = {"success", "failure", "deferred", "critical"}
 AI_SOURCES = {"hermes", "paperclip", "openclaw", "gastown", "pal", "langchain",
               "simon-willison", "anthropic", "gpters", "latent-space", "massgen"}
@@ -72,9 +73,12 @@ def result_health(result: Mapping, lane: str) -> dict[str, str]:
                 continue
             s = row.get("status")
             partial_phases = [p for p in row.get("phases", []) if p.get("status") == "partial"]
-            budget_partial = bool(partial_phases) and all(p.get("stop_reason") in {
-                "cycle_deadline", "hot_deadline",
-            } for p in partial_phases)
+            budget_partial = (bool(partial_phases) and not row.get("error")
+                and all(p.get("status") in {"partial", "completed", "skipped"} for p in row.get("phases", []))
+                and all(p.get("stop_reason") in {
+                "cycle_deadline", "hot_deadline", "request_timeout_budget",
+                "deep_time_reservation",
+            } for p in partial_phases))
             health["source:" + name] = (
                 "failure" if s in {"failed", "blocked"} or row.get("persistence_error") or row.get("persistence_warnings") else
                 ("deferred" if budget_partial else "failure") if s == "partial" else

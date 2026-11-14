@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from crawler.collection_health import CONTRACT, PREFIX, publish_health, result_health
+from crawler.collection_health import COMMUNITY_BUDGET_CONTRACT, CONTRACT, PREFIX, publish_health, result_health
 from crawler.jobs.collection_alerts import (
     ALERT_STEP, LANES, OBSERVER, classify, evaluate, run_gate, validate_event, was_notified,
 )
@@ -64,6 +64,67 @@ D = {"pipeline": "deferred"}
 
 
 class CollectionDecisionTests(unittest.TestCase):
+    def test_community_budget_v2_starts_source_count_without_rewriting_old_failures(self):
+        for filename in ['scan-dcinside.yml', 'scan-fmkorea.yml']:
+            lane = LANES[filename]
+            for new_failures in [1, 2, 3]:
+                with self.subTest(lane=lane[0], new_failures=new_failures):
+                    source = 'source:test'
+                    client = Client([{'pipeline':'success',source:'failure'}] * (5 + new_failures))
+                    for (run_id, _), rows in client.jobs.items():
+                        rows[0]['name'] = lane[2]
+                        if run_id > 5:
+                            rows[0]['steps'].append({'name':COMMUNITY_BUDGET_CONTRACT,'conclusion':'success'})
+                    before = copy.deepcopy(client.jobs)
+                    result = evaluate(client, client.runs[0], lane)
+                    self.assertEqual(result.streaks, {source:new_failures})
+                    self.assertEqual(result.notify, new_failures == 3)
+                    self.assertEqual(result.history_boundary, 'community_budget_v2')
+                    self.assertEqual(client.jobs, before)
+
+    def test_community_budget_boundary_does_not_reset_pipeline_or_other_lanes(self):
+        for filename in ['scan-dcinside.yml','scan-ai-practice.yml','scan-game-news.yml']:
+            lane = LANES[filename]
+            source = 'pipeline' if lane[0] == 'dc' else 'source:test'
+            client = Client([{'pipeline':'success',source:'failure'}] * 3)
+            for rows in client.jobs.values():rows[0]['name'] = lane[2]
+            client.jobs[(3,1)][0]['steps'].append({'name':COMMUNITY_BUDGET_CONTRACT,'conclusion':'success'})
+            result = evaluate(client,client.runs[0],lane)
+            self.assertEqual(result.streaks,{source:3})
+            self.assertTrue(result.notify)
+            self.assertEqual(result.history_boundary,'')
+
+    def test_new_contract_real_504_with_budget_deferral_and_success_recovery(self):
+        from collection_history_fixture import COMMUNITY_BUDGET_RESULTS
+        failure = result_health(COMMUNITY_BUDGET_RESULTS[-1]['result'],'dc')
+        deferred = result_health(COMMUNITY_BUDGET_RESULTS[1]['result'],'dc')
+        success = result_health(COMMUNITY_BUDGET_RESULTS[0]['result'],'dc')
+        for states, count, notify in [([failure,deferred,failure,deferred,failure],3,True),
+                                      ([failure,deferred,success,failure],1,False)]:
+            client=Client([failure]*5+states)
+            lane=LANES['scan-dcinside.yml']
+            for (run_id,_), rows in client.jobs.items():
+                rows[0]['name']=lane[2]
+                if run_id>5: rows[0]['steps'].append({'name':COMMUNITY_BUDGET_CONTRACT,'conclusion':'success'})
+            decision=evaluate(client,client.runs[0],lane)
+            self.assertEqual(decision.streaks,{'source:dcinside-singularity':count})
+            self.assertEqual(decision.notify,notify)
+
+    def test_v2_startup_failure_without_source_evidence_is_not_old_contract_boundary(self):
+        for no_jobs in [True,False]:
+            with self.subTest(no_jobs=no_jobs):
+                lane=LANES['scan-dcinside.yml']
+                client=Client([{'pipeline':'success','source:test':'failure'}]*4)
+                for rows in client.jobs.values():
+                    rows[0]['name']=lane[2]
+                    rows[0]['steps'].append({'name':COMMUNITY_BUDGET_CONTRACT,'conclusion':'success'})
+                client.jobs[(2,1)]=[] if no_jobs else jobs(conclusion='failure',name=lane[2])
+                next(r for r in client.runs if r['id']==2)['conclusion']='failure'
+                decision=evaluate(client,client.runs[0],lane)
+                self.assertEqual(decision.streaks,{'source:test':3})
+                self.assertTrue(decision.notify)
+                self.assertEqual(decision.history_boundary,'')
+
     def test_new_source_history_stops_at_legacy_contract_boundary(self):
         client=Client([S]*1100+[{"pipeline":"success","source:gpters":"failure"}])
         for i in range(1,1101):client.jobs[(i,1)]=jobs()
@@ -263,8 +324,35 @@ class CollectionDecisionTests(unittest.TestCase):
 
 
 class ResultHealthTests(unittest.TestCase):
+    def test_budget_reason_never_masks_transport_or_persistence_error(self):
+        base = {'target':'dcinside-singularity','status':'partial',
+                'phases':[{'status':'partial','stop_reason':'request_timeout_budget'}]}
+        for addition in [{'error':'Source returned transient HTTP 504'},
+                         {'error':'CrawlTimeoutError'}, {'status':'failed'},
+                         {'persistence_error':'database failure'}, {'persistence_warnings':['write failed']}]:
+            with self.subTest(addition=addition):
+                result = {'status':'completed','results':[{**base,**addition}]}
+                self.assertEqual(result_health(result,'dc')['source:dcinside-singularity'],'failure')
+        result = {'status':'completed','results':[{**base,'phases':base['phases']+[{'status':'failed','stop_reason':'transport timeout'}]}]}
+        self.assertEqual(result_health(result,'dc')['source:dcinside-singularity'],'failure')
+
+    def test_live_dc_budget_incidents_replay_without_losing_real_504(self):
+        from collection_history_fixture import COMMUNITY_BUDGET_RESULTS
+        client = Client([])
+        states=[]
+        for fixture in COMMUNITY_BUDGET_RESULTS:
+            health = result_health(fixture['result'],'dc')
+            self.assertEqual(health,fixture['expected'])
+            states.append(health)
+            client = Client(states)
+            for rows in client.jobs.values(): rows[0]['name']=LANES['scan-dcinside.yml'][2]
+            decision=evaluate(client,client.runs[0],LANES['scan-dcinside.yml'])
+            self.assertFalse(decision.notify)
+        self.assertEqual(decision.streaks,{'source:dcinside-singularity':1})
+
     def test_community_partial_has_reason_specific_semantics(self):
         for reason,expected in [('hot_deadline','deferred'),('cycle_deadline','deferred'),
+                                ('request_timeout_budget','deferred'),('deep_time_reservation','deferred'),
                                 ('page_order_not_coverage_safe','failure'),('unknown','failure')]:
             with self.subTest(reason=reason):
                 result={'status':'completed','results':[{'target':'dcinside-singularity','status':'partial',
