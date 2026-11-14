@@ -544,6 +544,20 @@ class AIAcquisitionRecoveryHealthTests(unittest.TestCase):
         client = Client([failure, failure, health, recovery, failure])
         self.assertEqual(evaluate(client, client.runs[0], LANE).streaks['source:gastown'], 1)
 
+    def test_aggregate_view_verification_alone_does_not_reset_source_failure_history(self):
+        aggregate = {'status': 'ok', 'attempt_status': 'ok',
+                     'scope': {'aggregate_view': {'classification': 'verified_noncanonical_aggregate'}}}
+        source = {'source': 'gpters', 'pages': [aggregate]}
+        result = {'discovery': {'sources': [source]}}
+        self.assertEqual(result_health(result, 'ai')['source:gpters'], 'deferred')
+        source['pages'].append({'status': 'failed', 'attempt_status': 'failed'})
+        self.assertEqual(result_health(result, 'ai')['source:gpters'], 'failure')
+        source['pages'][-1] = {'status': 'ok', 'scope': {'aggregate_view': None}}
+        source['unresolved_acquisition'] = {'items': 1}
+        self.assertEqual(result_health(result, 'ai')['source:gpters'], 'deferred')
+        source.pop('unresolved_acquisition')
+        self.assertEqual(result_health(result, 'ai')['source:gpters'], 'success')
+
     def test_retained_coverage_does_not_repeat_failed_attempt_or_recover(self):
         page = {'status': 'partial', 'attempt_status': 'ok', 'scope': {'failures': [{'error': 'HTTP404'}]}}
         result = {'status': 'partial', 'discovery': {'sources': [{'source': 'gpters', 'status': 'failed', 'pages': [page]}]}}

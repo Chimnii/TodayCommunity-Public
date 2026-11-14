@@ -54,7 +54,8 @@ def result_health(result: Mapping, lane: str) -> dict[str, str]:
                       or any(f.get("status") in {"budget", "deferred_budget"}
                              or (f.get("status") == "partial" and f.get("error") in NORMAL_BUDGET_ERRORS)
                              for f in fetches))
-            attempted = any(p.get("attempt_status", p.get("status")) in {"ok", "empty"} for p in pages) or any(
+            attempted = any(p.get("attempt_status", p.get("status")) in {"ok", "empty"}
+                            and not p.get("scope", {}).get("aggregate_view") for p in pages) or any(
                 f.get("status") in {"ok", "cached"} or content_hold(f) for f in fetches)
             if source.get("status") == "failed" and not any("attempt_status" in p for p in pages):
                 failed = True
