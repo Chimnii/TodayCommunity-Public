@@ -422,7 +422,7 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         }
         self.assertEqual(
             workflow_names,
-            {"scan-fmkorea.yml", "scan-game-news.yml", "scan-ai-practice.yml", "collection-alerts.yml"},
+            {"scan-fmkorea.yml", "scan-game-news.yml", "scan-ai-practice.yml"},
         )
 
     def test_ai_practice_queues_independently_and_uses_bounded_existing_runtime(self) -> None:
@@ -498,15 +498,15 @@ class CrawlWorkflowContractTests(unittest.TestCase):
         self.assertIn('"--persist"', workflow)
         self.assertNotIn("playwright install", workflow)
 
-    def test_private_fmkorea_preserves_raw_result_for_shared_observer(self) -> None:
-        if self.fmkorea is None:
-            self.skipTest("running in the public mirror")
-        self.assertIn("name: FM Hot crawl attempt", self.fmkorea)
-        self.assertIn("continue-on-error: true", self.fmkorea)
-        self.assertNotIn("failure-streak-gate:", self.fmkorea)
-        self.assertIn("Collection health v1:", self.fmkorea)
-        self.assertIn("Failure streak: ignored run", self.fmkorea)
-        self.assertEqual(self.fmkorea.count("runs-on: [self-hosted, Windows, X64, todaycommunity-fm]"), 1)
+    def test_hot_and_curation_workflows_report_job_failures_directly(self) -> None:
+        paths = [WORKFLOWS / "scan-dcinside.yml"]
+        if IS_PRIVATE_SOURCE:
+            paths.extend(ACTIVE_PRIVATE_WORKFLOWS.glob("scan-*.yml"))
+        for path in paths:
+            with self.subTest(workflow=path.name):
+                workflow = path.read_text(encoding="utf-8")
+                self.assertNotRegex(workflow, r"(?m)^    continue-on-error: true$")
+                self.assertNotIn("failure-streak-gate:", workflow)
 
     def test_private_fmkorea_workflow_fails_safe_before_checkout(self) -> None:
         if self.fmkorea is None:

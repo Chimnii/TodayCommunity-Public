@@ -1,4 +1,4 @@
-"""Non-mutating collection evidence for notification policy (not quality policy).
+"""Per-run collection diagnostics for the Actions summary and CLI outputs.
 
 Only bounded, allowlisted component identifiers/statuses reach Actions metadata.
 Article text, URLs, error strings and credentials never become workflow commands.
@@ -9,9 +9,6 @@ import json
 import os
 from collections.abc import Mapping
 
-PREFIX = "Collection health v1: "
-CONTRACT = "Collection health contract v1"
-COMMUNITY_BUDGET_CONTRACT = "Collection health community budget v2"
 STATES = {"success", "failure", "deferred", "critical"}
 AI_SOURCES = {"hermes", "paperclip", "openclaw", "gastown", "pal", "langchain",
               "simon-willison", "anthropic", "gpters", "latent-space", "massgen"}
@@ -120,13 +117,12 @@ def _publish_health(result: Mapping, lane: str) -> None:
             stream.write("collection_health=" + encoded + "\n")
     if path := os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(path, "a", encoding="utf-8") as stream:
-            stream.write("\nCollection evidence (notification policy is separate):\n\n")
+            stream.write("\nCollection evidence:\n\n")
             stream.write("```json\n" + encoded + "\n```\n")
 
 
 def publish_health(result: Mapping, lane: str) -> None:
-    # Diagnostics must never overwrite the original CLI result/exception. A
-    # missing marker is explicitly counted by the new workflow, not assumed OK.
+    # Preserve the collector's original result if the diagnostics file is unavailable.
     try:
         _publish_health(result, lane)
     except (OSError, ValueError, TypeError, KeyError):
