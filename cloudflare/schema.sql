@@ -896,6 +896,10 @@ CREATE INDEX IF NOT EXISTS idx_ai_practice_queue_ready
  ON ai_practice_queue(status, next_attempt_at, work_kind, source_key, last_attempt_at, discovered_at);
 CREATE INDEX IF NOT EXISTS idx_ai_practice_queue_source
  ON ai_practice_queue(source_key,work_kind,last_attempt_at);
+CREATE INDEX IF NOT EXISTS idx_ai_queue_pick
+ON ai_practice_queue(source_key, work_kind, coalesce(last_attempt_at,''), discovered_at, item_id)
+WHERE processed_instruction_version IS NULL OR CASE WHEN json_valid(descriptor_json) THEN json_type(descriptor_json,'$.metadata.followup_cursor')='object' ELSE 0 END;
+
 CREATE TABLE IF NOT EXISTS ai_practice_discovery_manifests (
  manifest_id TEXT PRIMARY KEY,
  source_key TEXT NOT NULL REFERENCES sources(source_key),
