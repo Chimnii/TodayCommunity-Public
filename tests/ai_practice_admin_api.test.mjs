@@ -220,6 +220,7 @@ test("admin reads the seeded full document and distinct per-source pending/backf
   assert.equal(result.application.stale_count, 0);
   const hermes = result.application.sources.filter(item => item.source_key === "ai-practice-hermes");
   assert.equal(hermes.length, 1, "recent and backfill lanes do not duplicate queue counts");
+  assert.equal(Object.hasOwn(hermes[0].backfill, "discovered_count"), false);
   assert.equal(hermes[0].backfill.status, "partial");
   assert.equal(hermes[0].backfill.cursor_json, '{"page":2}');
   db.sqlite.exec("UPDATE ai_practice_queue SET cache_invalidated=1,status='pending' WHERE item_id='item-2';");

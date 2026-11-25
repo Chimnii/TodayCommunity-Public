@@ -74,7 +74,7 @@ async function loadApplication(db, document) {
       COALESCE(q.blocked_count, 0) AS blocked_count, COALESCE(q.oversized_count, 0) AS oversized_count,
       COALESCE(q.review_count, 0) AS review_count,
       c.last_success_at, c.last_attempt_at, c.last_status,
-      d.status AS discovery_status, d.complete, d.discovered_count, d.last_discovered_at,
+      d.status AS discovery_status, d.complete, d.last_discovered_at,
       d.last_error, d.cursor_json, d.scope_json
     FROM sources s
     LEFT JOIN (SELECT source_key, COUNT(*) AS total_count,
@@ -101,7 +101,7 @@ async function loadApplication(db, document) {
     last_success_at: row.last_success_at || null, last_attempt_at: row.last_attempt_at || null,
     last_status: row.last_status || "not_started",
     backfill: { status: row.discovery_status || "not_started", complete: Number(row.complete) === 1,
-      discovered_count: Number(row.discovered_count || 0), last_discovered_at: row.last_discovered_at || null,
+      last_discovered_at: row.last_discovered_at || null,
       last_error: row.last_error || null, cursor_json: row.cursor_json || null, scope_json: row.scope_json || "{}" } }));
   const counts = Object.fromEntries(["total_count", "manifest_pending_count", "pending_count", "stale_count", "reassessment_count", "preserved_count", "failed_count", "oversized_count", "review_count"]
     .map(key => [key, sources.reduce((sum, source) => sum + source[key], 0)]));

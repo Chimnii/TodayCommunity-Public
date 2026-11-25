@@ -16,7 +16,7 @@ function payload(content = privateContent, revision = 1, changed = true) {
       failed_count: 2, oversized_count: 1, review_count: 1,
       sources: [{ source_key: "ai-practice-hermes", name: "Hermes", total_count: 12, manifest_pending_count: 300, pending_count: 7, failed_count: 2,
         oversized_count: 1, review_count: 1, last_status: "partial", last_attempt_at: "2026-11-07T00:00:00Z",
-        backfill: { status: "partial", complete: false, discovered_count: 12,
+        backfill: { status: "partial", complete: false,
           cursor_json: '<img src=x onerror="bad()">', scope_json: '{"kind":"archive"}', last_error: "<script>bad()</script>" } }] },
     save: { changed, revision } };
 }
