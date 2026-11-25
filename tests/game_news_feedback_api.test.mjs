@@ -309,6 +309,55 @@ const writeHeaders = {
   "X-TodayCommunity-Write": "1",
 };
 
+test("feedback seeks requested posts and full candidate hashes while preserving owner state", async t => {
+  const sqlite = new DatabaseSync(":memory:");
+  t.after(() => sqlite.close());
+  sqlite.exec(await readFile(new URL("../cloudflare/schema.sql", import.meta.url), "utf8"));
+  const hash = "a".repeat(64);
+  const legacyKey = "b".repeat(32);
+  const wrongPrefix = "c".repeat(32);
+  sqlite.prepare(`INSERT INTO game_news_candidates
+    (canonical_url,url_sha256,source_key,title,publisher,topic,summary,discovery_reason,
+     first_seen_at,last_seen_at,first_run_id,last_run_id)
+    VALUES ('https://example.test/game',?,'game-news-inven','title','publisher','topic',
+            'summary','reason','now','now','run','run')`).run(hash);
+  const insert = sqlite.prepare(`INSERT INTO posts
+    (source_key,archive_key,external_post_id,canonical_post_key,post_url,title,
+     created_at,created_at_raw,fetched_at,first_seen_at,last_seen_at,qualifies_by,status)
+    VALUES ('game-news-inven','game-news',?,?,'https://example.test/game','title',
+            'now','now','now','now','now','test','hidden')`);
+  insert.run(legacyKey, `game-news:${hash}`);
+  insert.run(wrongPrefix, `bad-newsx:${hash}`);
+  sqlite.exec(`INSERT INTO game_news_feedback
+    (candidate_id,feedback_type,actor,idempotency_key,created_at,reason_code) VALUES
+    (1,'like','owner:primary-v1','first','now',NULL),
+    (1,'clear','owner:primary-v1','second','now','cleared'),
+    (1,'dislike','other','third','now',NULL)`);
+
+  let plan;
+  const db = {
+    prepare(sql) {
+      return {
+        bind(...args) {
+          const steps = sqlite.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(...args);
+          plan = steps.map(row => row.detail).join("\n");
+          return { all: () => ({ results: sqlite.prepare(sql).all(...args) }) };
+        },
+      };
+    },
+  };
+  const keys = [wrongPrefix, legacyKey];
+  const params = new URLSearchParams(keys.map(key => ["post_key", key]));
+  const response = await request(`feedback?${params}`, { db });
+  assert.equal(response.status, 200);
+  assert.deepEqual((await body(response)).items, [
+    { post_key: wrongPrefix, rating_level: null, feedback_version: 0, reason_code: null, hidden: false },
+    { post_key: legacyKey, rating_level: null, feedback_version: 2, reason_code: "cleared", hidden: true },
+  ]);
+  assert.match(plan, /SEARCH p .*source_key=\? AND external_post_id=\?/u);
+  assert.match(plan, /SEARCH c .*url_sha256=\?/u);
+});
+
 test("hidden count is private, bounded like the list, and does not load article content", async () => {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec(`CREATE TABLE posts (
