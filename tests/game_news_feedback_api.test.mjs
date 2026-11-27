@@ -354,7 +354,7 @@ test("feedback seeks requested posts and full candidate hashes while preserving 
     { post_key: wrongPrefix, rating_level: null, feedback_version: 0, reason_code: null, hidden: false },
     { post_key: legacyKey, rating_level: null, feedback_version: 2, reason_code: "cleared", hidden: true },
   ]);
-  assert.match(plan, /SEARCH p .*source_key=\? AND external_post_id=\?/u);
+  assert.match(plan, /SEARCH p .*idx_game_posts_feedback_key .*external_post_id=\?/u);
   assert.match(plan, /SEARCH c .*url_sha256=\?/u);
 });
 

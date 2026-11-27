@@ -168,45 +168,9 @@ function normalizeSubjectOptions(rawValue) {
     .slice(0, MAX_SUBJECT_OPTIONS);
 }
 
-function buildPostFilter(
-  target,
-  query,
-  minUpvotes,
-  minComments,
-  subject,
-  topicId,
-  excludedArchives
-) {
-  let clauses;
-  let bindings;
-  if (target === ALL_TARGET && excludedArchives.length > 0) {
-    const placeholders = excludedArchives.map(() => "?").join(", ");
-    clauses = [
-      `EXISTS (
-        SELECT 1
-        FROM archives AS public_archive
-        WHERE public_archive.archive_key = posts.archive_key
-          AND public_archive.is_public = 1
-          AND public_archive.archive_key NOT IN (${placeholders})
-      )`,
-      "status = 'active'",
-    ];
-    bindings = [...excludedArchives];
-  } else if (target === ALL_TARGET) {
-    clauses = [
-      `EXISTS (
-        SELECT 1
-        FROM archives AS public_archive
-        WHERE public_archive.archive_key = posts.archive_key
-          AND public_archive.is_public = 1
-      )`,
-      "status = 'active'",
-    ];
-    bindings = [];
-  } else {
-    clauses = ["archive_key = ?", "status = 'active'"];
-    bindings = [target];
-  }
+function buildCandidateFilter(query, minUpvotes, minComments, subject, topicId) {
+  const clauses = [];
+  const bindings = [];
 
   if (minUpvotes > 0) {
     clauses.push("upvotes >= ?");
@@ -244,7 +208,7 @@ function buildPostFilter(
   }
 
   return {
-    sql: clauses.join("\n          AND "),
+    sql: clauses.join("\n          AND ") || "1",
     bindings,
   };
 }
@@ -726,15 +690,6 @@ export async function onRequestGet(context) {
       return jsonResponse({ error: "First publication ordering requires the AI practice target." }, 400);
     }
     const sort = Object.hasOwn(SORT_COLUMNS, requestedSort) ? requestedSort : defaultSort;
-    const filter = buildPostFilter(
-      target,
-      query,
-      minUpvotes,
-      minComments,
-      subject,
-      topicId,
-      excludedArchives
-    );
     const filteredMode = hasPostFilters({
       query,
       minUpvotes,
@@ -991,33 +946,30 @@ export async function onRequestGet(context) {
     }
     const requestedPostIndex = batchStatements.length;
     const cursorBoundary = buildCursorBoundary(sort, cursor);
-    const postFilterSql = cursorBoundary.sql
-      ? `${filter.sql}\n            AND ${cursorBoundary.sql}`
-      : filter.sql;
     const columns = `archive_key, source_key, external_post_id, subject, title, post_url,
       original_title, summary, publisher, content_kind, evidence_level,
       created_at, created_at_raw, created_at_basis, created_at_precision, first_published_at,
       upvotes, comments, qualifies_by, fetched_at, first_seen_at, last_seen_at,
       status, id AS cursor_id`;
     if (sequentialMode) {
+      const filter = buildCandidateFilter(query, minUpvotes, minComments, subject, topicId);
       const candidateBindings = [];
-      // Seek each public archive independently before merging. Private and
+      // SQLite merges the ordered archive index scans up to one shared limit. Private and
       // excluded rows must never become an exposed continuation boundary.
       const candidateArchives = allArchives ? relevantStatsRows.map((row) => row.archive_key) : [target];
       const candidateQueries = candidateArchives.map((archiveKey) => {
         candidateBindings.push(archiveKey, ...cursorBoundary.bindings, archiveKey);
-        return `SELECT * FROM (SELECT * FROM posts
+        return `SELECT * FROM posts
           WHERE posts.status = 'active' AND posts.archive_key = ?
           ${cursorBoundary.sql ? `AND ${cursorBoundary.sql}` : ""}
-          AND EXISTS (SELECT 1 FROM archives WHERE archive_key = ? AND is_public = 1)
-          ORDER BY ${buildOrderClause(sort, direction)} LIMIT ${candidateLimit})`;
+          AND EXISTS (SELECT 1 FROM archives WHERE archive_key = ? AND is_public = 1)`;
       });
       const candidateSql = candidateQueries.length
         ? candidateQueries.join(" UNION ALL ")
         : "SELECT * FROM posts WHERE 0";
       batchStatements.push(db.prepare(`
         WITH candidates AS MATERIALIZED (
-          SELECT * FROM (${candidateSql})
+          ${candidateSql}
           ORDER BY ${buildOrderClause(sort, direction)} LIMIT ${candidateLimit}
         )
         SELECT ${columns}, CASE WHEN ${filter.sql} THEN 1 ELSE 0 END AS matches_filter
@@ -1026,11 +978,10 @@ export async function onRequestGet(context) {
       `).bind(...candidateBindings, ...filter.bindings));
     } else {
       batchStatements.push(db.prepare(`
-        SELECT ${columns} FROM posts WHERE ${postFilterSql}
+        SELECT ${columns} FROM posts WHERE archive_key = ? AND status = 'active'
         AND EXISTS (SELECT 1 FROM archives WHERE archive_key = posts.archive_key AND is_public = 1)
         ORDER BY ${buildOrderClause(sort, direction)} LIMIT ? OFFSET ?
-      `).bind(...filter.bindings, ...cursorBoundary.bindings,
-        visibleLimit, cursor ? 0 : reversePage ? reverseOffset : offset));
+      `).bind(target, visibleLimit, reversePage ? reverseOffset : offset));
     }
 
     const batchResults = await db.batch(batchStatements);

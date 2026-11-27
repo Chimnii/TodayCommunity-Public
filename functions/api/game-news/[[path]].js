@@ -187,7 +187,6 @@ async function listFeedbackState(db, actor, postKeys) {
     return [];
   }
   const placeholders = postKeys.map(() => "?").join(", ");
-  // Start with source keys so SQLite can seek posts by (source_key, external_post_id).
   // Match the full candidate hash even when a legacy external ID differs from its prefix.
   const rows = await queryAll(
     db,
@@ -204,8 +203,7 @@ async function listFeedbackState(db, actor, postKeys) {
       f.id AS feedback_version,
       f.reason_code,
       CASE WHEN p.status = 'hidden' THEN 1 ELSE 0 END AS hidden
-    FROM sources AS s
-    CROSS JOIN posts AS p ON p.source_key = s.source_key
+    FROM posts AS p INDEXED BY idx_game_posts_feedback_key
     JOIN game_news_candidates AS c
       ON c.url_sha256 = substr(p.canonical_post_key, length('game-news:') + 1)
       AND p.canonical_post_key = 'game-news:' || c.url_sha256

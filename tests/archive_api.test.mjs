@@ -428,7 +428,7 @@ test("applies escaped title and numeric filters before paginating with a stable 
   assert.equal(database.batchRequests[0].length, 4);
 
   const selectedSubject = "AI 소식' OR 1=1 --";
-  const expectedFilterBindings = [target, 4, 15, selectedSubject, "%100\\%\\_\\\\%", "%100\\%\\_\\\\%"];
+  const expectedFilterBindings = [4, 15, selectedSubject, "%100\\%\\_\\\\%", "%100\\%\\_\\\\%"];
   assert.ok(database.calls.every(({ sql }) => !sql.includes("COUNT(")));
   const postCall = findCall(database, "SELECT archive_key, source_key, external_post_id", "batch");
   assert.match(postCall.sql, /ORDER BY upvotes DESC, created_at DESC, id DESC/);
@@ -576,7 +576,7 @@ test("returns the latest topic snapshot and filters every matching archived post
   const postCall = findCall(database, "SELECT archive_key, source_key, external_post_id", "batch");
   assert.match(postCall.sql, /FROM community_post_topics AS selected_post_topic/);
   assert.match(postCall.sql, /selected_topic\.archive_key = posts\.archive_key/);
-  assert.deepEqual(postCall.values, [target, target, target, topicId]);
+  assert.deepEqual(postCall.values, [target, target, topicId]);
   assert.doesNotMatch(postCall.sql, /OFFSET/i);
   assert.equal(body.summary.filtered_posts, null);
   assert.equal(body.pagination.mode, "sequential");
@@ -828,7 +828,7 @@ test("combines every public archive in the virtual all target", async () => {
     "SELECT archive_key, source_key, external_post_id",
     "batch"
   );
-  assert.match(postCall.sql, /public_archive\.archive_key = posts\.archive_key/);
+  assert.match(postCall.sql, /FROM archives WHERE archive_key = \? AND is_public = 1/);
   assert.deepEqual(postCall.values, database.archiveStats.flatMap((row) => [row.archive_key, row.archive_key]));
   assert.equal(body.summary.total_posts, 2);
   assert.equal(body.summary.filtered_posts, 2);
@@ -870,12 +870,9 @@ test("excludes selected archives before counting and paginating the all target",
     "SELECT archive_key, source_key, external_post_id",
     "batch"
   );
-  assert.match(postCall.sql, /public_archive\.archive_key = posts\.archive_key/);
-  assert.match(postCall.sql, /public_archive\.archive_key NOT IN \(\?, \?\)/);
+  assert.match(postCall.sql, /FROM archives WHERE archive_key = \? AND is_public = 1/);
   assert.deepEqual(postCall.values, [
     ...database.archiveStats.filter((row) => !["game-news", "dcinside-agent-stack"].includes(row.archive_key)).flatMap((row) => [row.archive_key, row.archive_key]),
-    "game-news",
-    "dcinside-agent-stack",
   ]);
 });
 
@@ -1135,7 +1132,6 @@ test("bounds query controls and allowlists every sort expression", async (t) => 
       assert.ok(postCall.sql.includes(expectedOrder));
       assert.ok(!postCall.sql.includes("DROP TABLE"));
       assert.deepEqual(postCall.values, [
-        "dcinside-singularity",
         "dcinside-singularity",
         "dcinside-singularity",
         "😀".repeat(100),

@@ -100,6 +100,21 @@ test("real SQL traverses tied keys both ways without gaps or duplicates for ever
   } finally { data.sqlite.close(); }
 });
 
+test("combined text search merges archive indexes into one shared window", async (t) => {
+  const data = fixture(1800);
+  t.after(() => data.sqlite.close());
+  data.sqlite.exec("UPDATE posts SET archive_key='game-news' WHERE id % 2 = 0");
+  const { body } = await request(data, "target=all&q=needle");
+  const expected = data.sqlite.prepare(`SELECT external_post_id FROM
+    (SELECT * FROM posts ORDER BY created_at DESC,id DESC LIMIT 512)
+    WHERE title='needle' ORDER BY created_at DESC,id DESC`).all();
+  assert.deepEqual(body.posts.map(row => row.external_post_id), expected.map(row => row.external_post_id));
+  const statement = data.queries.find(entry => entry.sql.includes("WITH candidates"));
+  const plan = data.sqlite.prepare(`EXPLAIN QUERY PLAN ${statement.sql}`).all(...statement.values);
+  assert.ok(plan.some(step => step.detail.includes("MERGE (UNION ALL)")));
+  assert.equal(statement.rows, 512);
+});
+
 test("empty sparse windows remain navigable and never report an exhausted search early", async () => {
   const data = fixture();
   try {

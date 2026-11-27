@@ -140,6 +140,9 @@ CREATE INDEX IF NOT EXISTS idx_posts_active_comments
   WHERE status = 'active';
 
 -- Only hidden news rows participate; normal collection adds no index writes.
+CREATE INDEX IF NOT EXISTS idx_game_posts_feedback_key
+ON posts(external_post_id) WHERE archive_key='game-news';
+
 CREATE INDEX IF NOT EXISTS idx_posts_game_news_hidden
   ON posts (archive_key, status, last_seen_at DESC, id DESC)
   WHERE archive_key = 'game-news' AND status = 'hidden';
@@ -915,6 +918,10 @@ CREATE TABLE IF NOT EXISTS ai_practice_discovery_manifests (
 );
 CREATE INDEX IF NOT EXISTS idx_ai_practice_manifests_pending
  ON ai_practice_discovery_manifests(status,lane,source_key,last_promoted_at,discovered_at);
+
+CREATE INDEX IF NOT EXISTS idx_ai_manifest_pick
+ON ai_practice_discovery_manifests(lane,source_key,coalesce(last_promoted_at,''),discovered_at,manifest_id)
+WHERE status='pending' AND registration_offset<item_count;
 
 CREATE TABLE IF NOT EXISTS ai_practice_discovery_state (
  source_key TEXT NOT NULL REFERENCES sources(source_key),
